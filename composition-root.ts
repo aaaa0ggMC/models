@@ -13,6 +13,9 @@
  */
 
 import { Container, TOKENS } from './di/index.js';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   ConsoleLogger,
   MemoryLogger,
@@ -50,6 +53,7 @@ import type {
 } from './providers/deepseek/index.js';
 import type { ProviderProfileRegistry } from './di/index.js';
 import { InMemoryProviderProfileRegistry } from './di/index.js';
+import { PROVIDER_PRESETS } from './providers/presets.js';
 import { DefaultPluginHost } from './plugins/host.js';
 import type { PluginHost } from './plugins/host.js';
 import type { GatewayServices, KVNamespace, Plugin, RequestContext } from './ir/index.js';
@@ -695,6 +699,19 @@ export interface AdminAssembly {
 }
 
 /**
+ * 管理面静态资源的默认目录：`dist/webui/admin`（相对本编译产物所在目录解析）。
+ *
+ * `scripts/copy-static-assets.mjs` 会把 `webui/admin/dist`（Vite 产物）拷到
+ * `dist/webui/admin`，因此跑过 `npm run build` 后这里就存在，`/admin` 直接可用；
+ * 没跑构建（开发 / 测试）时该目录不存在，静态托管保持未挂载（routes 回 404），
+ * 与引入本默认值之前的行为一致。用 `webui/admin` 而非 `admin` 是为了避开后端
+ * `admin/` 模块被 tsc 编译到的 `dist/admin/`（否则静态托管会serve到后端源码）。
+ */
+function defaultAdminStaticRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), 'webui', 'admin');
+}
+
+/**
  * 装配管理面。
  *
  * 返回 undefined = 没配管理面（没传 recordStore / adminStaticRoot 任一）。
@@ -780,10 +797,16 @@ function assembleAdmin(input: {
   });
 
   // ---- 静态资源 ----
+  // adminStaticRoot 未显式指定时，默认指向构建产物 dist/admin（由
+  // scripts/copy-static-assets.mjs 从 webui/admin/dist 拷入）。仅当该目录真实
+  // 存在才启用静态托管——否则保持既有行为（未挂载 → routes 回 404），
+  // 让「没跑 build:admin 的开发/测试环境」与之前完全一致。
   const serveStatic =
-    options.adminStaticRoot === undefined
-      ? undefined
-      : createStaticAssetsHandler({ rootDir: options.adminStaticRoot });
+    options.adminStaticRoot !== undefined
+      ? createStaticAssetsHandler({ rootDir: options.adminStaticRoot })
+      : existsSync(defaultAdminStaticRoot())
+        ? createStaticAssetsHandler({ rootDir: defaultAdminStaticRoot() })
+        : undefined;
 
   // ---- HTTP 路由 ----
   const routeHandler = createAdminRouter({
@@ -814,6 +837,8 @@ function assembleAdmin(input: {
             ? {}
             : { rotateDek: options.keystore.rotateDek }),
         }),
+    // Provider 预设注册表（providers/presets.ts 的纯数据，只读透出）。
+    providerPresets: () => PROVIDER_PRESETS,
     ...(serveStatic === undefined ? {} : { serveStatic }),
   });
 
