@@ -140,7 +140,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 
 ### 2.1 范围内
 
-> **关键区分：canonical schema 是全面的（超集），adaptor 是按需写的。**
+> **关键区分：canonical schema 是全面的（超集），adaptor 是按需写的。** canonical 覆盖 **8 种模态**（chat / decision / embedding / tts / asr / image / rerank / moderation / video 占位），其中 decision 的首要消费者是网关自己（控制面），不是终端用户。
 > canonical 在设计期一次性穷尽式普查（[12-coverage-survey.md](./12-coverage-survey.md)），目标是"新增 adaptor 永远不需要改 schema"；adaptor 用到再写（[40-provider-adaptors.md](./40-provider-adaptors.md) §1.0）。两者矩阵分开维护。
 
 | 能力 | 状态 |
@@ -155,6 +155,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 | `gemini.generateContent` adaptor | [v1.5] |
 | 多模态示例 adaptor：TTS（OpenAI + ElevenLabs）、ASR（OpenAI）、Image（OpenAI） | [v1.5] |
 | 插件系统（5 hook）+ 长上下文压缩 adaptor（acp-kernel） | [v1.5] |
+| **decision 模态**（判断模型：路由/策略/compact-escalate-stop 控制面判断）+ chat 模拟降级路径 | [v1.5] |
 | 内置搜索（web_search as built-in tool） | [v1.5] |
 | Tier-2 加密存储 + 前缀压缩 + 脱敏 + 保留策略 | [v1.5] |
 | WebUI（fork LibreChat 改造） | [v1.5] |
@@ -295,6 +296,9 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 | **degraded** | 因能力不支持而发生的显式降级（响应里带 `degraded: ConversionDiagnostic[]`），**不**静默 |
 | **conversion diagnostic** | 结构化转换诊断（`code` / `field_path` / `from` / `to` / `level` / `message`）。`warnings` 是它的字符串摘要 |
 | **loss policy** | 遇不支持字段时的策略三档：`allow`（转换完成 + 诊断）/ `safe`（遇 error 级诊断即失败）/ `strict`（任何诊断都失败）。默认 `allow` |
+| **decision 模态** | 第五个模态（`kind:"decision"`）。判断模型：多模态内容 + 批量问题 → 校准概率 + 置信度。控制面能力，**不是 chat 的特例**，也不能做 chat（单向） |
+| **control-plane 判断** | 网关自己发起的 decision 子请求（路由/策略/工具选择/循环控制）。独立 `request_id` 与预算桶，计量进 `UsageRecord.control_plane_cost` |
+| **calibration** | decision 响应的校准性标记：`native`（真 decision 模型）/ `degraded`（chat 模拟）。高风险判断不允许 degraded |
 | **conversion chain** | 记录本次请求实际走过的转换链（如 `["openai.chat","anthropic.messages"]`），进 `RequestTrace`，直接回答"这个请求到底被转成了什么" |
 
 ---
@@ -306,11 +310,11 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 | [00-overview.md](./00-overview.md) | 本文。项目定位、范围、约束、架构、术语表、索引 |
 | [10-canonical-schema.md](./10-canonical-schema.md) | AG-IR v1：共享信封 + 按模态 payload + 媒体引用 + 多单位 usage + raw passthrough + 四格式字段映射表 |
 | [12-coverage-survey.md](./12-coverage-survey.md) | **canonical 覆盖普查**：主流厂商各模态特性并集（设计期目标=全覆盖）+ 前向兼容规则 + canonical 边界结论 |
-| [15-modalities.md](./15-modalities.md) | 多模态（TTS/ASR/Image/Embedding）方法论 + 每模态一个完整示例 + 待按需补充简表 |
-| [20-pipeline.md](./20-pipeline.md) | 请求生命周期 10 阶段、fast path 判定、流式处理、工具调用循环、错误映射与重试/fallback |
+| [15-modalities.md](./15-modalities.md) | 多模态（chat/image/tts/asr/embedding/**decision**）方法论 + 每模态一个完整示例 + 待按需补充简表；§6 是 decision 与 chat 的对照表与网关自身消费点 |
+| [20-pipeline.md](./20-pipeline.md) | 请求生命周期 10 阶段、fast path 判定、流式处理、工具调用循环、错误映射与重试/fallback、**§6 control-plane 判断（decision 消费点）** |
 | [25-streaming.md](./25-streaming.md) | 跨模态统一流式帧信封、三种上游流式形态桥接、ASR 中间态、TTS 细节、流式计量 |
 | [30-plugin-api.md](./30-plugin-api.md) | 插件 hook TS 接口、生命周期、billion-context adaptor 设计 |
-| [40-provider-adaptors.md](./40-provider-adaptors.md) | **adaptor 契约/注册/映射方法论/round-trip 测试模板/新增检查清单** + usage 口径差异对照表 + adaptor 覆盖矩阵 |
+| [40-provider-adaptors.md](./40-provider-adaptors.md) | **adaptor 契约/注册/映射方法论/round-trip 测试模板/新增检查清单** + usage 口径差异对照表 + adaptor 覆盖矩阵 + **§6 decision adaptor 与降级路径** |
 | [45-credentials.md](./45-credentials.md) | **凭据模型**（api_key / oauth_device_code / oauth_browser / session_cookie / cloud_iam / local / upstream_proxy）、access path、Plan 感知路由、双口径成本 |
 | [50-builtin-search.md](./50-builtin-search.md) | 内置搜索 canonical 建模与两种实现模式、后端选型 |
 | [60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) | 计费管道、usage 归一规则、分层存储开关、dog-fooding agent 接口 |
@@ -357,7 +361,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 | OpenRouter | 语义 | AgentGateway 对应 |
 |---|---|---|
 | `order` | provider 有序列表 | `attempt_plan`（[20-pipeline.md](./20-pipeline.md) §S2） |
-| `allow_fallbacks` | 是否允许 fallback | 重试/fallback 矩阵（[20-pipeline.md](./20-pipeline.md) §6.3） |
+| `allow_fallbacks` | 是否允许 fallback | 重试/fallback 矩阵（[20-pipeline.md](./20-pipeline.md) §7.3） |
 | `require_parameters` | **只路由到支持你全部参数的 provider；不满足则请求失败** | **直接采纳**：`on_unsupported: "error"`（[20-pipeline.md](./20-pipeline.md) §S4）。这是"要么硬失败、要么明确知道会丢，绝不静默降级" |
 | `max_price{prompt, completion, request, image, audio}` | 超了就不跑 | Tier-1 预检：`is_priceable` + 预算上限（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §4） |
 | `sort: price / throughput / latency`，`{by, partition}` | 排序策略 | `attempt_plan` 排序键；p50/p75/p90/p99 分位阈值来自我们的 `RequestTrace` 聚合 |
@@ -441,6 +445,7 @@ OpenRouter 的 `GET /api/v1/models` 返回模型元数据 + 定价 + per-model r
 | Q8 | `additionalProperties: false` 是否会因 provider 加字段而频繁报错 | schema 严格度 | 10-canonical-schema.md |
 | Q9 | LibreChat transaction schema 是否含 reasoning / cache 实际计量值 | WebUI 改造量 | docs/sources.md §UI |
 | Q10 | Anthropic 1h / 5m ephemeral cache 在 usage 里是否分字段返回 | cache 计费 | 40-provider-adaptors.md |
+| Q21–Q25 | 三家 decision API 的确切字段 / 免费额度 / 单向能力 / 降级校准性 / 部分失败语义 | decision adaptor 开工前置 | 40-provider-adaptors.md §6、12-coverage-survey.md §1.5 |
 
 > 每条的验证方式写在对应文档的"待验证清单"里。
 

@@ -214,13 +214,21 @@ interface AccessPreference {
    c. 能力矩阵不支持该 (path, model) 组合 → 跳过
    d. 预算/成本上限检查 → 跳过
 4. 取第一个通过过滤的候选作为 attempt_plan[0]，其余作为 fallback 链
-5. 执行中若订阅路径返回：
+5. （可选）**decision 辅助路由**：若启用了 control-plane 判断（见 [20-pipeline.md](./20-pipeline.md) §6），
+   对候选列表发一次 `kind:"decision"` 子请求——问题如"这个请求需要强推理还是轻量模型"
+   "是否可能超上下文"，按返回的校准概率重排候选。子请求用独立 request_id 与预算桶，
+   计量进 `UsageRecord.control_plane_cost`，不算进用户 input_tokens。
+   - 两段式（默认）：先用廉价启发式（prompt 长度/关键词/模型声明）筛掉明显项，
+     只剩 2+ 个难分高下的候选时才问 decision——避免每个请求都付一次判断延迟
+   - decision 上游不可用时降级到 chat 模拟（标 `calibration:"degraded"`）或跳过该步，
+     按 `DecisionDegradationPolicy`（见 40-provider-adaptors.md §6.3）
+6. 执行中若订阅路径返回：
    - 配额耗尽 / 429(window) → 标记该凭据 quota_exhausted + quota_reset_at
      → 立即切 fallback（付费路径），记 warnings += "degraded_to_paid"
    - 403 / allowlist 拒绝 → 标记 forbidden + forbidden_since
      → 立即切 fallback，记 warnings += "credential_forbidden"
-   - 可重试错误（5xx/超时）→ 走 20-pipeline.md §6.3 的重试矩阵
-6. 降级事件写入 UsageRecord.degradation[]，供 dog-fooding 查询
+   - 可重试错误（5xx/超时）→ 走 20-pipeline.md §7.3 的重试矩阵
+7. 降级事件写入 UsageRecord.degradation[]，供 dog-fooding 查询
    （"这个月有多少请求从订阅降级到了付费"是有用的运营信号）
 ```
 
@@ -358,4 +366,6 @@ interface CostBreakdown {
 4. **Q-C4**：`oauth_browser`（PKCE 重定向）在无人值守网关上如何完成首次授权——需要一次性人工交互，之后靠 refresh_token。流程设计待定。
 5. **Q-C5**：Bedrock / Vertex 的 IAM 凭据在本机的可用性（无 AWS/GCP 凭据时无法验证）。
 6. **Q-C6**：降级事件的累计统计口径（"本月降级率"）是否要进 dog-fooding 默认工具集。
-7. **Q-C7**：`upstream_proxy`（转给另一个网关）场景下，下游网关返回的 usage 是否可信（可能被二次估算污染）——建议标记 `usage.source = "provider"` 但 `precision = "low"`。
+7. **Q-C7**：`upstream_proxy`（转给另一个网关）场景下，下游网关返回的 usage 是否可信
+8. **Q-C8（decision）**：decision 辅助路由的延迟（报道 150–250 ms）是否可接受；不可接受则确认两段式的启发式阈值怎么定。
+9. **Q-C9（decision）**：`control_plane_cost` 是否要进 dog-fooding 默认查询维度（建议进，否则看不到"网关自己想花了多少钱"）。（可能被二次估算污染）——建议标记 `usage.source = "provider"` 但 `precision = "low"`。

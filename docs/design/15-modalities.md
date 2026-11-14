@@ -8,7 +8,7 @@
 
 ## 0. 阅读指引
 
-§1 设计决策；§2 TTS canonical；§3 ASR canonical；§4 Image canonical；§5 Embedding；§6 能力矩阵；§7 端点与流式；§8 字段映射表；§9 Open Questions。
+§1 设计决策；§2 TTS canonical；§3 ASR canonical；§4 Image canonical；§5 Embedding；**§6 decision 模态（第五模态）**；§7 能力矩阵；§8 端点与流式；§9 字段映射；§10 Open Questions。
 
 `[v1.5]` = v1 之后第一个增量；`[later]` = 明确后续。
 
@@ -331,7 +331,77 @@ interface EmbeddingResponsePayload {
 
 ---
 
-## 6. 能力矩阵（三态：已实现 / 计划 / 按需）
+## 6. decision 模态（判断模型）`[v1.5]`
+
+> 这是**第五个模态**，与 chat / image / tts / asr 并列。**不是 chat 的特例。**
+
+### 6.0 决策 M5：decision 是独立模态，不是 chat 的分支
+
+**决策**：`kind: "decision"`，独立 payload、独立 adaptor、独立端点、独立 usage 单位。
+
+**理由**：
+1. **输出形态根本不同**。chat 返回一段（可能很长的）文本，由调用方自己解析；decision 返回**结构化的判断结果**（label + 校准概率 + 置信度 + 逐选项概率）。把 decision 塞进 chat 意味着"用 chat 模拟 decision"——而这条路线的校准性、延迟、成本都更差（见 §6.1）。
+2. **一次请求问多个问题**。chat 的一轮请求只有一个"回答"；decision 一次前向计算可对最多约 1000 个相互独立的问题评分（Gemini 报道值，`[待验证]`）。这是批量语义，chat 没有。
+3. **输入计费、输出免费**。三家 decision API 的定价形态都是"输入 token 计费、输出免费"（Gemini 报道 $0.10/M 输入、输出免费；Jev 报道 $0.042/M 输入、输出免费，均 `[待验证]`）。这与 chat 的输入输出双向计费完全不同，必须靠 `pricing_state` 表达（见 [10-canonical-schema.md](./10-canonical-schema.md) §6 规则 5）。
+4. **用途是控制面而非内容面**。它的设计用途是工具选择、策略检查、模型路由、上下文质量评估、compact/escalate/stop 决策——这些都是网关自己要做的判断（见 [20-pipeline.md](./20-pipeline.md) §9 与 [45-credentials.md](./45-credentials.md) §4）。
+
+**考虑过的替代方案**：
+- *A. 用 chat + 结构化输出（`response_format: json_schema`）模拟*。否掉为主路径，但**保留为降级路径**——因为不是每个部署都有 decision 上游。降级必须在响应里标记 `calibration: "degraded"` 并说明代价（见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.3）。
+- *B. 把 decision 建模成 chat 的一个内置工具*。否掉：内置工具是"模型决定何时调用"，decision 是"网关主动发起的批量判断"，控制方向相反。
+
+**代价**：多一个 adaptor、多一套 usage 归一类（`units.questions` + `pricing_state`）、UI 要多一个页面。接受——这是控制面能力的根基。
+
+### 6.1 decision vs chat 对照表
+
+| 维度 | chat | decision |
+|---|---|---|
+| 请求结构 | `messages[]` 对话历史 + `tools[]` | `content[]`（多模态引用）+ `questions[]`（批量、相互独立） |
+| 输出形态 | 自由文本（+ 可选 tool_use） | 结构化：`{label, probability, confidence, option_probabilities}` |
+| 批量语义 | 一轮一个回答 | 一次前向计算最多 ~1000 个问题（`[待验证]`） |
+| 能否互相替代 | chat **能**模拟 decision（降级路径） | decision **不能**做 chat（单向能力，`[待验证]` 确认） |
+| 校准性 | 概率不可靠（LLM 自评置信度与真实正确率相关性弱） | 核心卖点即校准概率 |
+| 延迟预期 | 数百 ms ~ 数十 s（含生成长文本） | 150–250 ms（Gemini 报道值，`[待验证]`） |
+| 计量 | `units.tokens`（输入+输出双向计费） | `units.tokens` + `units.questions`；**输入计费、输出免费** |
+| 能力方向 | 生成内容 | 做判断/评分/选择 |
+| 流式 | ✅ SSE | ❌ 无流式语义（[10-canonical-schema.md](./10-canonical-schema.md) §4.6） |
+| 典型用途 | 对话、写作、代码 | 工具选择、策略检查、模型路由、上下文质量评估、compact/escalate/stop |
+
+### 6.2 canonical payload
+
+见 [10-canonical-schema.md](./10-canonical-schema.md) §4.6（`DecisionPayload` / `DecisionQuestion` / `DecisionAnswer`）。要点复述：
+
+- `content[]` 复用 §5 的 `MediaRef` 三态（inline / uri / asset），因此 decision 的输入可以是文本 + 图片 + 音频 + 视频 + PDF 混合；
+- `questions[]` 每问带 `type`（`binary` / `choice` / `scale` / `rubric`）+ `options` / `scale` / `rubric`；
+- 响应 `answers[]` 按 `question_id` 回填，`probability` 与 `confidence` **分开建模**（D8）。
+
+### 6.3 端点形态
+
+```
+POST /v1/decisions                      # 一次性（唯一形态；无流式）
+```
+
+请求体即 `CanonicalRequestEnvelope{kind:"decision"}` 的 JSON 序列化；响应体即 `CanonicalResponseEnvelope{kind:"decision"}`。
+
+### 6.4 网关自身的消费点（dog-fooding）
+
+decision 模态的**首要消费者是网关自己**，不是终端用户：
+
+| 消费点 | 问什么 | 用哪个 type |
+|---|---|---|
+| 模型路由（S2） | 这个请求更像"需要强推理"还是"轻量任务"？ | `binary` × N 或 `choice` |
+| 工具选择（S3 / agentic loop） | 下一步该调哪个工具 / 该不该继续循环？ | `choice` |
+| 策略检查（S0） | 这个请求是否触碰某条策略？ | `binary` + `rubric` |
+| 上下文质量评估（压缩插件） | 这段历史还有信息量吗 / 该压缩了吗？ | `scale` |
+| compact / escalate / stop 决策（agentic loop） | 继续、压缩、升级模型、还是停止？ | `choice` |
+| fast path 判定辅助 | 这次转换是否可能丢关键字段？ | `binary` |
+
+这些消费点让 decision 从"一个可选模态"变成"网关的自省能力"，也直接服务 dog-fooding（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §10）。
+
+### 6.5 降级路径（上游只有 chat 模型时）
+
+见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.3。要点：用 chat + `response_format: json_schema` 模拟，响应标记 `calibration: "degraded"`，并在 `warnings` 说明代价（校准性差、延迟高、输出 token 开始计费）。
+
+## 7. 能力矩阵（三态：已实现 / 计划 / 按需）
 
 每个 `(access_path, model, modality)` 必须登记。**注意矩阵的键是 `(access_path, model)` 而不是 `model`**——同一个 `gpt-5.4` 在 `openai`（API key）与 `openai-codex`（订阅 OAuth）两条路径下能力与限额完全不同，见 [45-credentials.md](./45-credentials.md) §6。这是路由决策的唯一依据。
 
@@ -360,34 +430,35 @@ interface CapabilityEntry {
 }
 ```
 
-### 6.1 v1.5 目标矩阵（初版，字段待 mapper 实现时校准）
+### 7.1 v1.5 目标矩阵（初版，字段待 mapper 实现时校准）
 
 **图例**：**[实]** = 已实现（v1.5 写透）；**[计]** = 计划（当前 Phase 交付物）；**[需]** = 按需（用到再写）；**✗** = 明确不支持（路由会拒绝）。
 
-| access_path | chat | embedding | tts | asr | image |
-|---|---|---|---|---|---|
-| openai | **[实]** chat+responses | **[实]** | **[计]** speech | **[计]** transcriptions | **[计]** generations/edits |
-| anthropic | **[实]** messages | ✗ | ✗ | ✗ | ✗ |
-| gemini | **[计]** generateContent | **[需]** | **[需]**（待验证） | **[需]**（待验证） | **[需]**（待验证） |
-| elevenlabs | ✗ | ✗ | **[计]** tts | **[需]**（STT，待验证） | ✗ |
-| openai-codex | **[计]**（订阅路径，见 45-credentials） | ✗ | ✗ | ✗ | ✗ |
-| xai-supergrok | **[计]**（订阅路径） | ✗ | ✗ | ✗ | ✗ |
-| minimax | **[需]** | **[需]** | **[需]** t2a_v2 | **[需]** | **[需]** |
-| azure | **[需]** | **[需]** | **[需]** SSML | **[需]** | **[需]** |
-| google-cloud | ✗ | **[需]** | **[需]** synthesize | **[需]** | **[需]** |
-| deepgram | ✗ | ✗ | ✗ | **[需]** listen（一次性+WS） | ✗ |
-| assemblyai | ✗ | ✗ | ✗ | **[需]** transcript | ✗ |
-| stability | ✗ | ✗ | ✗ | ✗ | **[需]** |
-| bfl (flux) | ✗ | ✗ | ✗ | ✗ | **[需]** |
-| bedrock / vertex | **[需]** | **[需]** | **[需]** | **[需]** | **[需]** |
+| access_path | chat | **decision** | embedding | tts | asr | image |
+|---|---|---|---|---|---|---|
+| openai | **[实]** chat+responses | **[需]** Decisions API（Luna） | **[实]** | **[计]** speech | **[计]** transcriptions | **[计]** generations/edits |
+| anthropic | **[实]** messages | ✗ | ✗ | ✗ | ✗ | ✗ |
+| gemini | **[计]** generateContent | **[计]** Decisions API（Gemini Decision 1） | **[需]** | **[需]**（待验证） | **[需]**（待验证） | **[需]**（待验证） |
+| elevenlabs | ✗ | ✗ | ✗ | **[计]** tts | **[需]**（STT，待验证） | ✗ |
+| jev (TypeSafe) | ✗ | **[计]** | ✗ | ✗ | ✗ | ✗ |
+| openai-codex | **[计]**（订阅路径，见 45-credentials） | ✗ | ✗ | ✗ | ✗ | ✗ |
+| xai-supergrok | **[计]**（订阅路径） | ✗ | ✗ | ✗ | ✗ | ✗ |
+| minimax | **[需]** | ✗ | **[需]** | **[需]** t2a_v2 | **[需]** | **[需]** |
+| azure | **[需]** | ✗ | **[需]** | **[需]** SSML | **[需]** | **[需]** |
+| google-cloud | ✗ | ✗ | **[需]** | **[需]** synthesize | **[需]** | **[需]** |
+| deepgram | ✗ | ✗ | ✗ | ✗ | **[需]** listen（一次性+WS） | ✗ |
+| assemblyai | ✗ | ✗ | ✗ | ✗ | **[需]** transcript | ✗ |
+| stability | ✗ | ✗ | ✗ | ✗ | ✗ | **[需]** |
+| bfl (flux) | ✗ | ✗ | ✗ | ✗ | ✗ | **[需]** |
+| bedrock / vertex | **[需]** | ✗ | **[需]** | **[需]** | **[需]** | **[需]** |
 
 **规则**：`[计]` 只允许存在于当前 Phase 的交付物清单里；不在当前 Phase 的一律 `[需]`。防止 roadmap 膨胀成饼。
 
 ---
 
-## 7. 端点形态与流式
+## 8. 端点形态与流式
 
-### 7.1 端点
+### 8.1 端点
 
 ```
 TTS:    POST /v1/audio/speech                  （once，返回二进制或 base64）
@@ -397,10 +468,11 @@ ASR:    POST /v1/audio/transcriptions          （once，multipart 或 JSON+Medi
 IMAGE:  POST /v1/images/generations
         POST /v1/images/edits
         POST /v1/images/generations:stream     （进度流，StreamFrame kind:"image"）
+DECIDE: POST /v1/decisions                  # 判断模型（无流式，见 §6.3）
 EMBED:  POST /v1/embeddings
 ```
 
-### 7.2 流式在非 chat 模态怎么走
+### 8.2 流式在非 chat 模态怎么走
 
 | 模态 | 上游形态 | 网关输出 | 说明 |
 |---|---|---|---|
@@ -409,7 +481,7 @@ EMBED:  POST /v1/embeddings
 | ASR（实时） | WebSocket 双向 | WS 透传（默认）或 WS + canonical 帧（插件介入时） | 见 [25-streaming.md](./25-streaming.md) §3.3 |
 | Image | 轮询 / SSE 进度 | SSE `ag.frame{kind:"image", progress}` | 部分上游（BFL）只能轮询，网关内部轮询后转成进度流 |
 
-### 7.3 "能兼容吗"的结论
+### 8.3 "能兼容吗"的结论
 
 | 需求 | 结论 |
 |---|---|
@@ -422,13 +494,13 @@ EMBED:  POST /v1/embeddings
 
 ---
 
-## 8. 字段映射（方法论 + 每模态一个完整示例 + 按需补充简表）
+## 9. 字段映射（方法论 + 每模态一个完整示例 + 按需补充简表）
 
 > **结构说明**：每个模态给 **canonical payload 定义（§2–§5）+ 一个完整映射示例 + 一张"待按需补充"简表**。
 > 不穷举所有厂商——adaptor 是按需写的（[40-provider-adaptors.md](./40-provider-adaptors.md) §1.0），但 canonical 是全量的（[12-coverage-survey.md](./12-coverage-survey.md) §2）。
 > 新增 adaptor 时走 [40-provider-adaptors.md](./40-provider-adaptors.md) §1.6 的检查清单。
 
-### 8.1 TTS
+### 9.1 TTS
 
 **完整示例（v1.5 写透）：`openai.audio.speech` + `elevenlabs.tts`**
 
@@ -465,7 +537,7 @@ EMBED:  POST /v1/embeddings
 | **Google Cloud TTS** | `input.text` / `input.ssml`；`voice{languageCode,name,ssmlGender}`；`audioConfig{audioEncoding: LINEAR16/MP3/OGG_OPUS/MULAW/ALAW, speakingRate, pitch, volumeGain, sampleRateHertz, effectsProfileId}`；响应 base64 在 `audioContent` |
 | **Gemini TTS** | `[待验证]` 是否有原生 TTS 端点（如 `models/gemini-*-tts`） |
 
-### 8.2 ASR
+### 9.2 ASR
 
 **完整示例（v1.5 写透）：`openai.audio.transcription`**
 
@@ -494,7 +566,7 @@ EMBED:  POST /v1/embeddings
 | **AssemblyAI** `transcript` | **仅接受 `audio_url`，不能直接传文件** → 网关必须代传（需要一个可公网访问的临时 URL 或网关代理，`[待验证]`）；`speaker_labels` / `speakers_expected` / `auto_chapters` / `sentiment_analysis` / `entity_detection` / `word_boost` / `disfluencies` / `speech_model`；响应 `text` / `words[]` / `utterances[]` / `confidence` / `audio_duration`；流式是 WS v3（`Begin`/`Turn`/`Termination`） |
 | **Gemini ASR** | `[待验证]` 是否有原生端点；Part 里有 `audioTranscription` 字段值得关注 |
 
-### 8.3 Image
+### 9.3 Image
 
 **完整示例（v1.5 写透）：`openai.images.generations` + `openai.images.edits`**
 
@@ -532,7 +604,7 @@ EMBED:  POST /v1/embeddings
 
 ---
 
-## 9. Open Questions
+## 10. Open Questions
 
 1. **OpenAI `audio/speech` 流式**：是否支持分片返回、如何触发（`stream: true`？独立端点？）。
 2. **AssemblyAI 音频上传**：能否直接传文件而非 URL；不能则网关代传方案。

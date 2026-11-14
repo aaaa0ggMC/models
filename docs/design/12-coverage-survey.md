@@ -21,7 +21,7 @@
 
 ---
 
-## 1. Canonical 覆盖矩阵（chat 模态）
+## 1. Canonical 覆盖矩阵（chat 与 decision 模态）
 
 图例：✅ canonical 已表达（含字段位置）；⚠️ 已表达但不完整（见备注）；❌ 未表达（**这是缺陷，要走 §5 流程**）。
 
@@ -172,6 +172,32 @@
 
 ---
 
+### 1.5 decision 模态（判断模型）`[v1.5]`
+
+> 这是第五个模态。已确认三家：**Google Gemini Decisions API**（Gemini Decision 1）、**Jev**（TypeSafe AI）、**OpenAI Decisions API**（Luna）。字段名依据本次调研，见 [../sources.md](../sources.md) §decision 模型；标 `[待验证]` 的待补齐。
+
+| 特性 | Gemini Decisions | Jev (TypeSafe) | OpenAI Decisions (Luna) | canonical 落点 | 状态 |
+|---|---|---|---|---|---|
+| 多模态内容输入 | 文本/图像/音频/视频/PDF，最大 256K tokens `[待验证]` | `[待验证]` | `[待验证]` | `DecisionContent[]` + `MediaRef` | ✅ |
+| 批量问题 | 最多 1000 个 `[待验证]` | `[待验证]` | `[待验证]` | `questions[]` | ✅ |
+| 是非判断 | ✅ `[待验证]` 类型名 | `Choice` 原语 `[待验证]` | `[待验证]` | `type:"binary"` | ✅ |
+| 定集选择 | ✅ | `Choice` 原语 | `[待验证]` | `type:"choice"` | ✅ |
+| 固定量表评分 | ✅ `[待验证]` 类型名 | `Score` 原语 `[待验证]` | `[待验证]` | `type:"scale"` | ✅ |
+| rubric 评估 | ✅ `[待验证]` 类型名 | `[待验证]` | `[待验证]` | `type:"rubric"` | ✅ |
+| 逐选项概率 | ✅ `[待验证]` 字段名 | per-option probabilities | `[待验证]` | `option_probabilities[]` | ✅ |
+| 校准概率 | ✅ | ✅ | `[待验证]` | `probability` | ✅ |
+| 置信度分数 | ✅ | `[待验证]` | `[待验证]` | `confidence` | ✅ |
+| 其他原语 | — | `Noul` `[待验证]` | — | `native.<vendor>.*` | ⚠️ |
+| 输出 token 计费 | **免费** `[待验证]` | **免费** `[待验证]` | `[待验证]` | `pricing_state.output = "free"` | ✅ |
+| 输入单价 | $0.10/M tokens `[待验证]` | $0.042/M tokens `[待验证]` | `[待验证]` | 定价表 | ✅ |
+| usage 上报 | `[待验证]` | `[待验证]` | `[待验证]` | `usage_raw` + `units.questions` 兜底 | ⚠️ |
+| 流式 | ❌（无流式语义） | ❌ | ❌ | `StreamOptions.mode: "none"` | ✅ |
+| 能否做 chat | ❌ 单向能力 `[待验证]` | ❌（明确"不是 chatbot，不写句子"） | `[待验证]` | — | ✅ |
+| 接入方式 | Gemini API / AI Studio `[待验证]` | TypeSafe 或 OpenRouter | `[待验证]` | access path | ⚠️ |
+| 延迟 | 150–250 ms（报道值）`[待验证]` | `[待验证]` | `[待验证]` | `RequestTrace` | ✅ |
+
+**降级路径（重要）**：上游只有 chat 模型时，用 chat + `response_format: json_schema` 模拟 decision，响应标记 `calibration: "degraded"`。设计见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.3。
+
 ## 2. Canonical 覆盖矩阵（多模态模态）
 
 图例同上。
@@ -239,6 +265,7 @@
 具体地，canonical **装得下**：
 - OpenAI / Anthropic / Gemini 三家 chat 格式的全部请求与响应字段（§1.1–1.3）；
 - TTS / ASR / Image / Embedding / Rerank / Moderation 六种模态的完备参数（§2）；
+- **decision 模态**：多模态内容引用 + 四类问题（binary / choice / scale / rubric）+ 校准概率与置信度 + 逐选项概率（§1.5）；
 - ElevenLabs / MiniMax / Azure / Google Cloud / Deepgram / AssemblyAI / Stability / BFL / Mistral / Cohere / Bedrock / Vertex 的专有特性（§1.4）——全部通过 `native.<vendor>.*` 命名空间或结构化字段表达；
 - 任何我们没想到的东西——通过 `raw.unmapped` / `_raw` / `UnknownPart`。
 
@@ -254,6 +281,7 @@ canonical **不装**：
 | 类别 | 例子 | 为什么先不做 adaptor |
 |---|---|---|
 | 我们不会用的厂商 | Azure TTS、Google Cloud TTS、Stability、BFL、Mistral、Cohere | 没有使用场景；adaptor 写了没测试会腐烂 |
+| decision 的非首选上游 | Jev / OpenAI Decisions（若 Gemini Decisions 够用） | 品类相同，先打通一家；其余按需 |
 | 已有等价替代的 | Deepgram / AssemblyAI（OpenAI Whisper 够用） | 按需再写 |
 | 实验性/不稳定的 | Gemini Live API、Anthropic `context_management` | 等稳定；canonical 已留位 |
 | 明确非目标 | Video | 只留 schema 占位 |
@@ -284,4 +312,8 @@ canonical **不装**：
 9. `parallel_tool_calls: false` → Anthropic / Gemini 的映射（目前判定"无对应"）。
 10. OpenAI `prompt_cache_breakpoint` + `prompt_cache_options{mode,ttl}` 的完整字段（GPT-5.6+）。
 11. Cohere rerank / Mistral 的完整字段集（只做了粗粒度）。
-12. Bedrock / Vertex 的专有参数全集（`additionalModelRequestFields` / `labels` / inference profile）。
+12. **Q21（decision）**：三家 decision API 的确切字段名——问题类型枚举值、选项集表示、`probability` / `confidence` / per-option probabilities 的字段名与嵌套、usage 形状、错误码。
+13. **Q22（decision）**：Gemini Decisions 的免费额度与可用区域；Jev 在 TypeSafe 与 OpenRouter 上的确切模型 id 与计价方式。
+14. **Q23（decision）**：decision 模型是否真的不能做 chat（单向能力）——需要读官方文档确认，而非从产品定位推断。
+15. **Q24（decision）**：chat + 结构化输出模拟 decision 的校准性损失有没有公开基准（这决定降级路径是否值得默认开启）。
+16. Bedrock / Vertex 的专有参数全集（`additionalModelRequestFields` / `labels` / inference profile）。

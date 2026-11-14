@@ -405,7 +405,48 @@
 
 ---
 
-## 5. License 汇总（合规注意）
+## 5. decision 模型（判断模型）调研 `[v1.5]`
+
+**状态：部分已确认（官方博客/文档/第三方解读），字段级细节待补齐（见 Q21–Q25）。**
+
+已确认三家同品类产品：
+
+| 产品 | 归属 | 形态 | 定价（报道值，`[待验证]`） |
+|---|---|---|---|
+| **Gemini Decisions API**（Gemini Decision 1 驱动） | Google | 输入多模态内容（文本/图像/音频/视频/PDF，最大 256K tokens）+ 最多 1000 个相互独立的问题；一次前向计算对候选选项评分，返回**校准概率 + 置信度分数**；延迟 150–250 ms | 输入 $0.10/M tokens，**输出 token 免费** |
+| **Jev** | TypeSafe AI | 结构化决策模型，Choice / Score / Noul 原语，per-option probabilities；明确"不是 chatbot，不写句子" | $0.042/M 输入 tokens，输出免费 |
+| **OpenAI Decisions API**（基于 Luna） | OpenAI | 对 Jev 的回应，同品类 | `[待验证]` |
+
+**来源**：
+- Gemini Decisions API 官方博客：<https://blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api>
+- Gemini Decisions API 文档：<https://aistudio.google.com/docs/decisions-api>
+- Jev 解读（Braintrust）：<https://www.braintrust.dev/articles/what-is-jev>
+- OpenAI Decisions API（Luna）解读（The New Stack）：<https://thenewstack.io/openai-decision-api-luna>
+- OpenAI Decisions API vs Jev 对比（Firecrawl）：<https://www.firecrawl.dev/blog/openai-decisions-api-vs-jev>
+
+**关键结论**：
+1. **decision 是独立模型品类，不是 chat 的特例**：不做对话、不写句子；一次前向计算对批量独立问题评分，返回结构化判断 + 校准概率。
+2. **定位是低延迟控制面**：工具选择、策略检查、模型路由、上下文质量评估、compact/escalate/stop 决策。**这正是网关自己需要的判断能力**，因此 decision 的首要消费者是 AgentGateway 自身（dog-fooding），不是终端用户。
+3. **定价形态是"输入计费、输出免费"**——与 chat 的双向计费根本不同，必须靠 `pricing_state` 表达，且必须与"上游没报 usage"区分（前者是省钱，后者是账没记上）。
+4. **批量语义**：一次请求最多约 1000 个相互独立的问题（Gemini 报道值），chat 没有这个语义。
+5. **单向能力**：decision 不能做 chat；chat 可以模拟 decision 但校准性差、延迟高、输出开始计费——因此模拟只能作降级路径，且高风险判断不允许降级。
+
+**→ 对我们的启示**（已落入设计）：
+- canonical 新增 `kind:"decision"` 模态（[10-canonical-schema.md](./design/10-canonical-schema.md) §4.6）：`content[]`（复用媒体引用）+ `questions[]`（binary/choice/scale/rubric）+ `answers[]`（label/probability/confidence/option_probabilities，**概率与置信度分开建模**）；
+- `usage` 新增 `units.questions` 兜底计量 + `TokenUsage.pricing_state`（billed/free/included/unpriced）；
+- 能力矩阵新增 decision 列；adaptor 契约比 chat 简单（无流式），但**必须**实现 `pricing_state` 与降级路径（[40-provider-adaptors.md](./design/40-provider-adaptors.md) §6）；
+- 降级路径：chat + `response_format: json_schema` 模拟，响应标记 `calibration:"degraded"`；**策略检查与 stop 决策不允许降级**；
+- control-plane 消费点接入 S2 路由、S3 插件链、工具循环（[20-pipeline.md](./design/20-pipeline.md) §6、[45-credentials.md](./design/45-credentials.md) §4.2）；
+- 子请求独立 `request_id` 与预算桶，计量进 `UsageRecord.control_plane_cost`，不算进用户 `input_tokens`。
+
+**待验证（Q21–Q25）**：
+1. **Q21**：三家 decision API 的确切字段名与嵌套——问题类型枚举值、选项集表示、`probability` / `confidence` / per-option probabilities 的字段名、usage 形状、错误码。**这是 decision adaptor 开工的前置依赖。**
+2. **Q22**：Gemini Decisions 的免费额度与可用区域；Jev 在 TypeSafe / OpenRouter 上的确切模型 id 与计价方式。
+3. **Q23**：decision 模型是否真的不能做 chat（单向能力）——需读官方文档确认，而非从产品定位推断。
+4. **Q24**：chat + 结构化输出模拟 decision 的校准性损失有没有公开基准（决定降级路径是否值得默认开启）。
+5. **Q25**：部分问题失败时的上游语义（整个请求失败 vs 部分答案 + 每题 error）——canonical 已选后者，需确认三家都支持。
+
+## 6. License 汇总（合规注意）
 
 | 项目 | License | 商用 | 注意 |
 |---|---|---|---|
@@ -426,7 +467,7 @@
 
 ---
 
-## 6. 待验证清单（汇总，按优先级）
+## 7. 待验证清单（汇总，按优先级）
 
 | # | 问题 | 影响 | 归属文档 |
 |---|---|---|---|
@@ -447,3 +488,8 @@
 | 15 | 本机无 TPM；若部署机有 TPM，`tpm2-pkcs11` 封存 KEK 的可行性 | 密钥档位 | 65-storage-and-retention.md §8 |
 | 16 | 备份→换机→恢复流程实测（密文 + KDF 参数 + 口令） | 运维 | 65-storage-and-retention.md §8 |
 | 17 | `better-sqlite3-multiple-ciphers` 在 WAL 模式下 `PRAGMA rekey` 的稳定性 | 密钥轮换 | 65-storage-and-retention.md §8 |
+| 18 | **Q21** 三家 decision API 确切字段名/usage 形状/错误码 | decision adaptor 开工前置 | 40-provider-adaptors.md §6.2 |
+| 19 | **Q22** Gemini Decisions 免费额度/区域；Jev 模型 id 与计价 | 路由与计费 | 15-modalities.md §7 |
+| 20 | **Q23** decision 是否真的不能做 chat（需官方文档确认） | 降级路径设计 | 40-provider-adaptors.md §6.3 |
+| 21 | **Q24** chat 模拟 decision 的校准性损失有无公开基准 | 降级默认策略 | 40-provider-adaptors.md §6.3 |
+| 22 | **Q25** 部分问题失败的上游语义（整请求失败 vs 部分答案） | 批量错误处理 | 40-provider-adaptors.md §6.1 |
