@@ -25,10 +25,10 @@ import type { CredentialResolver, ResolvedHeaders } from '../credentials/resolve
 import type { UpstreamCredential } from '../ir/index.js';
 import type { Clock } from '../ir/clock.js';
 import {
-  DefaultAliasResolver,
   providerFromAccessPath,
   validateAliasRule,
   validateAliasRuleSet,
+  type AliasResolver,
   type AliasRule,
 } from './aliases.js';
 import type {
@@ -107,7 +107,8 @@ export interface AdminServiceDeps {
   clock: Clock;
   capabilityRegistry: CapabilityRegistry;
   credentialResolver: CredentialResolver;
-  aliasResolver: DefaultAliasResolver;
+  /** 依赖**接口**而不是 DefaultAliasResolver 具体类（DI 常规立场）。 */
+  aliasResolver: AliasResolver;
   metadataSync?: MetadataSyncPort;
   balanceProbe?: BalanceProbePort;
   usageSource?: UsageRecordSource;

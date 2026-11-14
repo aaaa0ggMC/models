@@ -46,12 +46,35 @@ export class S2Route implements Stage {
 
     // fast path 判定：§4.1 四条件 + D-fastpath-2 插件准入
     const rawBodyAvailable = state.lazy.raw.byteLength > 0;
-    const eligible = isFastPathEligible(
+    let eligible = isFastPathEligible(
       ctx,
       result.route,
       deps.fastPathAdmission,
       rawBodyAvailable,
     );
+
+    // ---- 别名改写模型名 → fast path 必须失效 ----
+    //
+    // **为什么**：fast path 的合同是「透传原始字节，不做任何结构转换 / 字段
+    // 重命名 / 类型强转」（fast-path.ts 的 FAST_PATH_FORBIDDEN）。而别名解析
+    // （S2 第 1 步）会把客户端传的 `model` 换成上游真实 model id——这个改写
+    // 只发生在 S4 的**慢路径**编码里，fast path 压根不会做。
+    //
+    // 于是「客户端格式 == 上游格式 + 用了别名」这个最普通的组合会静默把
+    // **别名原样**发给上游：客户端拿到一个莫名的 400（上游不认识这个模型名），
+    // 而网关侧 trace 显示一切正常。这是最难查的一类 bug。
+    //
+    // 处置：只要本次请求的模型名被改写（客户端名 ≠ 解析出的上游名），就明确
+    // 关掉 fast path 走完整编码。代价是这些请求多付一次编解码——正确性优先，
+    // 且走别名的请求量级远小于直连真实 model id 的请求。
+    //
+    // 注意这**不改 fast-path.ts 的任何逻辑**，只是在消费判定结果的地方加一条
+    // 前置条件（同 D-fastpath-2 的插件准入在 S2 被消费的立场）。
+    if (eligible && shallow.model !== result.route.model) {
+      eligible = false;
+      ctx.state['fast_path_disabled_reason'] = 'alias_rewrote_model';
+    }
+
     ctx.fast_path = eligible;
     if (!eligible) {
       const reason =

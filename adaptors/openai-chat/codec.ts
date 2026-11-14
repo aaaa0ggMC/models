@@ -817,7 +817,17 @@ export class OpenAIChatCodec implements Adaptor {
     const params = payload.params;
 
     const body: Record<string, unknown> = {
-      model: req.model,
+      // **必须用 `resolved_model ?? model`**（与 adaptors/anthropic-messages/codec.ts
+      // 的 encode 同一立场，见那里的注释）：
+      //
+      // `resolved_model` 是 S2/S3/S4 写入的**上游侧真实 model id**——客户端传的
+      // 可能是别名（`fast`）、命名空间路径（`deepseek/v4-pro`）或网关内部的
+      // 路由名，而上游只认自己的 model id。直接用 `req.model` 会把别名原样发给
+      // 上游，客户端拿到一个莫名的 400，而网关侧 trace 显示一切正常。
+      //
+      // 缺省回落到 `req.model`：没有走 S2 路由的场景（dog-fooding 直调 codec、
+      // 单元测试）下 `resolved_model` 是 undefined，那时客户端传的就是上游名。
+      model: req.resolved_model ?? req.model,
       messages: this.encodeMessages(payload, warn),
     };
 

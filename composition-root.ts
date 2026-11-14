@@ -160,6 +160,11 @@ export interface Gateway {
    * 注意 DeepSeek **赠送余额优先扣**，余额差不等于现金支出。
    */
   balanceClient: DeepSeekBalanceClient;
+  /**
+   * 管理面（控制平面）装配。没传 `recordStore` 等 admin option 时为 undefined——
+   * 此时网关没有管理面，`createHttpServer` 也不需要挂 `adminHandler`。
+   */
+  admin?: AdminAssembly;
   /** 优雅退出：冲刷 usage 队列 + dispose 插件。 */
   shutdown(): Promise<void>;
 }
@@ -445,16 +450,45 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
   }
   container.registerValue(TOKENS.UsageEmitter, emitter);
 
+  // ---- 管理面（控制平面）装配 ----
+  // **必须在路由之前**：router 要收管理面的 aliasResolver，而 aliasResolver
+  // 由管理面创建（能力矩阵查找直接读 capabilityRegistry，不另写一份）。
+  // 早先的版本把这段放在 createGateway 末尾，结果 router 拿到的是
+  // options.aliasResolver（测试里传的那个），而管理面 API 写规则时改的是
+  // 自己内部新建的另一个解析器——「别名建好了但请求链路看不见」。
+  // 这个 bug 由 tests/admin-api.test.ts 的端到端用例抓住。
+  //
+  // 全都不传 admin 相关 option 时，admin === undefined，行为与本轮改动之前
+  // 完全一致（没有管理面，createHttpServer 也不挂 adminHandler）。
+  const admin = assembleAdmin({
+    options,
+    capabilityRegistry,
+    credentialResolver,
+    clock,
+    usageSink,
+    balanceClientFactory: () =>
+      new DeepSeekBalanceClient({
+        transport,
+        headersProvider: async () => {
+          const { headers } = await credentialResolver.headersFor(
+            'deepseek.openai-chat',
+            systemProbeCtx(clock),
+          );
+          return headers;
+        },
+      }),
+  });
+
   // ---- 路由 ----
-  // aliasResolver 可选注入：传了就按「显式别名 > 前缀规则 > 原样 model id」
-  // 三级优先级解析（admin/aliases.ts），不传则纯静态 RouteTable 查表
-  // （本文件的历史行为，完全不变）。
+  // aliasResolver 可选：注入了管理面就用管理面那个（API 改规则时路由立刻看见）；
+  // 没注入管理面但显式传了 options.aliasResolver 也用传的那个（测试/定制装配）；
+  // 两者都没有 → 纯静态 RouteTable 查表（历史行为，完全不变）。
   const router = new StaticRouter(
     options.routeTable ?? defaultRouteTable(),
     capabilityRegistry,
     credentialResolver,
     NOOP_ROUTE_HOOKS,
-    options.aliasResolver,
+    admin?.aliasResolver ?? options.aliasResolver,
   );
   container.registerValue(TOKENS.Router, router);
 
@@ -486,32 +520,6 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     emitter.close();
     await pluginHost.dispose();
   };
-
-  // ---- 管理面（控制平面）装配 ----
-  // 全部可选：不传任何 admin 相关 option 时，网关行为与本轮改动之前完全一致
-  // （没有管理面，`createHttpServer` 也不挂 adminHandler）。
-  //
-  // 装配顺序说明：aliasResolver 必须先于 router（router 构造时收它）；
-  // recordStore / keystore 必须先于 AdminService；AdminService 与 AdminAuth
-  // 先于 createAdminRouter。这个顺序写在下面的代码顺序里，没有隐藏依赖。
-  const admin = assembleAdmin({
-    options,
-    capabilityRegistry,
-    credentialResolver,
-    clock,
-    usageSink,
-    balanceClientFactory: () =>
-      new DeepSeekBalanceClient({
-        transport,
-        headersProvider: async () => {
-          const { headers } = await credentialResolver.headersFor(
-            'deepseek.openai-chat',
-            systemProbeCtx(clock),
-          );
-          return headers;
-        },
-      }),
-  });
 
   return {
     container,
@@ -546,7 +554,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
 // ---------------------------------------------------------------------------
 
 export interface AdminAssembly {
-  aliasResolver: import('./admin/aliases.js').DefaultAliasResolver;
+  aliasResolver: import('./admin/aliases.js').AliasResolver;
   adminService: import('./admin/service.js').AdminService;
   adminAuth: import('./admin/auth.js').AdminAuth;
   /** http/server.ts 的挂载点（`createHttpServer({ adminHandler })`）。 */
@@ -573,16 +581,19 @@ function assembleAdmin(input: {
   if (options.recordStore === undefined) return undefined;
 
   // ---- 别名解析器 ----
-  // 能力查找直接用 capabilityRegistry（不另写一份矩阵）
-  const aliasResolver = new DefaultAliasResolver(
-    options.aliasRules ?? defaultAliasRules(),
-    {
+  // **调用方显式传了就用传的那个**（显式优于隐式）：测试与定制装配经常要
+  // 从外面拿同一个解析器来断言「API 改的规则路由看见了」。只有没传时才新建，
+  // 新建时用内置兜底规则（没建任何规则也能跑，npm run demo 不至于 404）。
+  //
+  // 能力查找直接用 capabilityRegistry（不另写一份矩阵）。
+  const aliasResolver =
+    options.aliasResolver ??
+    new DefaultAliasResolver(options.aliasRules ?? defaultAliasRules(), {
       list: (modality) =>
         capabilityRegistry
           .list(modality)
           .map((e) => ({ access_path: e.access_path, model: e.model })),
-    },
-  );
+    });
 
   // ---- 业务逻辑 ----
   const adminService = new AdminService({
