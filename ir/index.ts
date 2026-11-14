@@ -29,4 +29,6 @@ export * from "./credential.js";
 export * from "./trace.js";
 export * from "./context.js";
 export * from "./plugin.js";
+export * from "./clock.js";
+export * from "./guards.js";
 export * from "./envelope.js";

@@ -22,6 +22,7 @@ import type { CanonicalError } from "./error.js";
 import type { CanonicalUsage } from "./usage.js";
 import type { ToolResultPart, ToolUsePart } from "./chat.js";
 import type { RequestContext } from "./context.js";
+import type { Clock } from "./clock.js";
 
 export type HookName = "onRequest" | "onResponse" | "onStreamChunk" | "onError" | "onToolCall";
 
@@ -85,6 +86,8 @@ export interface GatewayServices {
   log: Logger;
   /** 指标埋点。 */
   metrics: Metrics;
+  /** 时钟（插件内部计时用；不直接 Date.now()，便于测试控制）。 */
+  clock?: Clock;
   /** 只读访问当前请求的 usage 累计（流式下为近似值）。 */
   currentUsage(): CanonicalUsage;
   /** 请求一个"网关侧工具"供本插件注册（供 agentic loop 调用）。 */
