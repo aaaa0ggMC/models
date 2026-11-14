@@ -317,13 +317,29 @@ S2 路由、S3 插件链、工具循环的 compact/escalate/stop，本质都是*
 | 工具循环 | 已累积的结果足够回答了吗？ | `binary` | 概率 ≥ `loop.satisfied_threshold`（默认 0.8）则退出循环 |
 | S4 编码前 | 这次转换可能丢关键字段吗？ | `binary` | 概率 ≥ 0.5 则提高 `loss_policy` 到 `safe` |
 
-### 6.3 与 fast path 的关系
+### 6.3 攒批：一次请求问完所有问题
+
+**decision 的批量几乎是免费的**：Gemini 官方数据 1→100 题延迟近乎持平（150–250 ms e2e / 50–100 ms compute，测量条件为 16K tokens 内的多模态输入）；TypeSafe 实测 13 问合并 1 次调用 = 13 次单独调用的 **1/12.2 成本、1/11.8 时间，且答案不变**。根因是**共享 input 只计一次 token**，每问只追加自身 instructions/criteria。
+
+**因此控制面判断必须攒批**：S2/S3/工具循环里把所有待判断问题（路由、压缩触发、工具选择、是否继续循环…）合并成**一次** `kind:"decision"` 子请求，而不是一个判断发一次。
+
+约束：
+- 单次问题数受上游上限约束（Gemini 1–1000、OpenAI 1–400、Jev 无独立上限但受 context 约束）——超限时按优先级截断，低优先级问题退回启发式；
+- 攒批会引入少量延迟（等问题就绪），用"就绪即发 + 短窗口合并"（默认 5 ms）平衡；
+- 批内某题失败不影响其他题（OpenAI 的逐题 `refusal` 语义），canonical 已按"部分答案"建模（见 [10-canonical-schema.md](./10-canonical-schema.md) §4.6）。
+
+**上游选型对攒批的影响（重要）**：
+- **只有 OpenAI Decisions 支持 prompt caching**（隐式 breakpoint + ≥1024 token 可复用前缀；cache read 打折、cache write 计费）。Gemini 明确 "doesn't support context caching… Repeated input across requests counts in full"，Jev 无。
+- 因此"同一 state 反复问不同问题"的热点路径上，**OpenAI Decisions 的 TCO 显著优于 Gemini/Jev**——这是选上游时容易被忽略的一维。
+- 反向说：如果判断的 `content` 每次都不同（大多数场景），缓存无收益，Gemini 的免费层与更低的 ECE 更划算。
+
+### 6.4 与 fast path 的关系
 
 **decision 判断本身也走 fast path 判定**：如果客户端请求 `kind:"decision"` 且上游就是 decision 格式，透传；否则过 canonical。判断类请求通常很小（一个问题 + 少量内容），fast path 的收益不如 chat 明显，但机制一致。
 
 **decision 不参与"客户端请求的 fast path"**——它是网关内部发起的子请求，用独立的 `request_id`（`req_` 前缀 + `_dec` 后缀）与独立的预算桶，避免污染用户的 usage 记录。子请求的计量进 `UsageRecord.control_plane_cost`（与 `compaction` 同级，都不算进用户 `input_tokens`）。
 
-### 6.4 降级与"不降级"的边界
+### 6.5 降级与"不降级"的边界
 
 **决策**：路由/工具选择/循环控制**可以**降级到 chat 模拟；**策略检查与 stop 决策不可以**。
 
@@ -331,11 +347,14 @@ S2 路由、S3 插件链、工具循环的 compact/escalate/stop，本质都是*
 
 **实现**：`DecisionDegradationPolicy.allow_degrade_high_stakes` 默认 `false`（见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.3）。降级时必须满足：① 响应带 `calibration: "degraded"`；② `warnings` 说明原因与替代模型；③ 高风险判断拿不到真 decision 时**明确失败**，不静默用 chat 顶替。
 
-### 6.5 待验证
+### 6.6 待验证
 
 1. decision 子请求的延迟（150–250 ms 是报道值）是否可接受——它加在 S2/S3 的关键路径上，需要实测；不可接受则改为"仅对低置信度请求触发判断"（两段式：先用廉价启发式，不确定再问 decision）。
 2. decision 上游不可用时的降级是否要按"请求类型"区分（见 §6.4）。
 3. `control_plane_cost` 是否要进 dog-fooding 的默认查询维度（建议进，否则看不到"网关自己想花了多少钱"）。
+4. 攒批窗口（默认 5 ms）与"就绪即发"的取舍——窗口越长批量越省，但 S2 关键路径延迟越高。
+5. 校准性数据目前来自 Google 自评 launch eval、Artificial Analysis 转载与 TypeSafe 自家 cookbook，**均非独立第三方**；且 AIHubMix 明确警告"更低的聚合 ECE 不等于你的工具路由器有了可用阈值"。上线前应在我们自己的判断任务上抽样校准（特别是 compact/escalate/stop 三类）。
+6. 配额不可静态推导：Gemini 有公开分层表，Jev 只在 console 可见（tokens/s + requests/s），OpenAI 无 Decisions 专属表。限流器需"静态表 + 运行时 429 探测"混合策略。
 
 ## 7. 错误模型
 

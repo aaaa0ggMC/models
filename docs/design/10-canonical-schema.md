@@ -544,12 +544,21 @@ interface DecisionContent {
   role?: string;
 }
 
-/** 问题类型。canonical 用四种稳定类型，上游专有名字进 native */
+/**
+ * 问题类型。canonical 用五种稳定类型，上游专有名字在 adaptor 层做别名映射。
+ *
+ * 实测三家原语命名不一致（2026-11 官方 API reference，见 40-provider-adaptors.md §6.2）：
+ *   Gemini ： noul    | choice | score   （另 document 块类型，非问题类型）
+ *   Jev    ： noul    | choice | score | box
+ *   OpenAI ： predicate | choice | score
+ * 即"是非判断"在三家有三个名字（noul / noul / predicate），canonical 统一为 binary。
+ */
 type DecisionQuestionType =
-  | "binary"        // 是非判断（yes/no）
-  | "choice"        // 定集选择（从 options 里选）
-  | "scale"         // 固定量表评分（1-5 / 0-100 等离散档）
-  | "rubric";       // rubric 评估（按评分标准打几分/是否达标）
+  | "binary"        // 是非判断（yes/no）↔ Gemini/Jev noul、OpenAI predicate
+  | "choice"        // 定集选择（从 options 里选）↔ 三家 choice
+  | "scale"         // 固定量表评分（离散档）↔ 三家 score
+  | "rubric"        // rubric 评估。⚠️ **三家均无对应原语**，adaptor 映射为 choice 或 scale + criteria
+  | "box";          // 边界框（Jev 专有）。⚠️ 仅 Jev 实现，其余 adaptor 会 drop + warn
 
 interface DecisionQuestion {
   id: string;                     // 问题稳定 id，响应按它回填
@@ -603,24 +612,39 @@ interface DecisionResponsePayload {
 
 interface DecisionAnswer {
   question_id: string;
-  /** 选中的选项值（binary/choice）；scale 为档位值；rubric 为分数 */
+  /** 选中的选项值（binary/choice）；scale 为档位值；rubric 为分数；box 为坐标对象 */
   label: string;
-  /** 校准概率（0-1）。这是 decision 模型的核心产出 */
-  probability: number;
-  /** 置信度分数（0-1）。与 probability 语义不同，二者都保留 */
-  confidence: number;
-  /** 逐选项概率（include_option_probabilities 时） */
+  /**
+   * 校准概率（0-1）。decision 模型的核心产出。
+   * ⚠️ **可选**：OpenAI 的 `predicate` 类型把它直接作为顶层字段返回，而 choice/score
+   * 把它放在 probabilities 里；极端情况下上游可能不给。缺省省略，不填 0（规则 2）。
+   */
+  probability?: number;
+  /**
+   * 置信度分数（0-1）。与 probability 语义不同，二者都保留。
+   * ⚠️ **可选且三家不一致**：Gemini 的 noul 有 confidence，Jev 的 noul 没有，
+   * OpenAI 的 predicate 也没有。因此绝不能假设它存在。
+   */
+  confidence?: number;
+  /** 逐选项概率。⚠️ 可选——同上，OpenAI predicate 不给 */
   option_probabilities?: Array<{ value: string; probability: number }>;
-  /** 理由/解释（include_rationale 且上游支持时） */
+  /** 该题被拒答（OpenAI 的 `refusal`）。**逐题拒答，同请求其他题仍作答** */
+  refusal?: { reason: string };
+  /** 理由/解释。⚠️ **三家均不支持**（decision 不写句子），字段仅作前向兼容 */
   rationale?: string;
-  /** 上游原始字段 */
+  /** 上游原始 answer 对象 */
   raw?: unknown;
 }
 ```
 
 **设计说明（D8）**：`probability`（校准概率）与 `confidence`（置信度分数）**分开建模，不合并**。上游对二者定义不一（有的是模型自评确定性，有的是归一化边际），合并会丢失"这次判断有多可信"与"这个选项有多可能"的区分——而前者正是 compact/escalate/stop 决策要用的信号。
 
-**设计说明（D8b）**：`DecisionQuestion.type` 用四种 canonical 稳定类型（`binary` / `choice` / `scale` / `rubric`），上游专有类型名（如 Gemini 的专有枚举）进 `native`。理由同 `BuiltinTool.name`（[50-builtin-search.md](./50-builtin-search.md) §2.2）：避免"同一能力在不同格式里有 5 个名字"导致配置与统计分裂。
+**设计说明（D8b）**：`DecisionQuestion.type` 用五种 canonical 稳定类型（`binary` / `choice` / `scale` / `rubric`），上游专有类型名（如 Gemini 的专有枚举）进 `native`。理由同 `BuiltinTool.name`（[50-builtin-search.md](./50-builtin-search.md) §2.2）：避免"同一能力在不同格式里有 5 个名字"导致配置与统计分裂。
+
+**设计说明（D8c，三个映射陷阱，adaptor 硬约束）**：这三条已由三家官方 API reference 实测确认，是 decision adaptor 最容易写错的地方：
+1. **`answers` 容器形态不一**：Gemini/Jev 是按问题 key 的 **map**，OpenAI 是**按 questions 顺序的 array**。canonical 统一为 array + `question_id`，因此 OpenAI adaptor 必须**按位置对齐** `questions[]` 与 `answers[]`（错位即全盘皆错），且必须有"打乱 questions 顺序后答案仍对得上"的 round-trip 测试。
+2. **`probabilities` 形态不一**：Gemini/Jev 是 `{key: p}` map，OpenAI 是 `[{value, probability}]` 数组。
+3. **`confidence` / `probability` / `option_probabilities` 的有无不一致**（见 `DecisionAnswer` 的 ⚠️ 注释）——所以这三个字段在 canonical 里**都是可选的**，缺省省略而非填 0。
 
 **流式**：decision **不设计流式**——一次前向计算就返回全部答案，分批返回没有意义（且会诱导客户端以为可以早停）。`StreamOptions.mode` 对 decision 恒为 `"none"`；客户端若请求流式，返回 `streaming_mode_unsupported`（[25-streaming.md](./25-streaming.md) §1 的 `reject` 档）。
 

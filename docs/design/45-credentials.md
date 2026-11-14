@@ -138,7 +138,19 @@ access_path: "xai-supergrok"         model_namespace: "xai-supergrok"
 
 access_path: "bedrock"               model_namespace: "bedrock/anthropic"
   → bedrock/anthropic.claude-...     SigV4，按 token 计费
+
+# decision 品类的 access path（model id 唯一，主要靠 access path 区分）
+access_path: "gemini-decisions"      model_namespace: "gemini-decisions"
+  → gemini-decisions/gemini-decision-1    $0.10/M 输入，输出 0 token 不计费；有免费层
+access_path: "typesafe"              model_namespace: "typesafe"
+  → typesafe/jev-1.14.0（或 jev-latest） $0.042/M 输入，输出免费
+access_path: "openai-decisions"      model_namespace: "openai-decisions"
+  → openai-decisions/gpt-6-luna          $0.10/M 输入，输出不计费；唯一支持 prompt caching
+access_path: "openrouter-decisions"  model_namespace: "openrouter-decisions"
+  → openrouter-decisions/<vendor>/<model>  归一化信封（/api/alpha/decisions、/api/v1/systemone）
 ```
+
+**decision 品类有一个 chat 没有的特点：模型 id 基本唯一**（`gemini-decision-1`、`gpt-6-luna`），所以 `(access_path, model)` 二级键在 decision 上退化成「主要靠 access path 区分」。这意味着**选上游就是选能力**：免费层（Gemini）、最低单价（Jev）、唯一 prompt caching（OpenAI）、最高模态覆盖（Gemini）、可自托管（261 个 open-weights 系统）。
 
 **规范：凭据解析出的完整模型 id = `<access_path>/<model_namespace>/<model>`，与 LiteLLM / llmshim 的 `provider/model` 约定兼容**（便于客户端迁移与相互对接）。
 
@@ -360,12 +372,14 @@ interface CostBreakdown {
 
 ## 8. Open Questions
 
-1. **Q-C1**：OpenAI Codex OAuth 的设备码流程的确切端点与 scope（以及是否允许第三方网关代登录）——**待验证**，且可能随时变。
+1. **Q-C1**：OpenAI Codex OAuth 的设备码流程确切端点与 scope（以及是否允许第三方网关代登录）——**待验证**，且可能随时变。
 2. **Q-C2**：xAI SuperGrok 的订阅额度是否有可查询的剩余量 API；若无，软配额只能靠自估算累计。
 3. **Q-C3**：订阅路径的 5h/周窗口限额是账号级还是 key 级（影响多凭据并行时的配额分配）。
 4. **Q-C4**：`oauth_browser`（PKCE 重定向）在无人值守网关上如何完成首次授权——需要一次性人工交互，之后靠 refresh_token。流程设计待定。
-5. **Q-C5**：Bedrock / Vertex 的 IAM 凭据在本机的可用性（无 AWS/GCP 凭据时无法验证）。
+5. **Q-C5**：Bedrock / Vertex 的 IAM 凭据在部署机上的可用性（无 AWS/GCP 凭据时无法验证）。
 6. **Q-C6**：降级事件的累计统计口径（"本月降级率"）是否要进 dog-fooding 默认工具集。
-7. **Q-C7**：`upstream_proxy`（转给另一个网关）场景下，下游网关返回的 usage 是否可信
-8. **Q-C8（decision）**：decision 辅助路由的延迟（报道 150–250 ms）是否可接受；不可接受则确认两段式的启发式阈值怎么定。
-9. **Q-C9（decision）**：`control_plane_cost` 是否要进 dog-fooding 默认查询维度（建议进，否则看不到"网关自己想花了多少钱"）。（可能被二次估算污染）——建议标记 `usage.source = "provider"` 但 `precision = "low"`。
+7. **Q-C7**：`upstream_proxy`（转给另一个网关）场景下，下游网关返回的 usage 是否可信（可能被二次估算污染）——建议标记 `usage.source = "provider"` 但 `precision = "low"`。
+8. **Q-C8（decision）**：decision 辅助路由的延迟（Gemini 官方 150–250 ms e2e）是否可接受；不可接受则确认两段式的启发式阈值怎么定。
+9. **Q-C9（decision）**：`control_plane_cost` 是否要进 dog-fooding 默认查询维度（建议进，否则看不到"网关自己想花了多少钱"）。
+10. **Q-C10（decision）**：decision 上游默认选型（Gemini 免费层 vs Jev 最低单价 vs OpenAI 唯一缓存）——取决于判断任务是否"同一 state 反复问不同问题"（只有热点路径才有缓存收益）。需在实际负载上测。
+11. **Q-C11（decision）**：是否接入开源自托管 decision 模型（Jeff / clef / mammoth-1 等 261 个 open-weights 系统）作为新 access path（`local` 凭据 + 自建端点）。

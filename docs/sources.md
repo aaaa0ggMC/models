@@ -407,44 +407,101 @@
 
 ## 5. decision 模型（判断模型）调研 `[v1.5]`
 
-**状态：部分已确认（官方博客/文档/第三方解读），字段级细节待补齐（见 Q21–Q25）。**
+**状态：已确认（三家官方 API reference / model card / pricing / rate-limits 全部读到）。** 调研日期 2026-11-14。
 
-已确认三家同品类产品：
+### 5.1 官方来源（一手）
 
-| 产品 | 归属 | 形态 | 定价（报道值，`[待验证]`） |
+| 厂商 | 指南 | API Reference | Model card | 定价 | 限额 |
+|---|---|---|---|---|---|
+| Gemini | <https://aistudio.google.com/docs/decisions-api> | <https://aistudio.google.com/api-reference/decisions/create-decision> | <https://aistudio.google.com/docs/models/gemini-decision-1> | <https://aistudio.google.com/docs/pricing> | <https://aistudio.google.com/docs/rate-limits> |
+| Jev | <https://docs.typesafe.ai/concepts/system-one> | <https://docs.typesafe.ai/api/system-one>（OpenAPI：<https://api.typesafe.ai/openapi.json>） | <https://docs.typesafe.ai/models> | <https://typesafe.ai> | <https://console.typesafe.ai/rate-limits> |
+| OpenAI | <https://developers.openai.com/api/docs/guides/decisions> | <https://developers.openai.com/api/reference/resources/decisions/methods/create> | <https://developers.openai.com/api/docs/models/gpt-6-luna> | <https://developers.openai.com/api/docs/pricing> | <https://developers.openai.com/api/docs/guides/rate-limits> |
+
+补充官方：Gemini 官方博客 <https://blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api>；TypeSafe primitives <https://docs.typesafe.ai/primitives>、confidence <https://docs.typesafe.ai/confidence>、errors <https://docs.typesafe.ai/api/errors>、cookbooks <https://docs.typesafe.ai/cookbooks/consistency_choice_cookbook> 与 <https://docs.typesafe.ai/cookbooks/parallel_questions>；OpenAI decisions-voice <https://developers.openai.com/api/docs/guides/decisions-voice>、Azure 版 <https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/decisions>。
+OpenRouter 侧（上游归一化样板）：<https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request>、<https://openrouter.ai/docs/guides/community/multimodal-decisions>、<https://openrouter.ai/docs/guides/community/typesafe-sdk>；JevBench 榜单 <https://benchmarkheaven.com/jev-models>。
+
+**二手（已标注）**：Braintrust <https://www.braintrust.dev/articles/what-is-jev>；Firecrawl <https://www.firecrawl.dev/blog/openai-decisions-api-vs-jev>；eesel <https://www.eesel.ai/blog/openai-decisions-api-pricing>；AIHubMix <https://aihubmix.com/blog/gemini-decision-1-vs-jev-1-14-which-should-you-choose>；Lindy <https://www.lindy.ai/blog/gemini-decision-1-vs-gpt-6-luna>；AI/TLDR Jeff <https://ai-tldr.dev/releases/firelex-jeff>；NobodyWho <https://www.nobodywho.ai/posts/jev-in-25-lines>（HN <https://news.ycombinator.com/item?id=49812769>）；独立 benchmark <https://github.com/nibzard/decision-model-benchmark>。
+
+### 5.2 端点 / 模型 / 认证
+
+| | Gemini Decisions | Jev | OpenAI Decisions |
 |---|---|---|---|
-| **Gemini Decisions API**（Gemini Decision 1 驱动） | Google | 输入多模态内容（文本/图像/音频/视频/PDF，最大 256K tokens）+ 最多 1000 个相互独立的问题；一次前向计算对候选选项评分，返回**校准概率 + 置信度分数**；延迟 150–250 ms | 输入 $0.10/M tokens，**输出 token 免费** |
-| **Jev** | TypeSafe AI | 结构化决策模型，Choice / Score / Noul 原语，per-option probabilities；明确"不是 chatbot，不写句子" | $0.042/M 输入 tokens，输出免费 |
-| **OpenAI Decisions API**（基于 Luna） | OpenAI | 对 Jev 的回应，同品类 | `[待验证]` |
+| 端点 | `POST https://generativelanguage.googleapis.com/v1beta/decisions` | `POST https://api.typesafe.ai/v1/systemone` | `POST https://api.openai.com/v1/decisions` |
+| Azure 变体 | — | — | `POST https://<res>.openai.azure.com/openai/v1/decisions` |
+| model id | `gemini-decision-1`（唯一） | `jev-1.14.0` / `jev-1.13.0`；alias `jev-latest` / `jev-preview` | `gpt-6-luna`（唯一） |
+| 认证 | `x-goog-api-key` | `Authorization: Bearer` | `Authorization: Bearer`（Azure 另支持 Entra ID） |
+| SDK | `client.decisions.create()`（google-genai ≥3.2，`api_version: v1beta`） | `client.system_one()` | `client.decisions.create()`（openai ≥3.26.0 py / ≥7.30.0 js / .NET ≥2.15.0） |
 
-**来源**：
-- Gemini Decisions API 官方博客：<https://blog.google/innovation-and-ai/technology/developers-tools/gemini-decisions-api>
-- Gemini Decisions API 文档：<https://aistudio.google.com/docs/decisions-api>
-- Jev 解读（Braintrust）：<https://www.braintrust.dev/articles/what-is-jev>
-- OpenAI Decisions API（Luna）解读（The New Stack）：<https://thenewstack.io/openai-decision-api-luna>
-- OpenAI Decisions API vs Jev 对比（Firecrawl）：<https://www.firecrawl.dev/blog/openai-decisions-api-vs-jev>
+### 5.3 关键结论
 
-**关键结论**：
-1. **decision 是独立模型品类，不是 chat 的特例**：不做对话、不写句子；一次前向计算对批量独立问题评分，返回结构化判断 + 校准概率。
-2. **定位是低延迟控制面**：工具选择、策略检查、模型路由、上下文质量评估、compact/escalate/stop 决策。**这正是网关自己需要的判断能力**，因此 decision 的首要消费者是 AgentGateway 自身（dog-fooding），不是终端用户。
-3. **定价形态是"输入计费、输出免费"**——与 chat 的双向计费根本不同，必须靠 `pricing_state` 表达，且必须与"上游没报 usage"区分（前者是省钱，后者是账没记上）。
-4. **批量语义**：一次请求最多约 1000 个相互独立的问题（Gemini 报道值），chat 没有这个语义。
-5. **单向能力**：decision 不能做 chat；chat 可以模拟 decision 但校准性差、延迟高、输出开始计费——因此模拟只能作降级路径，且高风险判断不允许降级。
+1. **三家全部不能 chat（已由官方文档直接确认）**：Gemini Decision 1 model card 的能力矩阵里 Text generation / Structured outputs / Function calling / Thinking / Caching / Batch / Live API **全部 not-supported**，output token limit = **0**；Jev："System One models do not write replies, produce code, or generate explanations"；OpenAI `/v1/decisions` 只收 `questions` 只回 typed answer（底层 `gpt-6-luna` 支持 Chat/Responses，但该端点不暴露）。
+2. **原语命名三家不一致**：Gemini/Jev 用 `noul`|`choice`|`score`，OpenAI 用 `predicate`|`choice`|`score`；Jev 额外有 `box`。canonical 统一为 `binary`|`choice`|`scale`（+ `box` 仅 Jev、`rubric` 三家均无）。
+3. **三个映射陷阱**：① `answers` 容器 Gemini/Jev 是 **map**（按 question key/name），OpenAI 是 **array**（按 questions 顺序）；② `probabilities` Gemini/Jev 是 **map**，OpenAI 是 **array of {value, probability}**；③ `confidence` 可用性不一（Gemini 三种类型都有；Jev 的 `noul` 没有；OpenAI 的 `predicate` 连 probabilities 都没有）。
+4. **usage 不能假设 `output_tokens == 0`**：Gemini 恒 0；Jev **非 0 但免费**（OpenAPI 示例 12）；OpenAI 上报但不计费。必须按"是否计费"与"是否为 0"两个独立维度处理 → `pricing_state.output = "free"`。
+5. **`refusal` 是 OpenAI 独有**：逐题拒答，同请求其他题仍作答。Gemini 用 `prompt_feedback.block_reason` 表达整请求被拦截（此时 `answers` 为空）。
+6. **批量是核心降本手段**：Gemini 1–1000 题/请求且 1→100 题延迟近乎持平；OpenAI 1–400；Jev 无独立上限。共享 input 只计一次 token。TypeSafe 实测 13 问合并 1 次调用 = 13 次单独调用的 **1/12.2 成本、1/11.8 时间，答案不变**。
+7. **只有 OpenAI Decisions 支持 prompt caching**（隐式 breakpoint + ≥1024 token 前缀；cache read 打折、cache write 计费）。Gemini 明确 "doesn't support context caching… Repeated input across requests counts in full"；Jev 无。
+8. **Gemini 按 UTF-8 字节序对 option key 字典序排序后再求值**，平分时取字典序最前的 key → 绝不能用位置性 key。
+9. **Jev 的 confidence 是 probabilities 的线性变换**（Choice：`(p_max − 1/n)/(1 − 1/n)`），官方明说"checking both adds no independent evidence"；`noul` 不返回 confidence 但可自算 `|2p − 1|`。
+10. **OpenAI 的 `cached_tokens`/`cache_write_tokens` 已包含在 `input_tokens` 内**，不要重复相加。
+11. **三家均不支持流式**（OpenAPI/reference 中无 streaming 参数）。
+12. **媒体能力差异大**：Gemini 最强（text/image/audio/video/PDF + Files API URI + 远程 URL）；OpenAI 次之（text/image/JSON，无 `file_id`，无 audio/video）；Jev 只有 text + 实验性 PNG/JPEG（默认关，需 opt-in header）。
+13. **开源/可自托管已成规模**：JevBench 榜单 **261 个 ranked open-weights 系统**。代表：Jeff（Firelex，weights Apache-2.0，RTX PRO 6000 ~22 ms，5 benchmark 79.1%/83.1%/81.6% vs Jev 83.0%）、AutoJev-27B（MIT 训练配方）、Cloudflare clef 家族、BaseTen joey/elephant/mammoth、Together Tev1-4B、jaredpalmer/kev-4b（`/v1/systemone` 兼容）。OpenRouter 已服务 **41 个 decisions 模型**。
 
-**→ 对我们的启示**（已落入设计）：
-- canonical 新增 `kind:"decision"` 模态（[10-canonical-schema.md](./design/10-canonical-schema.md) §4.6）：`content[]`（复用媒体引用）+ `questions[]`（binary/choice/scale/rubric）+ `answers[]`（label/probability/confidence/option_probabilities，**概率与置信度分开建模**）；
-- `usage` 新增 `units.questions` 兜底计量 + `TokenUsage.pricing_state`（billed/free/included/unpriced）；
-- 能力矩阵新增 decision 列；adaptor 契约比 chat 简单（无流式），但**必须**实现 `pricing_state` 与降级路径（[40-provider-adaptors.md](./design/40-provider-adaptors.md) §6）；
-- 降级路径：chat + `response_format: json_schema` 模拟，响应标记 `calibration:"degraded"`；**策略检查与 stop 决策不允许降级**；
-- control-plane 消费点接入 S2 路由、S3 插件链、工具循环（[20-pipeline.md](./design/20-pipeline.md) §6、[45-credentials.md](./design/45-credentials.md) §4.2）；
-- 子请求独立 `request_id` 与预算桶，计量进 `UsageRecord.control_plane_cost`，不算进用户 `input_tokens`。
+### 5.4 chat 模拟 decision 的实测代价（有已发表数据）
 
-**待验证（Q21–Q25）**：
-1. **Q21**：三家 decision API 的确切字段名与嵌套——问题类型枚举值、选项集表示、`probability` / `confidence` / per-option probabilities 的字段名、usage 形状、错误码。**这是 decision adaptor 开工的前置依赖。**
-2. **Q22**：Gemini Decisions 的免费额度与可用区域；Jev 在 TypeSafe / OpenRouter 上的确切模型 id 与计价方式。
-3. **Q23**：decision 模型是否真的不能做 chat（单向能力）——需读官方文档确认，而非从产品定位推断。
-4. **Q24**：chat + 结构化输出模拟 decision 的校准性损失有没有公开基准（决定降级路径是否值得默认开启）。
-5. **Q25**：部分问题失败时的上游语义（整个请求失败 vs 部分答案 + 每题 error）——canonical 已选后者，需确认三家都支持。
+**TypeSafe 官方 cookbook**（Jev 数据 2026-11-02，LLM 数据 2026-11-07～11-10；每条件 15 次调用，一次 8 个 Choice 问题）：
+
+| Condition | time/call | cost/call | vs Jev 速度 | vs Jev 成本 |
+|---|---|---|---|---|
+| **Jev 1.14** | **103 ms** | **$0.000066** | 1x | 1x |
+| GPT-6 Luna (temp 0) | 2,753 ms | $0.000269 | 26.8x | 4.1x |
+| GPT-6 Luna (reasoning) | 14,467 ms | $0.000685 | 140.8x | 10.4x |
+| Claude Haiku 5.5 (reasoning) | 6,110 ms | $0.001019 | 59.5x | 15.5x |
+| GPT-6.1 Terra (temp 0) | 4,274 ms | $0.002694 | 41.6x | 41.1x |
+| GPT-6 Astra (reasoning) | 18,171 ms | $0.055399 | 176.9x | 844.6x |
+| Claude Fable 5.1 (reasoning) | 12,793 ms | $0.077985 | 124.5x | 1189.0x |
+
+**稳定性（比均值更重要）**：40 个边界帖子 × 15 次重复，Jev 的"最不稳定选项"平均只变号 **4.0%**（从不 >6.7%）；而**每一个 LLM 条件**都有帖子变号 >10%（视条件 2–36/40 个）。temperature 0 能缩小差距但关不掉。统计显著性：Jev 领先幅度靠运气出现的概率 < 1/1000 runs。
+
+**Google 官方博客**：Decisions API 比 Gemini 3.5 Flash-Lite + Interactions API **便宜近 5x**（共享 benchmark suite）。
+
+**eesel 实测**（2026-10，20 工单 × 3 问）：Luna reasoning=none $0.047/千单、29/40 三问全对、median 1.48 s；Luna medium $0.089、2.34 s；GPT-6.1 Sol low $1.03、2.17 s。要点：**队列路由 40/40 已是"解决问题"**，花 22x 钱上 frontier model 买不到东西；thinking 全额按 output 计费，medium effort 下 82 个隐藏 thinking token 让成本近乎翻倍。
+
+**校准度**：
+- Google launch eval（自评）：Top-1 ECE Gemini Decision 1 **0.0250** < Jev 1.14 0.0494 < GPT-6 Luna 0.0721；JevBench 92.2% vs 90.0%；When2Call 79.9% vs **82.0%**（此项 Gemini 反而略低）；评测花费 $0.88 vs $0.68。
+- Artificial Analysis：Decision Index 66/60/66，Brier 0.18/0.19/0.19，每任务 211/206/**92** ms，每 1M 任务 $345/$339/**$156**。
+- ⚠️ **AIHubMix 明确警告**："A lower aggregate ECE does not establish a calibrated threshold for your tool router"——聚合校准度好不代表你的具体判断任务有可用阈值。
+
+### 5.5 待验证（16 项，官方未给出依据）
+
+1. **Gemini Decisions API 未列入 `llms.txt` 索引**（grep "decision" 零命中），但 api-reference 页可抓且内容完整 → 文档索引滞后于上线，抓取不能只靠 llms.txt。
+2. Gemini Decisions 的**可用区域清单**：官方只说 "Gemini Developer API (v1beta)"；Vertex AI "coming soon"；OpenRouter 标注无 EU in-region routing。**无官方区域表**。
+3. Gemini Decisions 是否/何时进 Vertex AI：官方博客仅 "support coming soon to Gemini in Google Cloud"，无时间表。
+4. OpenAI Decisions 的**专属 rate limit 数值**：无 Decisions 限额表；只能借用 `gpt-6-luna` 的 Build/Launch/Grow（5,000/2M、10,000/10M、30,000/180M），且不确定是否共享配额池。
+5. OpenAI Decisions 的**专属 4xx error code**（questions >400、choices >255、images >128 等）：API reference 只列 200，只能按通用 envelope 推断。
+6. Jev 的**免费额度**：TypeSafe 文档均未提及免费额度或试用 credit。
+7. Jev 的**具体 rate limit 数值**：官方只给计量维度（tokens/s、requests/s）与 console 入口，无公开数字。
+8. Jev 的**延迟官方口径**："70–500 ms" 来自 Braintrust 转述，非 TypeSafe 官方文档原文；OpenRouter P50 从 0.21 s（10/1）波动到 0.09 s（11/14）。
+9. Jev 的 **license / openness**：闭权；未公布权重许可、训练数据许可、是否可自托管（仅第三方重实现可自托管）。
+10. **Gemini 官方 calibration benchmark 的原始图表**：只有官方博客一句 + 二手转录表格，Google 未公开完整 benchmark 报告页。
+11. OpenAI Decisions 的 **DevDay 150 ms 宣称的测量条件**：只有 slide 转载与 X post，无官方文档化条件。
+12. **OpenAI Decisions caching 计费口径的前后变化**：public beta 期社区回复 "currently no caching"，GA 文档改为 cache read 打折 / cache write 计费。以 GA 为准但缺 changelog。
+13. **Jev 图片能力的网关行为**：AIHubMix 明确说 "Native images and Box are off by default and require a vendor opt-in header; that header's gateway behavior is unverified here."
+14. thenewstack.io 原文被 Cloudflare 403，未取得原文（相关事实已由 OpenAI 官方文档与 Firecrawl/eesel 覆盖）。
+15. Microsoft Learn Azure Decisions 页需授权，区域/配额细节部分依赖搜索摘要。
+16. DataCamp 文章 403，ECE 数值经 AIHubMix 与搜索摘要交叉确认。
+
+### 5.6 → 对设计的落地（已写入各文档）
+
+- canonical `kind:"decision"` 与五类问题原语 + 别名映射（[10-canonical-schema.md](./design/10-canonical-schema.md) §4.6，含 D8c 三个映射陷阱）；
+- `pricing_state` 与 `units.questions`（同文件 §6 规则 5–6）；
+- 第五模态章节 + decision vs chat 对照表 + 实测代价（[15-modalities.md](./design/15-modalities.md) §6）；
+- 三家特性普查行（[12-coverage-survey.md](./design/12-coverage-survey.md) §1.5）；
+- decision adaptor 契约 + 三家字段映射表 + 7 条实现陷阱 + 降级路径（[40-provider-adaptors.md](./design/40-provider-adaptors.md) §6）；
+- control-plane 消费点 + 攒批 + 上游选型对缓存的影响（[20-pipeline.md](./design/20-pipeline.md) §6）；
+- 路由决策时序加 decision 辅助（[45-credentials.md](./design/45-credentials.md) §4.2）；
+- `control_plane_cost` 计量（[60-billing-and-dogfooding.md](./design/60-billing-and-dogfooding.md) §3）。
 
 ## 6. License 汇总（合规注意）
 

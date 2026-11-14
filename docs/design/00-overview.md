@@ -445,7 +445,8 @@ OpenRouter 的 `GET /api/v1/models` 返回模型元数据 + 定价 + per-model r
 | Q8 | `additionalProperties: false` 是否会因 provider 加字段而频繁报错 | schema 严格度 | 10-canonical-schema.md |
 | Q9 | LibreChat transaction schema 是否含 reasoning / cache 实际计量值 | WebUI 改造量 | docs/sources.md §UI |
 | Q10 | Anthropic 1h / 5m ephemeral cache 在 usage 里是否分字段返回 | cache 计费 | 40-provider-adaptors.md |
-| Q21–Q25 | 三家 decision API 的确切字段 / 免费额度 / 单向能力 / 降级校准性 / 部分失败语义 | decision adaptor 开工前置 | 40-provider-adaptors.md §6、12-coverage-survey.md §1.5 |
+| Q25–Q30 | decision：部分失败语义 / OpenAI 专属限额与错误码 / Jev 图片 opt-in 头经网关的行为 / Gemini 区域清单 / 聚合校准度是否等于可用阈值 | decision adaptor 细节 | 40-provider-adaptors.md §6、12-coverage-survey.md §5.1 |
+| — | ~~Q21–Q24~~ **已由本次调研解答**（三家字段名、免费额度、单向能力、降级代价均有官方/实测依据） | — | 12-coverage-survey.md §5.1 |
 
 > 每条的验证方式写在对应文档的"待验证清单"里。
 

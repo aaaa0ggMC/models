@@ -356,15 +356,47 @@ interface EmbeddingResponsePayload {
 | 维度 | chat | decision |
 |---|---|---|
 | 请求结构 | `messages[]` 对话历史 + `tools[]` | `content[]`（多模态引用）+ `questions[]`（批量、相互独立） |
-| 输出形态 | 自由文本（+ 可选 tool_use） | 结构化：`{label, probability, confidence, option_probabilities}` |
-| 批量语义 | 一轮一个回答 | 一次前向计算最多 ~1000 个问题（`[待验证]`） |
-| 能否互相替代 | chat **能**模拟 decision（降级路径） | decision **不能**做 chat（单向能力，`[待验证]` 确认） |
-| 校准性 | 概率不可靠（LLM 自评置信度与真实正确率相关性弱） | 核心卖点即校准概率 |
-| 延迟预期 | 数百 ms ~ 数十 s（含生成长文本） | 150–250 ms（Gemini 报道值，`[待验证]`） |
+| 输出形态 | 自由文本（+ 可选 tool_use） | 结构化：`{label, probability?, confidence?, option_probabilities?}`（三个字段**都是可选的**，见 D8c） |
+| 批量语义 | 一轮一个回答 | 一次前向计算 1–1000 个问题（Gemini）；OpenAI 1–400；Jev 无独立上限。**1→100 题延迟近乎持平** |
+| 能否互相替代 | chat **能**模拟 decision（降级路径） | decision **不能**做 chat（**已由三家官方文档直接确认**） |
+| 校准性 | 差。Top-1 ECE：GPT-6 Luna 0.0721 vs Gemini Decision 1 0.0250（Google launch eval，自评） | 核心卖点即校准概率 |
+| 判断稳定性 | 每个 LLM 条件都有帖子变号 >10% | Jev 最不稳定选项仅 4.0% 变号（从不 >6.7%） |
+| 延迟预期 | 数秒（要生成长文本） | **150–250 ms**（Gemini 官方 e2e）；Jev cookbook mean 103 ms |
+| 成本（同 8 个 Choice 问题） | GPT-6 Luna $0.000269；Claude Haiku 5.5 $0.001019；GPT-6 Astra $0.055399 | **Jev $0.000066**（TypeSafe cookbook 2026-11-02 实测） |
+| 相对代价（同上基准） | 4.1x–1189.0x 贵、26.8x–176.9x 慢 | 1x |
 | 计量 | `units.tokens`（输入+输出双向计费） | `units.tokens` + `units.questions`；**输入计费、输出免费** |
+| prompt caching | ✅ 普遍支持 | **仅 OpenAI Decisions**（隐式 breakpoint + ≥1024 token 前缀；Gemini 明确不支持、Jev 无） |
+| 可自托管 | ✅ 大量开源权重 | ✅ **261 个 ranked open-weights 系统**（Jeff / AutoJev / Cloudflare clef / BaseTen 等） |
 | 能力方向 | 生成内容 | 做判断/评分/选择 |
-| 流式 | ✅ SSE | ❌ 无流式语义（[10-canonical-schema.md](./10-canonical-schema.md) §4.6） |
+| 流式 | ✅ SSE | ❌ 无流式语义 |
 | 典型用途 | 对话、写作、代码 | 工具选择、策略检查、模型路由、上下文质量评估、compact/escalate/stop |
+
+**chat 模拟 decision 的实测代价**（TypeSafe cookbook 2026-11-02，8 个 Choice 问题/次，`[待验证]` 独立复现）：
+
+| 模型 | 延迟 | 成本 | 相对 Jev |
+|---|---|---|---|
+| **Jev 1.14** | **103 ms** | **$0.000066** | 1x |
+| GPT-6 Luna (temp 0) | 2,753 ms | $0.000269 | 26.8x 慢 / 4.1x 贵 |
+| GPT-6 Luna (reasoning) | 14,467 ms | $0.000685 | 140.8x / 10.4x |
+| Claude Haiku 5.5 (reasoning) | 6,110 ms | $0.001019 | 59.5x / 15.5x |
+| GPT-6.1 Terra (temp 0) | 4,274 ms | $0.002694 | 41.6x / 41.1x |
+| GPT-6.1 Terra (reasoning) | 11,829 ms | $0.005616 | 115.2x / 85.6x |
+| Claude Sonnet 5.5 (reasoning) | 3,627 ms | $0.009907 | 35.3x / 151.0x |
+| GPT-6.1 Sol (reasoning) | 12,335 ms | $0.010125 | 120.1x / 154.4x |
+| Claude Opus 5.5 (reasoning) | 7,841 ms | $0.027427 | 76.3x / 418.2x |
+| GPT-6 Astra (reasoning) | 18,171 ms | $0.055399 | 176.9x / 844.6x |
+| Claude Fable 5.1 (reasoning) | 12,793 ms | $0.077985 | 124.5x / 1189.0x |
+
+即使用**最便宜的 LLM + temperature 0 + structured output**，也要 ~27x 延迟、~4x 成本；开 reasoning 后差距拉到 140x / 10x。
+
+**稳定性（比均值更重要）**：40 个边界帖子 × 15 次重复，Jev 的"最不稳定选项"平均只变号 **4.0%**（从不 >6.7%），而**每个 LLM 条件**都有帖子变号 >10%。对 compact/escalate/stop 这类"同一输入应给同一判断"的决策，抖动比慢更致命。
+
+**校准度对比**（Google launch eval，自评）：Top-1 ECE Gemini Decision 1 **0.0250** < Jev 1.14 0.0494 < GPT-6 Luna 0.0721；JevBench 92.2% vs 90.0%；When2Call 79.9% vs **82.0%**（此项 Gemini 反而略低）；评测花费 $0.88 vs $0.68。第三方（Artificial Analysis）：Decision Index 66/60/66，Brier 0.18/0.19/0.19，每任务 211/206/**92** ms，每 1M 任务 $345/$339/**$156**。
+⚠️ **AIHubMix 明确警告**："A lower aggregate ECE does not establish a calibrated threshold for your tool router"——聚合校准度好不代表你的具体判断任务有可用阈值。
+
+**Google 官方博客另有一个口径**：Decisions API 比 Gemini 3.5 Flash-Lite + Interactions API **便宜近 5x**（共享 benchmark suite）。
+
+**可自托管的开源替代**（若不想依赖商业 API）：JevBench 榜单有 **261 个 ranked open-weights 系统**。代表：Jeff（Firelex，weights Apache-2.0，RTX PRO 6000 ~22 ms，5 benchmark 79.1%/83.1%/81.6% vs Jev 83.0%）、AutoJev-27B（MIT 训练配方）、Cloudflare clef 家族（clef 27B / clef-flash 9B / clef-omni MoE）、BaseTen joey-1/elephant-1/mammoth-1、Together Tev1-4B、jaredpalmer/kev-4b（`/v1/systemone` 兼容）。**OpenRouter 已服务 41 个 decisions 模型**，并有统一的 `/api/alpha/decisions` 与 `/api/v1/systemone` 归一端点——可作为我们"decision modality 上游抽象"的样板。
 
 ### 6.2 canonical payload
 
@@ -399,7 +431,11 @@ decision 模态的**首要消费者是网关自己**，不是终端用户：
 
 ### 6.5 降级路径（上游只有 chat 模型时）
 
-见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.3。要点：用 chat + `response_format: json_schema` 模拟，响应标记 `calibration: "degraded"`，并在 `warnings` 说明代价（校准性差、延迟高、输出 token 开始计费）。
+见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.3。要点：用 chat + `response_format: json_schema` 模拟，响应标记 `calibration: "degraded"`，并在 `warnings` 说明代价。
+
+**实测代价**（TypeSafe cookbook 2026-11-02，8 个 Choice 问题/次，`[待验证]` 独立复现，数据见 §6.1）：延迟 26.8x–176.9x、成本 4.1x–844.6x；且**判断稳定性显著变差**——LLM 条件的帖子变号 >10%，而 Jev 最不稳定的选项仅 4.0%（从不 >6.7%）。对 compact/escalate/stop 这类"同一输入应给同一判断"的决策，抖动比慢更致命。
+
+**因此降级的默认策略是 `on_missing_upstream`**（只在路由不到 decision 上游时降级），且**策略检查与 stop 决策不允许降级**——拿不到真 decision 就明确失败，不用 chat 顶替。
 
 ## 7. 能力矩阵（三态：已实现 / 计划 / 按需）
 
