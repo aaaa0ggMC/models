@@ -411,7 +411,7 @@ OpenRouter 的 `GET /api/v1/models` 返回模型元数据 + 定价 + per-model r
 ### 7.4 存储：SQLite + 应用层信封加密
 
 **结论**：单文件 SQLite，应用层 Argon2id 派生 KEK + AES-256-GCM 逐记录加密，AAD 绑定记录 id。**不选** SQLCipher / libsql 加密 / Postgres+pgcrypto。
-**理由**：DB 级加密把密钥生命周期与"库打开即全解密"耦合，且 libsql 的加密仍是 experimental；应用层加密能做到按记录粒度、备份可移植、可换算法。密钥三档来源，无人值守默认 OS keyring 档。完整对比见 [65-storage-and-retention.md](./65-storage-and-retention.md)。
+**理由**：DB 级加密把密钥生命周期与"库打开即全解密"耦合，且 libsql 的加密仍是 experimental；应用层加密能做到按记录粒度、备份可移植、可换算法。密钥三档来源，无人值守默认 OS keyring 档。**诚实的边界：任何方案都防不住「读运行中进程内存」，无人值守自动解锁的本质是用「无人值守」换「离线泄露防护」**（场景对比表见 [65-storage-and-retention.md](./65-storage-and-retention.md) §3.2b）。完整对比见同一文档。
 
 ### 7.5 消息内容持久化：默认关闭 + 前缀压缩
 
