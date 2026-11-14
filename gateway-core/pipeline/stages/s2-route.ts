@@ -12,6 +12,7 @@
 
 import type { PipelineDeps, PipelineState, Stage } from '../types.js';
 import { isFastPathEligible } from '../fast-path.js';
+import { createCanonicalError } from '../../../ir/index.js';
 
 export class S2Route implements Stage {
   readonly id = 'S2';
@@ -37,6 +38,25 @@ export class S2Route implements Stage {
 
     if (!result.ok) {
       throw result.error;
+    }
+
+    // ---- provider 白名单（66 §2.1 的 `providers` 限制）----
+    //
+    // 为什么在 S2 而不是 S0：provider 只有路由之后才知道（S0 时机拿不到）。
+    // 模型白名单已经在 S0 判过了（20 §S0 第 2 条：不进 S1），provider 白名单
+    // 只能在这里补——代价是这类请求多付一次浅解析，而它们本来就会被拒。
+    const allowedProviders = ctx.auth.allowed_providers;
+    if (
+      allowedProviders !== undefined &&
+      allowedProviders.length > 0 &&
+      !allowedProviders.includes(result.route.provider)
+    ) {
+      throw createCanonicalError(
+        'auth_failed',
+        `该 key 不允许使用 provider ${result.route.provider}`,
+        ctx.request_id,
+        { http_status: 403 },
+      );
     }
 
     ctx.route = result.route;

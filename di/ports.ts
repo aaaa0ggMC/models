@@ -111,6 +111,20 @@ export interface GatewayConfig {
    * 返回 503 并拒绝一切请求——"没配令牌"与"令牌不对"必须可区分。
    */
   adminToken?: string;
+  /**
+   * 数据面单 access token（66 §2.2 的极简模式；只从 `AG_ACCESS_TOKEN` 读）。
+   *
+   * 与虚拟 key **互斥**：虚拟 key 模式启用时它被忽略（判定与补偿见
+   * auth/data-plane.ts 的文件头）。值不落盘、不进日志/trace。
+   */
+  accessToken?: string;
+  /**
+   * 显式启用数据面虚拟 key 模式（`AG_VIRTUAL_KEYS=1`）。
+   *
+   * 不设也行：虚拟 key 库里一旦有 ≥1 把 key，会自动切到虚拟 key 模式。
+   * 这个开关的用途是「库还空着时就要按虚拟 key 模式跑」（例如先配好模式再建 key）。
+   */
+  virtualKeysEnabled?: boolean;
 }
 
 export const DEFAULT_CONFIG: GatewayConfig = {

@@ -299,3 +299,100 @@ export interface ProviderPresetListResponse {
   items: ProviderPreset[];
   total: number;
 }
+
+// ---- 数据面 virtual key（66 §2）----
+
+export interface VirtualKeyDto {
+  key_id: string;
+  name: string;
+  note?: string;
+  status: 'active' | 'revoked';
+  created_at: number;
+  updated_at: number;
+  revoked_at?: number;
+  expires_at?: number;
+  models?: string[];
+  providers?: string[];
+  allow_message_persistence?: boolean;
+  rate_limit?: { rpm?: number; tpm?: number };
+  budget_micros?: number;
+  team_id?: string;
+  user_id?: string;
+  /** 掩码（前 8 位 + 省略号；不露长度）。 */
+  masked: string;
+  /** 明文前 8 位（非敏感）。 */
+  head: string;
+}
+
+export interface VirtualKeyCreateRequest {
+  name: string;
+  note?: string;
+  expires_at?: number;
+  models?: string[];
+  providers?: string[];
+  allow_message_persistence?: boolean;
+  rate_limit?: { rpm?: number; tpm?: number };
+  budget_micros?: number;
+  team_id?: string;
+  user_id?: string;
+}
+
+/**
+ * 创建响应。`plaintext` 是**整个管理面唯一返回完整密钥的地方**，且只返回一次。
+ * 前端只在新建设置的模态框里展示它，绝不进表格、不进 localStorage。
+ */
+export interface VirtualKeyCreateResponse {
+  ok: boolean;
+  key: VirtualKeyDto;
+  plaintext: string;
+}
+
+export interface VirtualKeyUsage {
+  key_id: string;
+  from_ts: number;
+  to_ts: number;
+  request_count: number;
+  error_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cash_total: number;
+  by_model: Array<{ model: string; request_count: number; cash_total: number }>;
+  by_provider: Array<{ provider: string; request_count: number; cash_total: number }>;
+}
+
+export type SettingSource = 'encrypted_storage' | 'env' | 'config_file' | 'default';
+
+export interface SettingDto {
+  key: string;
+  label: string;
+  description: string;
+  unit: string;
+  type: 'int' | 'enum';
+  value: number | string;
+  source: SettingSource;
+  editable: boolean;
+  reason?: string;
+  env_var?: string;
+  range?: { min: number; max: number };
+  options?: string[];
+  stored_value?: number | string;
+  updated_at?: number;
+  updated_by?: string;
+}
+
+export interface SecretRefDto {
+  name: string;
+  ref: string;
+  note?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 当前数据面认证模式（与 AG_ACCESS_TOKEN 的互斥语义，见后端 auth/data-plane.ts）。 */
+export interface AuthModeResponse {
+  mode: 'virtual_key' | 'access_token' | 'permissive';
+  virtual_key_count: number;
+  virtual_keys_enabled: boolean;
+  access_token_configured: boolean;
+  ignored: string[];
+}

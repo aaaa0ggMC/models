@@ -87,6 +87,19 @@ export interface PipelineInput {
   /** 端点路径（Gemini 的 model-in-path 场景用）。 */
   path: string;
   query: Record<string, string>;
+  /**
+   * 未经脱敏的鉴权原语（66 §2.2 的三种呈现形态）。
+   *
+   * 与 `headers` **分开**是有意的：`headers` 会被抄进
+   * `ctx.client_raw_headers`（插件可见、进 trace），而这个字段只被 S0 的
+   * 鉴权器读一次，**绝不进 ctx / trace / 日志 / UsageRecord**。
+   * 由 http/server.ts 的 `buildAuthMaterial` 从原始请求构造。
+   */
+  auth_material?: {
+    authorization?: string;
+    api_key?: string;
+    query_key?: string;
+  };
 }
 
 /** 阶段间共享的可变状态。字段按阶段顺序填充。 */

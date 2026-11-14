@@ -11,10 +11,12 @@ import { useCallback, useEffect, useState } from 'react';
 export const ROUTES = {
   channels: '/channels',
   credentials: '/credentials',
+  virtualKeys: '/virtual-keys',
   aliases: '/aliases',
   catalog: '/catalog',
   usage: '/usage',
   system: '/system',
+  settings: '/settings',
 } as const;
 
 export type RouteKey = keyof typeof ROUTES;

@@ -70,6 +70,14 @@ export interface PluginHost {
   /** 增删/启停时通知订阅者。 */
   onChange(listener: () => void): void;
 
+  /**
+   * 改插件单次调用的缺省超时（运行时设置用，见 config/settings.ts）。
+   *
+   * 可选方法：不注入设置服务的装配（测试、demo）没有这个入口，行为与之前一致。
+   * manifest 里显式声明了 `timeout_ms` 的插件不受影响（显式优于缺省）。
+   */
+  setDefaultTimeoutMs?(ms: number): void;
+
   /** 执行 onRequest 链。 */
   runOnRequest(
     req: CanonicalRequestEnvelope,
@@ -96,10 +104,22 @@ export interface PluginHost {
 export class DefaultPluginHost implements PluginHost {
   private readonly registrations = new Map<string, PluginRegistration>();
   private readonly listeners = new Set<() => void>();
+  /** 缺省超时。可变是为了让「插件超时」成为运行时设置（config/settings.ts）。 */
+  private defaultTimeoutMs: number;
   constructor(
     private readonly services: GatewayServices,
-    private readonly defaultTimeoutMs = 5_000,
-  ) {}
+    defaultTimeoutMs = 5_000,
+  ) {
+    this.defaultTimeoutMs = defaultTimeoutMs;
+  }
+
+  /** 改缺省超时（热生效）。manifest 显式声明了 `timeout_ms` 的插件不受影响。 */
+  setDefaultTimeoutMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms <= 0) {
+      throw new Error(`插件缺省超时必须为正数，收到 ${ms}`);
+    }
+    this.defaultTimeoutMs = ms;
+  }
 
   register(plugin: Plugin, config: unknown = {}): void {
     const errors = validatePluginManifest(plugin.manifest);

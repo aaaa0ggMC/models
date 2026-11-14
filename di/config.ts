@@ -45,6 +45,57 @@ export const UPSTREAM_KEY_ENV_VARS: Record<string, string> = {
   deepseek: 'DEEPSEEK_API_KEY',
 };
 
+/**
+ * 运行时设置项 → 环境变量名（config/settings.ts 的 8 个白名单项）。
+ *
+ * 表放在这里而不是放在 settings.ts：settings.ts 是「怎么用这些设置」，
+ * 而「哪些 env 变量存在」属于 env 读取的职责，本文件是全仓库唯一读 env 的地方。
+ * 两边靠 `RuntimeSettingKey` 这个类型绑在一起——加一个设置项而忘了加 env 名，
+ * 编译期就红。
+ */
+export const RUNTIME_SETTING_ENV_VARS: Record<
+  import('../config/settings.js').RuntimeSettingKey,
+  string
+> = {
+  global_timeout_ms: 'AG_GLOBAL_TIMEOUT_MS',
+  ttfb_timeout_ms: 'AG_TTFB_TIMEOUT_MS',
+  stream_idle_timeout_ms: 'AG_STREAM_IDLE_TIMEOUT_MS',
+  max_retries: 'AG_MAX_RETRIES',
+  retry_base_delay_ms: 'AG_RETRY_BASE_DELAY_MS',
+  loss_policy: 'AG_LOSS_POLICY',
+  model_sync_interval_ms: 'AG_MODEL_SYNC_INTERVAL_MS',
+  plugin_timeout_ms: 'AG_PLUGIN_TIMEOUT_MS',
+};
+
+/**
+ * 运行时设置项的 env 层原值（**只在这一个函数里读 env**）。
+ *
+ * 设置界面靠它做两件事：判「哪一项被 env 覆盖了」（可写性 / env 锁）与取
+ * 「env 层提供的值」（四层合并的第二层）。返回原值而不是解析后的值：
+ * 解析规则（整数 / 枚举 / 范围）属于设置服务的职责，两边各写一份必然漂移。
+ */
+export function runtimeSettingEnvValues(
+  env: NodeJS.ProcessEnv = process.env,
+): Partial<Record<import('../config/settings.js').RuntimeSettingKey, string>> {
+  const out: Partial<Record<import('../config/settings.js').RuntimeSettingKey, string>> = {};
+  for (const [key, name] of Object.entries(RUNTIME_SETTING_ENV_VARS)) {
+    const raw = env[name];
+    if (raw !== undefined && raw.trim() !== '') {
+      out[key as import('../config/settings.js').RuntimeSettingKey] = raw;
+    }
+  }
+  return out;
+}
+
+/** 被 env 覆盖的设置项 key 列表（`runtimeSettingEnvValues` 的键集合）。 */
+export function runtimeSettingEnvOverrides(
+  env: NodeJS.ProcessEnv = process.env,
+): import('../config/settings.js').RuntimeSettingKey[] {
+  return Object.keys(
+    runtimeSettingEnvValues(env),
+  ) as import('../config/settings.js').RuntimeSettingKey[];
+}
+
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
   const previous = { ...process.env };
   try {
@@ -83,6 +134,13 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gateway
       ...(process.env['AG_ADMIN_TOKEN'] === undefined || process.env['AG_ADMIN_TOKEN'] === ''
         ? {}
         : { adminToken: process.env['AG_ADMIN_TOKEN'] }),
+      // 数据面单 access token（66 §2.2 极简模式）。与虚拟 key 互斥，
+      // 判定在 auth/data-plane.ts；值不进日志、不落盘。
+      ...(process.env['AG_ACCESS_TOKEN'] === undefined || process.env['AG_ACCESS_TOKEN'] === ''
+        ? {}
+        : { accessToken: process.env['AG_ACCESS_TOKEN'] }),
+      // 显式启用数据面虚拟 key 模式（库还空着时就要按虚拟 key 跑）
+      ...(boolFromEnv('AG_VIRTUAL_KEYS', false) ? { virtualKeysEnabled: true } : {}),
       // DeepSeek 上游 base URL 覆盖（可留空）。只读变量名对应的值，值不进日志。
       ...(process.env['DEEPSEEK_BASE_URL'] === undefined || process.env['DEEPSEEK_BASE_URL'] === ''
         ? {}

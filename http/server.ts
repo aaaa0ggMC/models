@@ -26,12 +26,21 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { FormatId } from '../ir/index.js';
+import type { PipelineInput } from '../gateway-core/pipeline/types.js';
 import type { PipelineRunner } from '../gateway-core/pipeline/runner.js';
 import type { ClientSink } from '../gateway-core/pipeline/sink.js';
 import { FORMAT_HEADER } from '../gateway-core/pipeline/stages/s0-ingress.js';
 import type { AdminRouteHandler } from '../admin/routes.js';
 
-/** 脱敏：只保留白名单头，其余丢弃（含鉴权头）。 */
+/**
+ * 脱敏：只保留白名单头，其余丢弃（含鉴权头）。
+ *
+ * 鉴权头（authorization / x-api-key）**不走这条**：它们以 `auth_material` 的
+ * 形态单独传给 pipeline（见 `buildAuthMaterial`），由 S0 的鉴权器消费。
+ * 分开传是为了让「把 key 抄进 `client_raw_headers` → trace / 日志」在任何
+ * 代码路径里都看不出来是被允许的——`ctx.client_raw_headers` 拿到的永远是
+ * 这个函数脱敏后的结果。
+ */
 const ALLOWED_HEADERS = new Set([
   'content-type',
   'content-length',
@@ -49,6 +58,33 @@ export function sanitizeHeaders(raw: IncomingMessage['headers']): Record<string,
     else if (Array.isArray(v)) out[k.toLowerCase()] = v.join(', ');
   }
   return out;
+}
+
+/**
+ * 从原始请求里取出鉴权原语（**未脱敏**）。
+ *
+ * 只收集 66 §2.2 认可的三种形态的来源，别的一律不看。这个对象的生命周期
+ * 止于 S0：S0 消费完就没人再引用它，它也不进 ctx / trace / UsageRecord。
+ */
+export function buildAuthMaterial(
+  headers: IncomingMessage['headers'],
+  searchParams: URLSearchParams,
+): PipelineInput['auth_material'] {
+  const authorization = headerValue(headers['authorization']);
+  const apiKey = headerValue(headers['x-api-key']);
+  const queryKey = searchParams.get('key') ?? undefined;
+  if (
+    (authorization === undefined || authorization === '') &&
+    (apiKey === undefined || apiKey === '') &&
+    (queryKey === undefined || queryKey === '')
+  ) {
+    return undefined;
+  }
+  return {
+    ...(authorization === undefined || authorization === '' ? {} : { authorization }),
+    ...(apiKey === undefined || apiKey === '' ? {} : { api_key: apiKey }),
+    ...(queryKey === undefined || queryKey === '' ? {} : { query_key: queryKey }),
+  };
 }
 
 /** 路径签名 → 客户端格式（00 §4.3 的端点形态）。 */
@@ -100,6 +136,18 @@ export interface HttpServerOptions {
   adminHandler?: AdminRouteHandler;
   /** 模型目录端点（可选；不注入则 `/v1/models` 走 404）。 */
   models?: ModelEndpointsPort;
+  /**
+   * 启动钩子：`listen` 之前 await 一次。
+   *
+   * 用途（也是唯一的默认用途）：把加密存储里的运行时设置应用回 config——
+   * `startup: () => gateway.loadSettings()`。放在这里而不是让调用方自己记得
+   * 调，是因为「忘了调」的后果是「界面显示的值和请求路径用的值不一致」，
+   * 而这种不一致没有任何报错。
+   *
+   * 钩子抛错 = 起不来服务（与 `models.start()` 的容错立场不同：那个失败只是
+   * 少一份新元数据，而这个失败意味着配置没加载完）。
+   */
+  startup?(): Promise<void>;
 }
 
 /** Node http 的 ServerResponse → ClientSink 适配。 */
@@ -211,6 +259,10 @@ async function handleRequest(
         headers: sanitizeHeaders(req.headers),
         path,
         query: Object.fromEntries(url.searchParams.entries()),
+        ...(() => {
+          const material = buildAuthMaterial(req.headers, url.searchParams);
+          return material === undefined ? {} : { auth_material: material };
+        })(),
       },
       sink,
     );
@@ -235,6 +287,10 @@ async function handleRequest(
 /** 起服务（本地演示 / 部署用）。 */
 export async function startHttpServer(options: HttpServerOptions): Promise<Server> {
   const server = createHttpServer(options);
+  // 启动钩子先跑：设置要在第一个请求到达之前应用回 config
+  if (options.startup !== undefined) {
+    await options.startup();
+  }
   // 启动时同步（可关）在 listen 之前完成：这样第一个请求拿到的就是刷新过的元数据。
   // 同步失败不抛（ModelsEndpoints.start 自己吞），起不来服务没有任何理由。
   if (options.models !== undefined) {

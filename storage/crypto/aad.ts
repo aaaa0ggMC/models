@@ -31,9 +31,34 @@ const FIELD_SEP = '\u001f';
  *
  * 加进 AAD 的意义：同一把 DEK 下，凭据密文与审计密文的 nonce 空间是共享的。
  * 绑定 kind 让「把审计条目复制成凭据条目」也过不了认证（即使 id 恰好相同）。
+ *
+ * ## 新增 kind 的影响评估（加 kind 是**加法**，不是破坏性变更）
+ *
+ * `buildAad` 的输出是 `kind + US + id + US + v<version>`，**与 kind 集合的其余
+ * 部分无关**——给联合类型加一个字面量不会改变任何已存在记录的 AAD 字节，
+ * 因此旧密文照旧可解密、`dek_id` 不用动、不需要迁移。
+ *
+ * 反过来，**删** kind 或**改**已存在 kind 的拼写才会让旧记录解密失败
+ * （AAD 不匹配 → Poly1305 认证失败）。所以这里只做加法。
+ *
+ * 曾经预留、这一轮才落地的三个 kind 与语义：
+ *   - `virtual_key` —— 数据面客户端密钥；**只存 Argon2id 哈希，永不明文**
+ *     （66 §2.2；实现在 storage/virtual-keys.ts）。
+ *   - `settings`    —— 非敏感运行时配置（`config/layering.ts` 的最高层，
+ *     这一轮才真正可写；实现在 config/settings.ts）。
+ *   - `secret_ref`  —— 敏感配置项的**引用登记**：只存 `env:<VAR>` 变量名，
+ *     **绝不存值**（65 §3.1 的敏感值硬规则）。
  */
 export type AadRecordKind =
-  'credential' | 'alias' | 'provider' | 'audit' | 'virtual_key' | 'admin_session' | 'meta';
+  | 'credential'
+  | 'alias'
+  | 'provider'
+  | 'audit'
+  | 'virtual_key'
+  | 'admin_session'
+  | 'settings'
+  | 'secret_ref'
+  | 'meta';
 
 /** AAD 输入。`version` 是记录自身的 schema 版本（与 ir_version 同地位）。 */
 export interface AadInput {

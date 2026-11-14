@@ -51,6 +51,16 @@ export interface AuthContext {
   user_id?: string;
   /** 该 key 允许的模型别名/access path 白名单。 */
   allowed_models?: string[];
+  /**
+   * 该 key 允许的 provider 白名单（66 §2.1）。
+   *
+   * 为什么在 S0 填、在 S2 判：provider 只有路由之后才知道（S2 才解析出
+   * access path → provider）。放在 ctx 里而不是 stage 私有变量，是为了让
+   * 插件与 dog-fooding 工具也能看到「这把 key 被限定了哪些 provider」。
+   */
+  allowed_providers?: string[];
+  /** 是否允许开 Tier-2 消息持久化（66 §2.1；默认 false）。 */
+  allow_message_persistence?: boolean;
   /** 该 key 的插件配置覆盖来源标记。 */
   scopes?: string[];
 }
