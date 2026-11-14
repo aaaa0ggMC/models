@@ -15,7 +15,6 @@ import {
   Select,
   Space,
   Table,
-  Tag,
   Toast,
   Tooltip,
   Typography,
@@ -25,12 +24,17 @@ import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtTs } from '../format';
 import { helpHref } from '../router';
+import { EmptyState, PageHeader, StatusTag } from '../components/ui';
 import type { MaskedCredential, ProviderConfig } from '../api/types';
 
-const HEALTH: Record<string, { label: string; color: 'grey' | 'green' | 'red' }> = {
-  unknown: { label: '未知', color: 'grey' },
-  ok: { label: '正常', color: 'green' },
-  error: { label: '异常', color: 'red' },
+/**
+ * 健康状态的语义色。用 StatusTag 而不是 Semi 的 Tag：后者只有一套内置色板，
+ * 而且**只靠颜色**区分状态（色盲用户分不出 green/grey）。
+ */
+const HEALTH: Record<string, { label: string; tone: 'neutral' | 'success' | 'danger' }> = {
+  unknown: { label: '未知', tone: 'neutral' },
+  ok: { label: '正常', tone: 'success' },
+  error: { label: '异常', tone: 'danger' },
 };
 
 function storageText(s: MaskedCredential['storage']): string {
@@ -183,7 +187,7 @@ export function Credentials(): JSX.Element {
       dataIndex: 'health',
       render: (_: unknown, c: MaskedCredential) => {
         const h = HEALTH[c.health] ?? HEALTH.unknown!;
-        return <Tag color={h.color}>{h.label}</Tag>;
+        return <StatusTag tone={h.tone}>{h.label}</StatusTag>;
       },
     },
     {
@@ -214,29 +218,44 @@ export function Credentials(): JSX.Element {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, gap: 12 }}>
-        <Button theme="solid" type="primary" icon={<IconPlus />} onClick={() => setCreating(true)}>
-          录入凭据
-        </Button>
-        <div style={{ flex: 1 }} />
-        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
-          列表只显示掩码；完整 key 从不离开加密存储。
-        </Typography.Text>
-        <a href={helpHref('keystore')}>了解更多</a>
-      </div>
+      <PageHeader
+        title="凭据"
+        desc="一个渠道可以挂多条凭据（按 access_path 区分）。列表只显示掩码；完整 key 从不离开加密存储，探测时也由服务端代打。"
+        actions={
+          <Button theme="solid" type="primary" icon={<IconPlus />} onClick={() => setCreating(true)}>
+            录入凭据
+          </Button>
+        }
+        meta={
+          <div className="ag-row" style={{ fontSize: 12, color: 'var(--ag-text-3)' }}>
+            <span>共 {items.length} 条</span>
+            <a href={helpHref('keystore')}>密钥存储与代价说明</a>
+          </div>
+        }
+      />
 
-      {error ? (
-        <div style={{ color: 'var(--semi-color-danger)', marginBottom: 12 }}>{error}</div>
+      {error !== null ? (
+        <div className="ag-banner ag-banner-danger" role="alert">
+          {error}
+        </div>
       ) : null}
 
-      <Table
-        columns={columns}
-        dataSource={items}
-        rowKey="id"
-        loading={loading}
-        pagination={false}
-        empty="还没有登记任何凭据。"
-      />
+      <div className="ag-card">
+        <Table
+          className="ag-table"
+          columns={columns}
+          dataSource={items}
+          rowKey="id"
+          loading={loading}
+          pagination={false}
+          empty={
+            <EmptyState
+              title="还没有登记任何凭据"
+              hint="凭据是网关访问上游时用的 key。支持直接粘贴（加密入库）或写 env:<VAR> 引用，两者互斥。"
+            />
+          }
+        />
+      </div>
 
       <Modal
         visible={creating}

@@ -454,6 +454,44 @@ export interface UsageQuery {
 }
 
 // ---------------------------------------------------------------------------
+// 用量时间序列（趋势图的唯一数据来源）
+// ---------------------------------------------------------------------------
+
+/**
+ * 时间序列的一个桶（bucket）。
+ *
+ * 桶是**左闭右开**区间 `[from_ts, to_ts)`，与 `GET /usage` 的区间语义一致。
+ * `request_count === 0` 的桶**照样返回**（空桶不是缺口）：趋势图要的是等距的
+ * x 轴，缺一个桶就会被渲染成"这里没有数据"而不是"这里确实没有请求"。
+ */
+export interface UsageTimeseriesBucket {
+  from_ts: number;
+  to_ts: number;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cash_total: number;
+  as_api_total: number;
+  unpriced_count: number;
+}
+
+export interface UsageTimeseriesResponse {
+  from_ts: number;
+  to_ts: number;
+  /** 桶宽（epoch ms）。 */
+  bucket_ms: number;
+  /**
+   * 服务端实际切出的桶数（由区间长度与桶宽决定，前端不得假设）。
+   *
+   * 前端只需要 `bucket_ms` 与 `buckets.length` 就能画等距 x 轴，不需要自己算
+   * 边界——两边算同一套边界迟早会漂。
+   */
+  buckets: UsageTimeseriesBucket[];
+  /** 后端是否注入了 usage 源（未注入时 buckets 为空数组，不是报错）。 */
+  available: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // 余额探测触发
 // ---------------------------------------------------------------------------
 

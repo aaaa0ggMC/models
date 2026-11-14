@@ -11,11 +11,9 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Banner,
   Button,
-  Card,
   Input,
   Modal,
   Table,
-  Tag,
   Toast,
   Tooltip,
   Typography,
@@ -24,6 +22,7 @@ import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtBool, fmtInt } from '../format';
 import { helpHref } from '../router';
+import { PageHeader, StatusTag } from '../components/ui';
 import type { KeystoreStatusResponse } from '../api/types';
 
 const TRADEOFF_SOURCE =
@@ -129,7 +128,11 @@ export function System(): JSX.Element {
               <span>已解锁</span>
             </Tooltip>
           ),
-          value: <Tag color={status.unlocked ? 'green' : 'red'}>{fmtBool(status.unlocked)}</Tag>,
+          value: (
+            <StatusTag tone={status.unlocked ? 'success' : 'danger'}>
+              {fmtBool(status.unlocked)}
+            </StatusTag>
+          ),
         },
         {
           key: 'dek',
@@ -180,7 +183,17 @@ export function System(): JSX.Element {
     : [];
 
   return (
-    <div style={{ maxWidth: 760 }}>
+    <div className="ag-stack">
+      <PageHeader
+        title="安全与密钥"
+        desc="密钥存储的解锁状态、代价说明与轮换入口。KEK 轮换是破坏性操作，执行前会二次确认并写入审计日志。"
+        meta={
+          <div className="ag-row" style={{ fontSize: 12, color: 'var(--ag-text-3)' }}>
+            <a href={helpHref('keystore')}>密钥层次与解锁档位详解</a>
+          </div>
+        }
+      />
+
       {bootstrap?.storage_unlocked === false ? (
         <Banner
           type="warning"
@@ -189,41 +202,47 @@ export function System(): JSX.Element {
         />
       ) : null}
 
-      {error ? (
-        <div style={{ color: 'var(--semi-color-danger)', marginBottom: 12 }}>{error}</div>
+      {error !== null ? (
+        <div className="ag-banner ag-banner-danger" role="alert">
+          {error}
+        </div>
       ) : null}
 
-      <Card
-        title="密钥状态"
-        style={{ marginBottom: 16 }}
-        headerExtraContent={
+      <section className="ag-card">
+        <header className="ag-card-head">
+          <h2 className="ag-card-title" style={{ flex: 1 }}>
+            密钥状态
+          </h2>
           <Button size="small" onClick={() => void load()}>
             刷新
           </Button>
-        }
-      >
-        <Table
-          columns={[
-            { title: '项', dataIndex: 'label', width: 180 },
-            { title: '值', dataIndex: 'value' },
-          ]}
-          dataSource={statusRows}
-          rowKey="key"
-          loading={loading}
-          pagination={false}
-          empty="读不到密钥状态。"
-        />
-      </Card>
+        </header>
+        <div className="ag-card-body">
+          <Table
+            className="ag-table"
+            columns={[
+              { title: '项', dataIndex: 'label', width: 200 },
+              { title: '值', dataIndex: 'value' },
+            ]}
+            dataSource={statusRows}
+            rowKey="key"
+            loading={loading}
+            pagination={false}
+            empty="读不到密钥状态。"
+          />
+        </div>
+      </section>
 
       {note.length > 0 ? (
-        <Card
-          title={
+        <section className="ag-card">
+          <header className="ag-card-head">
             <Tooltip content="服务端原文，管理面不得改写；完整原文见「查看详情」与帮助页 keystore 小节。">
-              <span>密钥自动解锁的代价</span>
+              <h2 className="ag-card-title" style={{ flex: 1 }}>
+                密钥自动解锁的代价
+              </h2>
             </Tooltip>
-          }
-          style={{ marginBottom: 16 }}
-        >
+          </header>
+          <div className="ag-card-body">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <Typography.Text
               type="warning"
@@ -242,44 +261,53 @@ export function System(): JSX.Element {
             </Button>
             <a href={helpHref('keystore')}>帮助页</a>
           </div>
-          <div style={{ fontSize: 12, opacity: 0.6, marginTop: 6 }}>
-            {TRADEOFF_SOURCE}（服务端原文，未作任何改写）
           </div>
-        </Card>
+          <footer className="ag-card-foot">
+            <span style={{ fontSize: 12, color: 'var(--ag-text-3)' }}>
+              {TRADEOFF_SOURCE}（服务端原文，未作任何改写）
+            </span>
+          </footer>
+        </section>
       ) : null}
 
-      <Card
-        title={
+      <section className="ag-card">
+        <header className="ag-card-head">
           <Tooltip content="两者都会记入审计日志；网关没注入对应端口时会明确返回 501，不假装成功。">
-            <span>密钥轮换（破坏性操作）</span>
+            <h2 className="ag-card-title" style={{ flex: 1 }}>
+              密钥轮换（破坏性操作）
+            </h2>
           </Tooltip>
-        }
-        style={{ marginBottom: 16 }}
-      >
-        <Typography.Text
-          type="tertiary"
-          style={{ display: 'block', marginBottom: 12, fontSize: 13 }}
-        >
-          KEK 轮换只重包裹 DEK，数据密文不动；DEK 轮换会重加密历史记录。
-          <a href={helpHref('keystore')}>了解更多</a>
-        </Typography.Text>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button type="danger" theme="light" onClick={() => setKekOpen(true)}>
-            轮换 KEK
-          </Button>
-          <Button type="danger" theme="light" onClick={() => void rotateDek()}>
-            轮换 DEK
-          </Button>
+        </header>
+        <div className="ag-card-body">
+          <Typography.Text
+            type="tertiary"
+            style={{ display: 'block', marginBottom: 12, fontSize: 13 }}
+          >
+            KEK 轮换只重包裹 DEK，数据密文不动；DEK 轮换会重加密历史记录。
+            <a href={helpHref('keystore')}>了解更多</a>
+          </Typography.Text>
+          <div className="ag-row">
+            <Button type="danger" theme="light" onClick={() => setKekOpen(true)}>
+              轮换 KEK
+            </Button>
+            <Button type="danger" theme="light" onClick={() => void rotateDek()}>
+              轮换 DEK
+            </Button>
+          </div>
         </div>
-      </Card>
+      </section>
 
-      <Card title="关于">
-        <Typography.Text type="tertiary" style={{ fontSize: 13 }}>
-          AgentGateway 管理面 · Vite + React 18 + Semi Design · 控制面 API{' '}
-          {bootstrap?.api_version ?? '版本未知'}。 会话令牌只在页面内存中，刷新即失效。
-        </Typography.Text>
-        <a href={helpHref('keystore')}>帮助 / 文档</a>
-      </Card>
+      <section className="ag-card">
+        <div className="ag-card-body">
+          <Typography.Text type="tertiary" style={{ fontSize: 13 }}>
+            AgentGateway 管理面 · Vite + React 18 + Semi Design · 控制面 API{' '}
+            {bootstrap?.api_version ?? '版本未知'}。会话令牌只在页面内存中，刷新即失效。
+          </Typography.Text>
+          <div style={{ marginTop: 8 }}>
+            <a href={helpHref('keystore')}>帮助 / 文档</a>
+          </div>
+        </div>
+      </section>
 
       <Modal
         visible={showNote}

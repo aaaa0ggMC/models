@@ -516,11 +516,9 @@ export function Help(): JSX.Element {
   }, []);
 
   return (
-    <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start' }}>
-      <div style={{ width: 200, flexShrink: 0, position: 'sticky', top: 0 }}>
-        <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-          小节
-        </Typography.Text>
+    <div className="ag-help">
+      <nav className="ag-help-nav" aria-label="帮助小节">
+        <div className="ag-nav-group-label">小节</div>
         {SECTIONS.map((s) => {
           const id = HELP_SECTIONS[s.key];
           return (
@@ -536,16 +534,14 @@ export function Help(): JSX.Element {
             </Button>
           );
         })}
-      </div>
+      </nav>
 
-      <div style={{ flex: 1, minWidth: 0, maxWidth: 860 }}>
-        <Typography.Title heading={3} style={{ marginTop: 0 }}>
-          帮助 / 文档
-        </Typography.Title>
-        <Typography.Paragraph type="tertiary" style={{ marginBottom: 20 }}>
+      <div className="ag-help-body">
+        <h1 className="ag-page-title">帮助 / 文档</h1>
+        <p className="ag-page-desc" style={{ marginBottom: 20 }}>
           这里集中放各功能页搬过来的解释：设计结论、优先级规则与代价说明。每节都标了出处
           （设计文档章节或实现文件），需要原文时可顺着文件名去仓库里读。
-        </Typography.Paragraph>
+        </p>
 
         {SECTIONS.map((s) => {
           const id = HELP_SECTIONS[s.key];
@@ -556,8 +552,8 @@ export function Help(): JSX.Element {
               id={id}
               style={{
                 marginBottom: 28,
-                paddingBottom: 20,
-                borderBottom: '1px solid var(--semi-color-border)',
+                paddingBottom: 22,
+                borderBottom: '1px solid var(--ag-border)',
               }}
             >
               <Typography.Title heading={5} style={{ marginBottom: 4 }}>

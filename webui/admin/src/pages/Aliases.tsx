@@ -15,7 +15,6 @@ import {
   Select,
   Space,
   Table,
-  Tag,
   Toast,
   Tooltip,
   Typography,
@@ -25,6 +24,7 @@ import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtInt } from '../format';
 import { helpHref } from '../router';
+import { EmptyState, PageHeader, StatusTag } from '../components/ui';
 import type { AliasRuleDto } from '../api/types';
 
 const PRIORITY_LINE =
@@ -158,7 +158,7 @@ export function Aliases(): JSX.Element {
       ),
       dataIndex: 'kind',
       render: (_: unknown, r: AliasRuleDto) => (
-        <Tag color={r.kind === 'exact' ? 'blue' : 'cyan'}>{r.kind}</Tag>
+        <StatusTag tone="info">{r.kind}</StatusTag>
       ),
     },
     {
@@ -199,7 +199,7 @@ export function Aliases(): JSX.Element {
       title: '状态',
       dataIndex: 'enabled',
       render: (_: unknown, r: AliasRuleDto) => (
-        <Tag color={r.enabled ? 'green' : 'grey'}>{r.enabled ? '启用' : '停用'}</Tag>
+        <StatusTag tone={r.enabled ? 'success' : 'neutral'}>{r.enabled ? '启用' : '停用'}</StatusTag>
       ),
     },
     { title: '备注', dataIndex: 'note', render: (_: unknown, r: AliasRuleDto) => r.note ?? '—' },
@@ -226,30 +226,44 @@ export function Aliases(): JSX.Element {
 
   return (
     <div>
-      <div style={{ marginBottom: 12 }}>
-        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
-          {PRIORITY_LINE}。
-        </Typography.Text>
-        <a href={helpHref('aliases')}>了解更多</a>
-      </div>
-      <div style={{ display: 'flex', marginBottom: 16 }}>
-        <Button theme="solid" type="primary" icon={<IconPlus />} onClick={openCreate}>
-          新建规则
-        </Button>
-      </div>
+      <PageHeader
+        title="别名映射"
+        desc={PRIORITY_LINE}
+        actions={
+          <Button theme="solid" type="primary" icon={<IconPlus />} onClick={openCreate}>
+            新建规则
+          </Button>
+        }
+        meta={
+          <div className="ag-row" style={{ fontSize: 12, color: 'var(--ag-text-3)' }}>
+            <span>共 {items.length} 条规则</span>
+            <a href={helpHref('aliases')}>三级优先级详解</a>
+          </div>
+        }
+      />
 
-      {error ? (
-        <div style={{ color: 'var(--semi-color-danger)', marginBottom: 12 }}>{error}</div>
+      {error !== null ? (
+        <div className="ag-banner ag-banner-danger" role="alert">
+          {error}
+        </div>
       ) : null}
 
-      <Table
-        columns={columns}
-        dataSource={items}
-        rowKey="id"
-        loading={loading}
-        pagination={false}
-        empty="还没有别名规则。"
-      />
+      <div className="ag-card">
+        <Table
+          className="ag-table"
+          columns={columns}
+          dataSource={items}
+          rowKey="id"
+          loading={loading}
+          pagination={false}
+          empty={
+            <EmptyState
+              title="还没有别名规则"
+              hint="没有规则时客户端写的 model id 会原样透传给上游。加一条 exact 规则就能把 `my-fast` 固定到某个 provider 的某个模型。"
+            />
+          }
+        />
+      </div>
 
       <Modal
         visible={modal.visible}

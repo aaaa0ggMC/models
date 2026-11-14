@@ -187,6 +187,38 @@ export interface AccessPathDto {
 
 // ---- 用量看板 ----
 
+/** 时间序列的一个桶（左闭右开 `[from_ts, to_ts)`）。 */
+export interface UsageTimeseriesBucket {
+  from_ts: number;
+  to_ts: number;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cash_total: number;
+  as_api_total: number;
+  unpriced_count: number;
+}
+
+/**
+ * 时间序列响应（`GET /admin/api/usage/timeseries`）。
+ *
+ * 这是**趋势图的唯一数据来源**：`UsageDashboardResponse.recent` 只回最近 50 条，
+ * 拿它拼趋势等于用 5% 的样本画全貌；`summary` 是全区间合计、没有时间维度。
+ * 两者都答不了"成本 / 请求量随时间怎么变"。
+ *
+ * 后端保证**等距返回空桶**（`request_count: 0` 的桶照样在），所以前端可以直接
+ * 按下标配等距 x 轴，不需要猜哪里缺数据。
+ */
+export interface UsageTimeseriesResponse {
+  from_ts: number;
+  to_ts: number;
+  /** 服务端实际切出的桶宽（epoch ms）。前端不要自己算边界，用这个。 */
+  bucket_ms: number;
+  buckets: UsageTimeseriesBucket[];
+  /** 后端是否注入了 usage 源。false = 画不出趋势，界面上要说明原因，不能画假零线。 */
+  available: boolean;
+}
+
 export interface UsageDashboardResponse {
   summary: {
     from_ts: number;

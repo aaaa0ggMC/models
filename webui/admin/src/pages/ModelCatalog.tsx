@@ -13,16 +13,15 @@ import {
   Select,
   SideSheet,
   Table,
-  Tag,
   Toast,
   Tooltip,
-  Typography,
 } from '@douyinfe/semi-ui';
 import { IconRefresh } from '@douyinfe/semi-icons';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtInt } from '../format';
 import { helpHref } from '../router';
+import { EmptyState, PageHeader, StatusTag } from '../components/ui';
 import type { CapabilityMatrixEntry } from '../api/types';
 
 export function ModelCatalog(): JSX.Element {
@@ -137,9 +136,9 @@ export function ModelCatalog(): JSX.Element {
         return bits.length === 0
           ? '—'
           : bits.map((b) => (
-              <Tag key={b} size="small" color="orange">
+              <StatusTag key={b} tone="warning">
                 {b}
-              </Tag>
+              </StatusTag>
             ));
       },
     },
@@ -151,9 +150,9 @@ export function ModelCatalog(): JSX.Element {
       ),
       dataIndex: 'contract_tested',
       render: (_: unknown, e: CapabilityMatrixEntry) => (
-        <Tag color={e.contract_tested ? 'green' : 'grey'}>
+        <StatusTag tone={e.contract_tested ? 'success' : 'neutral'}>
           {e.contract_tested ? '已覆盖' : '未覆盖'}
-        </Tag>
+        </StatusTag>
       ),
     },
     {
@@ -164,51 +163,60 @@ export function ModelCatalog(): JSX.Element {
       ),
       dataIndex: 'status',
       render: (_: unknown, e: CapabilityMatrixEntry) => (
-        <Tag
-          color={e.status === 'implemented' ? 'green' : e.status === 'planned' ? 'orange' : 'grey'}
+        <StatusTag
+          tone={e.status === 'implemented' ? 'success' : e.status === 'planned' ? 'warning' : 'neutral'}
         >
           {e.status}
-        </Tag>
+        </StatusTag>
       ),
     },
   ];
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, gap: 12 }}>
-        <Button icon={<IconRefresh />} onClick={() => void sync()}>
-          同步上游
-        </Button>
-        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
-          能力矩阵只读；字段由 offline / upstream / config 三层合并而来。
-        </Typography.Text>
-        <a href={helpHref('catalog')}>了解更多</a>
-        <div style={{ flex: 1 }} />
-        <Select
-          placeholder="按模态过滤"
-          style={{ width: 160 }}
-          value={modality}
-          onChange={(v) => setModality(String(v))}
-          showClear
-          optionList={modalities.map((m) => ({ value: m, label: m }))}
-        />
-        <Input
-          placeholder="搜索模型 / access_path"
-          style={{ width: 240 }}
-          value={keyword}
-          onChange={setKeyword}
-          showClear
-        />
-      </div>
+      <PageHeader
+        title="模型目录"
+        desc="能力矩阵只读视图：每个 access_path 下有哪些模型、上下文窗口、流式能力、不支持哪些字段。字段由 offline / upstream / config 三层合并而来。"
+        actions={
+          <>
+            <Button icon={<IconRefresh />} onClick={() => void sync()}>
+              同步上游
+            </Button>
+            <Select
+              placeholder="按模态过滤"
+              style={{ width: 150 }}
+              value={modality}
+              onChange={(v) => setModality(String(v))}
+              showClear
+              optionList={modalities.map((m) => ({ value: m, label: m }))}
+            />
+            <Input
+              placeholder="搜索模型 / access_path"
+              style={{ width: 220 }}
+              value={keyword}
+              onChange={setKeyword}
+              showClear
+            />
+          </>
+        }
+        meta={
+          <div className="ag-row" style={{ fontSize: 12, color: 'var(--ag-text-3)' }}>
+            <span>共 {items.length} 条能力记录</span>
+            <a href={helpHref('catalog')}>三层来源与 stale 语义</a>
+          </div>
+        }
+      />
 
       {error ? (
         <div style={{ color: 'var(--semi-color-danger)', marginBottom: 12 }}>{error}</div>
       ) : null}
 
-      <Table
-        columns={columns}
-        dataSource={filtered}
-        rowKey={(e) => (e ? `${e.access_path}::${e.model}` : `row-${Math.random()}`)}
+      <div className="ag-card">
+        <Table
+          className="ag-table"
+          columns={columns}
+          dataSource={filtered}
+          rowKey={(e) => (e ? `${e.access_path}::${e.model}` : `row-${Math.random()}`)}
         loading={loading}
         pagination={false}
         onRow={(record) => ({
@@ -217,8 +225,18 @@ export function ModelCatalog(): JSX.Element {
           },
           style: { cursor: 'pointer' },
         })}
-        empty="能力矩阵为空，或没有匹配当前过滤条件的条目。"
-      />
+          empty={
+            <EmptyState
+              title={items.length === 0 ? '能力矩阵为空' : '没有匹配当前过滤条件的条目'}
+              hint={
+                items.length === 0
+                  ? '先建一条渠道并录入凭据，再点「同步上游」拉取模型清单。'
+                  : '换个关键词，或清掉模态过滤。'
+              }
+            />
+          }
+        />
+      </div>
 
       <SideSheet
         title={detail ? detail.model : ''}

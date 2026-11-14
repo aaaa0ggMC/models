@@ -61,6 +61,24 @@ describe('UI 契约：新页面接上了路由与导航', () => {
       expect(ROUTER).toContain(`${key}: '/${key}'`);
     }
   });
+
+  it('改版后默认落地页是概览，且概览真的接上了路由与导航', () => {
+    expect(ROUTER).toContain("overview: '/overview'");
+    // 老书签仍然有效：`/` 归一到概览，但 `#/channels` 一字未改
+    expect(ROUTER).toContain("if (path === '' || path === '/') return ROUTES.overview;");
+    expect(APP).toContain("import { Overview } from './pages/Overview'");
+    expect(APP).toContain('return <Overview />;');
+    expect(APP).toContain('ROUTES.overview');
+  });
+
+  it('侧栏导航分成 4 组（分组不是平铺一列）', () => {
+    // Semi Nav 的分组靠嵌套 items 表达；四个组名都要在 App.tsx 里
+    for (const g of ['总览', '上游接入', '模型与用量', '系统']) {
+      expect(APP, `导航缺分组「${g}」`).toContain(g);
+    }
+    // 分组结构：至少一个组带 items 数组
+    expect(APP).toMatch(/items:\s*\[/);
+  });
 });
 
 describe('UI 契约：完整密钥只有一条渲染路径', () => {
@@ -215,6 +233,40 @@ describe('UI 契约：secret tripwire 按值判断，不按字段名', () => {
 
   it('守卫的回归测试在前端工程里（vitest 覆盖得到）', () => {
     expect(read('webui/admin/src/api/client.test.ts')).toContain('looksLikeSecretValue');
+  });
+});
+
+describe('UI 契约：趋势图的数据来源', () => {
+  it('前端镜像了 UsageTimeseriesResponse（后端 admin/api-types.ts 也有）', () => {
+    for (const name of ['UsageTimeseriesBucket', 'UsageTimeseriesResponse']) {
+      expect(WEB_TYPES, `前端缺 ${name}`).toContain(name);
+      expect(ADMIN_TYPES, `后端缺 ${name}`).toContain(name);
+    }
+  });
+
+  it('Overview 与 Usage 都从 /usage/timeseries 取趋势，不自己拼样本', () => {
+    for (const rel of ['webui/admin/src/pages/Overview.tsx', 'webui/admin/src/pages/Usage.tsx']) {
+      const src = read(rel);
+      expect(src, `${rel} 没打 /usage/timeseries`).toContain('/usage/timeseries');
+    }
+    // 两页都**不**从 recent（最近 50 条）拼趋势——那是 5% 的样本
+    for (const rel of ['webui/admin/src/pages/Overview.tsx', 'webui/admin/src/pages/Usage.tsx']) {
+      const src = read(rel);
+      expect(src, `${rel} 不该用 recent 当趋势数据`).not.toMatch(/recent\s*\.map/);
+    }
+  });
+
+  it('缺数据源的图表在页面上标注依赖，不画假曲线', () => {
+    const overview = read('webui/admin/src/pages/Overview.tsx');
+    const usage = read('webui/admin/src/pages/Usage.tsx');
+    // 两页都要有「待 P0-4」的说明块
+    expect(overview).toContain('P0-4');
+    expect(usage).toContain('P0-4');
+    // 且都不含写死的假延迟 / 假错误率数字
+    for (const src of [overview, usage]) {
+      expect(src).not.toMatch(/p95\s*[:=]\s*\d/);
+      expect(src).not.toMatch(/errorRate\s*[:=]\s*\d/);
+    }
   });
 });
 

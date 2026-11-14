@@ -42,6 +42,8 @@ import type {
   SettingDto,
   SettingsListResponse,
   UsageDashboardResponse,
+  UsageTimeseriesBucket,
+  UsageTimeseriesResponse,
   VirtualKeyCreateRequest,
   VirtualKeyDto,
   VirtualKeyUsage,
@@ -164,6 +166,91 @@ const PROVIDER_KIND = 'provider' as const;
 const ALIAS_KIND = 'alias' as const;
 const AUDIT_KIND = 'audit' as const;
 const CRED_META_KIND = 'credential' as const;
+
+/**
+ * 用量时间序列的桶数上限。
+ *
+ * 趋势图画在概览卡里通常只有 600–1200px 宽，超过 ~120 个点就糊成一片色块，
+ * 而且没有任何信息增益（管理面看的是"这几天在涨还是在跌"，不是逐分钟抖动）。
+ */
+const MAX_TIMESERIES_BUCKETS = 120;
+
+/**
+ * 调用方没给桶宽时的默认档位（按区间长度选）。
+ *
+ * 目标密度是 **30–40 个桶**：少于 20 个点趋势看不出来，多于 50 个在卡片宽度下
+ * 每个点不到 20px、tooltip 会互相打架。
+ */
+function defaultBucketMs(fromTs: number, toTs: number): number {
+  const span = Math.max(1, toTs - fromTs);
+  const hour = 3600_000;
+  const day = 24 * hour;
+  if (span <= 6 * hour) return 10 * 60_000; // ≤6h → 10 分钟
+  if (span <= 24 * hour) return 30 * 60_000; // ≤24h → 30 分钟
+  if (span <= 3 * day) return 2 * hour; // ≤3d → 2 小时
+  if (span <= 7 * day) return 6 * hour; // ≤7d → 6 小时
+  if (span <= 31 * day) return 12 * hour; // ≤31d → 12 小时
+  return 7 * day; // 更长 → 周
+}
+
+/**
+ * 把一段 usage 记录切成等距桶（**纯函数**，导出给 `admin/usage-timeseries.test.ts`
+ * 做回归：桶边界错一格，趋势图就会整体平移，而这种 bug 在 UI 上看不出来）。
+ *
+ * 输入 `records` 只用到 `ts` / token / cost / status 四个字段，因此测试可以用
+ * 裸对象构造，不必造一整条 UsageRecord。
+ */
+export function buildUsageTimeseries(
+  records: ReadonlyArray<{
+    ts: number;
+    usage: { units: UsageUnitsView };
+    cost: { cash: { total: number }; as_api: { total: number }; status: string };
+  }>,
+  from: number,
+  to: number,
+  bucketMs?: number,
+): UsageTimeseriesResponse {
+  const span = Math.max(1, to - from);
+  // 桶数上限：区间再长也最多 120 个桶（多了在 1200px 宽的卡片里就糊成一片）。
+  const wanted = bucketMs ?? defaultBucketMs(from, to);
+  const bucketCount = Math.min(Math.max(1, Math.ceil(span / wanted)), MAX_TIMESERIES_BUCKETS);
+  // 用「区间 / 桶数」反算实际桶宽，保证桶严丝合缝铺满 [from, to)：
+  // 既不留下短一截的尾巴桶，也不出现越过 to 的桶。
+  const effectiveMs = span / bucketCount;
+
+  const buckets: UsageTimeseriesBucket[] = [];
+  for (let i = 0; i < bucketCount; i += 1) {
+    buckets.push({
+      from_ts: from + i * effectiveMs,
+      to_ts: from + (i + 1) * effectiveMs,
+      request_count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      cash_total: 0,
+      as_api_total: 0,
+      unpriced_count: 0,
+    });
+  }
+
+  for (const r of records) {
+    // 越界（理论上不该有）与 NaN 都落进最后一个桶：绝不静默丢弃一条记录——
+    // 趋势图少一个点的后果是"看起来没请求"，比多一个点严重得多。
+    const offset = Math.floor((r.ts - from) / effectiveMs);
+    const idx = Number.isFinite(offset)
+      ? Math.min(Math.max(offset, 0), bucketCount - 1)
+      : bucketCount - 1;
+    const b = buckets[idx];
+    if (b === undefined) continue;
+    b.request_count += 1;
+    b.input_tokens += r.usage.units.tokens?.input_tokens ?? 0;
+    b.output_tokens += r.usage.units.tokens?.output_tokens ?? 0;
+    b.cash_total += r.cost.cash.total;
+    b.as_api_total += r.cost.as_api.total;
+    if (r.cost.status === 'unpriced' || r.cost.status === 'pending_price') b.unpriced_count += 1;
+  }
+
+  return { from_ts: from, to_ts: to, bucket_ms: effectiveMs, buckets, available: true };
+}
 
 // ---------------------------------------------------------------------------
 // Service
@@ -650,6 +737,45 @@ export class AdminService {
         ? {}
         : { reconciliation: this.deps.reconciliationSource.latest() }),
     };
+  }
+
+  /**
+   * 用量时间序列（趋势图的唯一数据来源）。
+   *
+   * **为什么不能只让前端自己切**：`usageDashboard` 的 `recent` 只回最近 50 条，
+   * 拿它拼趋势等于用 5% 的样本画全貌；而 `summary` 是全区间合计，没有时间维度。
+   * 于是「成本 / 请求量随时间怎么变」这个问题在契约里**没有答案**——这正是
+   * 管理面用量页一直只能放汇总卡 + 最近记录的原因。这个端点补上这个维度。
+   *
+   * 切桶规则（与前端约定，避免两边各算一套边界）：
+   *   - 桶宽由**调用方**给一档期望值（前端按 24h / 7d / 30d 选，见 `bucketMs`）；
+   *     服务端再按 `ceil(span / bucketMs)` 推出桶数，最后用 `span / 桶数` 反算
+   *     **实际**桶宽。这样桶永远严丝合缝地铺满 `[from, to)`——不会出现短一截的
+   *     尾巴桶，也不会出现越过 `to` 的桶。
+   *   - 桶数超过 `MAX_TIMESERIES_BUCKETS`（120）时按上限收紧：`effectiveMs` 变大，
+   *     点变少，但铺满区间的性质不变。请求再长也不返回超过 120 个点。
+   *   - 空桶照样返回（`request_count: 0`），前端画等距 x 轴不需要猜哪里缺数据。
+   *
+   * 安全性：只读聚合，不新增任何写入面；返回的字段与 `usageDashboard` 同一套
+   * （无 header、无 key、无正文）。
+   */
+  async usageTimeseries(
+    fromTs?: number,
+    toTs?: number,
+    bucketMs?: number,
+  ): Promise<UsageTimeseriesResponse> {
+    const now = this.deps.clock.now();
+    const from = fromTs ?? now - 24 * 60 * 60 * 1000;
+    const to = toTs ?? now;
+    const source = this.deps.usageSource;
+
+    // 未注入 usage 源（例如纯静态部署）：空序列 + available:false，
+    // 前端据此显示"需请求日志"而不是画一条假的零线。
+    if (source === undefined) {
+      return { from_ts: from, to_ts: to, bucket_ms: 0, buckets: [], available: false };
+    }
+
+    return buildUsageTimeseries(source.list(from, to), from, to, bucketMs);
   }
 
   // ---- 余额探测 ----

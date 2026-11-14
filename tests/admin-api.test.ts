@@ -496,6 +496,34 @@ describe('完成标准 5：看到用量看板', () => {
     expect(res.body.summary!.request_count).toBeGreaterThan(0);
     expect((res.body.recent ?? []).some((r) => r['model_alias'] === 'e2e-model')).toBe(true);
   });
+
+  it('时间序列端点：桶铺满区间，且各桶相加等于汇总（趋势图的唯一数据来源）', async () => {
+    const from = FIXED_NOW - 24 * 3600 * 1000;
+    // to 要给到 now 之后：区间是左闭右开，而本 harness 的时钟是冻结的。
+    // 因此实际跨度是 24h + 60s，桶数是 ceil(跨度 / 1h) = 25——正好验证
+    // 「桶严丝合缝铺满区间」而不是机械地返回 24 个整小时桶。
+    const to = FIXED_NOW + 60_000;
+    const res = await api('GET', `/admin/api/usage/timeseries?from_ts=${from}&to_ts=${to}&bucket_ms=3600000`);
+    expect(res.status).toBe(200);
+    expect(res.body.available).toBe(true);
+    const buckets = (res.body.buckets ?? []) as Array<Record<string, unknown>>;
+    expect(buckets).toHaveLength(25);
+    // 首尾相接、铺满区间（边界错一格趋势图会整体平移，UI 上看不出来）
+    expect(buckets[0]!['from_ts']).toBe(from);
+    expect(buckets[24]!['to_ts']).toBe(to);
+    for (let i = 0; i < buckets.length - 1; i += 1) {
+      expect(buckets[i + 1]!['from_ts']).toBe(buckets[i]!['to_ts']);
+    }
+    // 各桶相加 == summary（两个口径必须对得上，否则图上和卡上是两个数）
+    const summed = buckets.reduce((n, b) => n + Number(b['request_count'] ?? 0), 0);
+    const summary = await api('GET', `/admin/api/usage?from_ts=${from}&to_ts=${to}`);
+    expect(summed).toBe(Number(summary.body.summary!['request_count']));
+  });
+
+  it('时间序列端点也要鉴权', async () => {
+    const res = await fetch(`${baseUrl}/admin/api/usage/timeseries`);
+    expect(res.status).toBe(401);
+  });
 });
 
 describe('完成标准 6：能力矩阵只读视图（与 ir/capability.ts 同源）', () => {
