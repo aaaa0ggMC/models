@@ -27,10 +27,14 @@ Completions / OpenAI Responses / Anthropic Messages / Gemini generateContent 等
 - **插件只操作 canonical**：generic hook（`onRequest` / `onResponse` /
   `onStreamChunk` / `onError` / `onToolCall`，共 5 个）不接触具体厂商格式；
   外部能力走 adaptor 接入。
-- **fast path**：客户端格式 == 上游 provider 格式时跳过完整互转，
-  只做 usage / finish_reason / tool_call id 标准化。
-- **内置搜索建模为 built-in tool**（`web_search`）：上游原生支持则透传，
-  否则网关自实现并注入，两种路径对客户端行为一致。
+- **一律走 canonical（always-canonical）**：v1 每个请求都完整 decode → canonical →
+  encode，再完整转回来；**不做字节级 fast path**。字节级 fast path 为未来可选优化，
+  须有实测数据支撑才加回（触发条件见 `docs/design/20-pipeline.md` §4.4）。
+- **内置搜索建模为 built-in tool**（`web_search`）：上游原生支持则**语义透传 + 方言映射**
+  （`web_search` ↔ `deepseek_web_search` 等），否则网关自实现并注入；两条路径都过
+  codec/mapping 与 round-trip 测试，对客户端行为一致。
+- **「透传」= 语义不变地完成一次格式转换**，不是零 mapping、不是原样转发字节；
+  系统内不存在"原样转发字节"的路径（术语表见 `docs/design/00-overview.md` §5）。
 - **统计计费独立异步管道**，不阻塞主链路。
 - **请求生命周期用显式 Pipeline 阶段**（S0–S10 共 **11 个**），正确处理流式 SSE 与
   工具调用多轮循环。

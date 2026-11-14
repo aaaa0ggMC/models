@@ -141,6 +141,12 @@ interface UsageRecord {
 | 脱敏（`redaction_profile`） | 65 §6 | 写入 Tier-2 **之前**执行；`UsageRecord.redaction_profile` 记用了哪套规则 |
 | 保留与导出 | 65 §7 | `retention.*` 配置项在 65 §7，不在这里重复 |
 
+**always-canonical 的附带收益（落盘即 canonical）**：因为 v1 一律完整走 canonical
+（[20-pipeline.md](./20-pipeline.md) §4），落盘的所有聊天记录天然就是 canonical 格式——计费管道与
+dog-fooding 消费的是**同一份**多单位归一化 usage，不需要为每家厂商各写一套解析/统计；Tier-2 的前缀压缩
+按 canonical 的消息/parts 差分而非字节差分；任何一条存下来的会话都能重新编码成任意 dialect。
+完整推论见 [65-storage-and-retention.md](./65-storage-and-retention.md) §5.6。
+
 **开关**：`persistence.messages`（默认 `off`）、`persistence.usage`（恒 `on`）、`persistence.media`（默认 `off`）。
 **`off` 时 Tier-2 完全不落盘**：`UsageRecord.body_ref` 为空，trace 只保留摘要与 hash；§6 的 `trace_get` / `conversation_search`
 直接不出现在工具列表里（不是"返回错误"，而是"不可见"，这样 agent 不会反复试探）。

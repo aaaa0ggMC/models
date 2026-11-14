@@ -299,7 +299,7 @@ canonical **不装**：
 | 实验性/不稳定的 | Gemini Live API、Anthropic `context_management` | 等稳定；canonical 已留位 |
 | 明确非目标 | Video | 只留 schema 占位 |
 
-**判据**：canonical 覆盖矩阵里 ✅ 的项，**不需要** adaptor 也能被"无损携带"——客户端可以用 OpenAI 格式发一个带 `native.gemini.*` 字段的请求，网关 fast path 透传给 Gemini，字段不丢。adaptor 只是让"跨格式"也能工作。
+**判据**：canonical 覆盖矩阵里 ✅ 的项，**不需要** adaptor 也能被"无损携带"——客户端可以用 OpenAI 格式发一个带 `native.gemini.*` 字段的请求，网关经 canonical 往返把它映射给 Gemini，字段不丢。adaptor 只是让"跨格式"也能工作。
 
 ### 4.3 为什么这个边界不会再被打破
 

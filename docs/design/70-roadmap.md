@@ -8,7 +8,7 @@
 两条原则决定了下面的分期：
 
 1. **canonical 一次做全，adaptor 按需写。** Phase 1 就把 canonical 的穷尽普查（[12-coverage-survey.md](./12-coverage-survey.md)）与 round-trip 测试框架落地，确保"新增 adaptor 永远不需要改 schema"；之后每个新 adaptor 是独立小任务（[40-provider-adaptors.md](./40-provider-adaptors.md) §1.6 的检查清单）。
-2. **先把"不可信"的部分做扎实。** fast path 透传、usage 双轨、加密与开关——这些错了会静默出错或泄漏，优先级高于功能广度。
+2. **先把"不可信"的部分做扎实。** canonical 全量往返的保真度、usage 双轨、加密与开关——这些错了会静默出错或泄漏，优先级高于功能广度。
 
 ## 1. Phase 0 · 调研与设计定稿（本文档的输入）
 
@@ -20,7 +20,7 @@
 
 | Phase | 主题 | 核心交付物 |
 |---|---|---|
-| 1 | 骨架与最小闭环 | canonical + 3 个 chat adaptor + fast path + round-trip 框架 + 计费管道 v1 + 凭据模型 v1 |
+| 1 | 骨架与最小闭环 | canonical + 3 个 chat adaptor + canonical 全量往返（无字节级 fast path）+ round-trip 框架 + 计费管道 v1 + 凭据模型 v1 |
 | 2 | 第二个 provider + 计费口径 | Gemini adaptor + usage 归一完整 + 流式全链路 + dog-fooding Tier-1 |
 | 3 | 插件系统与长上下文 | 5 hook + acp-kernel adaptor + 网关工具循环 |
 | 4 | 内置搜索 + 多模态 v1 + decision + 加密存储 | web_search + 多模态示例 adaptor + **decision adaptor + 降级路径** + Tier-2 加密 + 前缀压缩 + WebUI |
@@ -32,7 +32,7 @@
 
 | 00 的版本标签 | 落入的 Phase | 说明 |
 |---|---|---|
-| `[v1]` | Phase 1 + Phase 2 | chat 三件套 + fast path + 计费管道 v1 + 凭据 v1（P1）；Gemini 作为"第二个 provider"在 P2 |
+| `[v1]` | Phase 1 + Phase 2 | chat 三件套 + canonical 全量往返 + 计费管道 v1 + 凭据 v1（P1）；Gemini 作为"第二个 provider"在 P2 |
 | `[v1.5]` | Phase 3 + Phase 4 | 插件系统与长上下文（P3）；内置搜索 + 多模态 v1 + decision + 加密存储 + WebUI（P4） |
 | `[later]` | Phase 5 | 按需 adaptor、Rerank/Moderation/Video 模态、OAuth 登录 |
 | —（不在 00 表里） | Phase 0 | 本文档本身：调研 + 设计定稿 |
@@ -69,8 +69,7 @@
 - HTTP 框架 + 路由（多模态端点注册，见 [00-overview.md](./00-overview.md) §端点）
 - `PipelineRunner` + **11 个阶段（S0–S10）**骨架（[20-pipeline.md](./20-pipeline.md) §2）
 - `CanonicalRequestEnvelope` / `CanonicalResponseEnvelope` / `StreamFrame` 类型 + JSON Schema + round-trip 测试夹具
-- **3 个 chat adaptor 写透**：`openai.chat`、`openai.responses`、`anthropic.messages`（含慢路径 + fast path 判定 + 有序偏好表）
-- fast path 透传（S1 只做信封级惰性解析，完整 canonical 推迟到 S3/S4/S6）+ usage 旁路嗅探器
+- **3 个 chat adaptor 写透**：`openai.chat`、`openai.responses`、`anthropic.messages`（一律完整走 canonical：S1 物化完整 `CanonicalRequest`，S4/S6/S8 完整 encode/decode + 有序偏好表）
 - 异步 usage 管道最小版：内存队列 → Tier-1 SQLite（明文，Phase 1 不加密，见下）
 - 凭据模型 v1：`api_key` / `local` / `cloud_iam` 三种类型 + access path + Plan 感知路由（[45-credentials.md](./45-credentials.md)）
 - 数据面 virtual key 鉴权 + 基础限流 + 控制面本地账号 + passkey（[66-auth.md](./66-auth.md)）
@@ -80,9 +79,9 @@
 **验收标准**：
 
 - 单元测试覆盖 3 adaptor × 各格式的 round-trip 保真度（含 `raw.unmapped` 回写、畸形 tool 参数、多 system 消息）
-- 同一 provider 的 fast path 请求与直连 provider 的字节级 diff 为空（除归一化字段）
-- 压测：单核 ≥ 500 rps（fast path 路径），p99 附加延迟 < 3ms——该目标成立的前提是 **S1 信封级惰性解析**（不物化完整 canonical，见 [20-pipeline.md](./20-pipeline.md) §3/§4.2）与**插件 manifest `scope` 准入**（启动时计算并缓存）
-- fast path 准入可观测：启动时算出的 `FAST_PATH_PLUGIN_ADMISSION`、以及"多少请求因插件/能力不支持走了转换"都有计数（关闭率仪表盘在 Phase 3 补）
+- canonical 往返保真度：同格式请求 `decode → encode` 后与原始 wire 的差异**只允许**归一化字段白名单（`finish_reason`、tool id、usage 口径），其余字节级一致——这是 round-trip 测试的断言，不是 fast path 专属
+- 压测：单核 ≥ 500 rps（canonical 往返路径）。**canonical 往返附加延迟只做实测记录，不作为硬性验收门限**——它在 Node 里就是 JSON parse + 对象映射 + stringify，典型对话请求亚毫秒到几毫秒，相对 LLM 推理可忽略；v1 不为省这点开销维护第二条代码路径（[20-pipeline.md](./20-pipeline.md) §4）
+- 可观测性：`RequestTrace` 记录 `canonical_roundtrip`（v1 恒 true）与各阶段耗时，用于建立 canonical 往返的实测基线；若将来实测证明其占比可观，按 [20-pipeline.md](./20-pipeline.md) §4.4 的触发条件重新评估字节级 fast path
 - 关闭 `persist_messages` 时，磁盘上不存在任何消息正文（有测试断言这一点）
 - **"新增 adaptor 不需要改 schema"**：加一个 mock adaptor 只动 `adaptors/` 目录，`ir/` 目录 diff 为空（CI 断言）
 
@@ -124,7 +123,7 @@
 
 **交付物**：
 
-- 插件运行时：manifest 校验、`order` 调度、故障隔离、超时、`ShortCircuit`、`disableFastPath`
+- 插件运行时：manifest 校验、`order` 调度、故障隔离、超时、`ShortCircuit`
 - `onRequest` / `onResponse` / `onStreamChunk` / `onError` / `onToolCall` 全 hook
 - 跨帧滚动缓冲器（[25-streaming.md](./25-streaming.md) §7.2）
 - `acp-kernel` adaptor + `CompactionDriver` 抽象（含驱动可替换）
@@ -137,7 +136,7 @@
 - 压缩前后 `cache_control` 断点仍有效（缓存命中率不低于阈值）
 - **压缩不破坏不透明思考块**（Anthropic `thinking.signature` / `redacted_thinking`、Gemini `thoughtSignature`、Responses `reasoning.encrypted_content`）——有专项测试
 - 插件抛异常不导致 5xx；`fatal: true` 的插件按预期阻断
-- fast path 关闭率可观测（"多少请求因插件/能力不支持走了转换"）有仪表盘
+- 各阶段耗时（尤其 S1/S4/S6/S8 的 canonical 编解码）有仪表盘，作为 canonical 往返开销的实测依据
 - 工具循环的 continue/escalate/stop 决策先用**启发式**实现（decision  adaptor 在 Phase 4 落地后切换），接口上预留 `DecisionClient` 注入点
 
 ## 5. Phase 4 · 内置搜索 + 多模态 v1 + 加密存储
@@ -147,18 +146,18 @@
 **交付物**：
 
 - `BuiltinTool{name:"web_search"}` canonical 建模 + 4 格式映射
-- 两种实现模式（上游原生透传 / 网关自执行 + agentic loop）+ `max_tool_calls` 预算与"成本即停止条件"
+- 两种实现模式（上游原生**语义透传 + 方言映射** / 网关自执行 + agentic loop）+ `max_tool_calls` 预算与"成本即停止条件"
 - `SearchBackend` 抽象 + searxng 后端 + 缓存 + 引用编号
 - 多模态 v1（方法论 + 每模态一个完整示例）：`tts`（OpenAI + ElevenLabs）、`asr`（OpenAI Whisper）、`image`（OpenAI images）、`embedding`（OpenAI）
 - **decision 模态 v1**：`gemini.decisions` adaptor（首选，有免费层 + 最低 ECE）+ chat 模拟降级路径（`calibration:"degraded"`）+ `DecisionClient` 注入点接通工具循环的路由/compact-escalate-stop 判断；**默认开启攒批**（[20-pipeline.md](./20-pipeline.md) §6.3）
-- 跨模态流式：统一帧信封 + SSE 命名 + 三种上游形态桥接 + WS 透传代理（[25-streaming.md](./25-streaming.md)）
+- 跨模态流式：统一帧信封 + SSE 命名 + 三种上游形态桥接 + WS 字节级中继代理（[25-streaming.md](./25-streaming.md)）
 - **Tier-2 加密存储落地**：SQLite + 整库加密 + 列级信封加密 + 分层开关 + 脱敏 + 保留策略 + 前缀压缩（[65-storage-and-retention.md](./65-storage-and-retention.md)）
 
 **验收标准**：
 
-- 4 种客户端格式请求"搜索"，分别在"上游支持/不支持"两种 provider 上都得到带引用的答案，且 fast path 在支持侧不被破坏
+- 4 种客户端格式请求"搜索"，分别在"上游支持/不支持"两种 provider 上都得到带引用的答案，且两条路径对客户端行为一致（都过 codec/mapping + round-trip 测试）
 - TTS 流式：首包延迟 < 上游直连 + 50ms；客户端断开后上游被取消、计费只含已下发音频秒数
-- ASR 实时：透传模式下 WS 双向正常；转换模式下 interim 的 `revision` 语义正确
+- ASR 实时：中继模式下 WS 双向正常；转换模式下 interim 的 `revision` 语义正确
 - 开启 `persist_messages` 后：数据落盘即密文；用错误口令无法解密；导出文件可在另一台机器用正确口令恢复
 - 前缀压缩实测压缩率达到 [65-storage-and-retention.md](./65-storage-and-retention.md) §5.3 的量级估计（原引 60 §7.3，该节已去重删除）
 - **decision**：`/v1/decisions` 端到端跑通（多模态输入 + 批量问题 + 逐选项概率）；**三个映射陷阱各有 round-trip 测试**（map vs array 的 answers/probabilities、打乱 questions 顺序后答案仍对得上、confidence/probability 可选性）；**`usage` 三种"输出免费"表现都被正确处理**（Gemini 恒 0 / Jev 非 0 但免费 / OpenAI 上报不计费）；**Gemini option key 不用位置性命名**（字节序排序会改变相对位置）；上游只有 chat 时降级生效且响应带 `calibration:"degraded"`；**策略检查类判断在降级状态下明确失败而非静默用 chat 顶替**（有测试）；`usage` 正确区分"输出免费"（`pricing_state.output="free"`）与"上游没报 usage"（键省略 + warning）
@@ -197,9 +196,9 @@
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 某家 provider 改字段/废弃端点 | adaptor 失效 | 能力矩阵 + 集成测试夹具按版本锁定；契约测试跑在 CI |
-| fast path 透传与插件需求冲突 | 要么丢扩展性要么丢保真 | `disableFastPath` 显式化 + manifest `scope` 准入（`envelope-only` / `full-canonical`，启动时算并缓存）+ 关闭率可观测 |
+| canonical 往返开销被误判为瓶颈 | 无谓地加回字节级 fast path，重新引入双路径 | v1 一律完整走 canonical；附加延迟只做实测记录不作门限；加回须满足 [20-pipeline.md](./20-pipeline.md) §4.4 的五条实测触发条件 |
 | 计费口径各家不一致 | 账单不可信 | 原始 usage 全留 + 双路计量 + 单价版本化不追溯 |
 | billion-context license 不可商用 | 核心插件不可用 | adaptor 与驱动解耦，驱动可替换 |
 | 多模态 schema 过度设计 | 延期 | 模态用 `kind` 判别 + 注册表，新增模态不改信封 |
 | 加密导致密钥丢失 | 数据全丢 | 三档密钥来源 + 加密导出 + 恢复流程测试 |
-| 实时 ASR 透传无法插件化 | 安全能力缺失 | 双路径设计，转换模式可随时开启 |
+| 实时 ASR 字节级中继无法插件化 | 安全能力缺失 | 双路径设计，转换模式可随时开启 |

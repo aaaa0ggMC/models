@@ -514,9 +514,9 @@ EMBED:  POST /v1/embeddings
 
 | 模态 | 上游形态 | 网关输出 | 说明 |
 |---|---|---|---|
-| TTS | chunked-binary（多数）/ SSE（少数） | SSE `ag.frame` 或 `application/octet-stream` 直通 | 首包延迟关键；音频分片 append-only |
+| TTS | chunked-binary（多数）/ SSE（少数） | SSE `ag.frame` 或 `application/octet-stream` 字节级中继 | 首包延迟关键；音频分片 append-only |
 | ASR（一次性） | 无流式 | 无流式 | 只能 once |
-| ASR（实时） | WebSocket 双向 | WS 透传（默认）或 WS + canonical 帧（插件介入时） | 见 [25-streaming.md](./25-streaming.md) §3.3 |
+| ASR（实时） | WebSocket 双向 | WS 字节级中继（默认）或 WS + canonical 帧（插件介入时） | 见 [25-streaming.md](./25-streaming.md) §3.3 |
 | Image | 轮询 / SSE 进度 | SSE `ag.frame{kind:"image", progress}` | 部分上游（BFL）只能轮询，网关内部轮询后转成进度流 |
 
 ### 8.3 "能兼容吗"的结论
@@ -526,7 +526,7 @@ EMBED:  POST /v1/embeddings
 | TTS 流式 | ✅ 无损（网关只切帧不解码） |
 | ASR 一次性 | ✅ 无损 |
 | ASR 实时 + 插件 | ⚠️ 必须切 canonical 模式，客户端改用 `ag.frame` 协议 |
-| ASR 实时 + 严格上游协议保真 | ✅ 但只能透传，插件不可见 |
+| ASR 实时 + 严格上游协议保真 | ✅ 但只能走字节级中继，插件不可见 |
 | Image 流式进度 | ✅ 但 BFL 类轮询型有额外延迟（轮询间隔） |
 | 视频 | ❌ v1.5 不做 |
 

@@ -348,6 +348,22 @@ system prompt 与工具定义在多个会话间也高度重复。用**内容定�
 4. **AAD 绑定**：每条密文 AAD 绑 `request_id + ir_version + session_key + turn_index`——在 S1 的记录级绑定（`request_id + ir_version`）之上再加轮次维度，防密文块被换位/重放。
 5. **压缩失败兜底**：zstd 失败（如字典不匹配）→ 存未压缩密文并置 `compressed: false`，读时按标记解。
 
+### 5.6 always-canonical 的附带收益：落盘即 canonical
+
+因为 v1 **一律完整走 canonical**（[20-pipeline.md](./20-pipeline.md) §4，没有字节级 fast path），
+网关上落盘的所有聊天记录**天然就是 canonical 格式**。推论：
+
+1. **落盘即 canonical**：Tier-2 存的是 canonical 请求/响应（含 raw passthrough 保留的厂商原字段），
+   不是厂商方言——不需要为每家厂商各写一套解析/统计。
+2. **前缀压缩作用在 canonical 结构上**：§5.2 的 delta 链按消息/parts 差分，而不是按字节差分；
+   厂商方言的字节级差异会被 canonical 归一化吸收掉，压缩与正确性都更稳。
+3. **计数天然统一**：usage 在 canonical 里已是多单位归一化（[10-canonical-schema.md](./10-canonical-schema.md) §6），
+   计费/看板直接消费，不用二次换算。
+4. **可重放/可迁移**：任何一条存下来的会话都能重新编码成**任意** dialect（例如把 Claude 抓来的会话喂给
+   Gemini）——对 dog-fooding（让 AI 分析自己的历史）和将来换 provider 是直接收益。
+5. **存储层只依赖 canonical schema 版本**（`ir_version`）：厂商格式只作为 raw passthrough 存在，
+   不参与检索与统计。
+
 ---
 
 ## 6. 脱敏

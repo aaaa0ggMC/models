@@ -114,7 +114,7 @@ interface CanonicalRequestEnvelope {
   /** 模态特定 payload，见 §4 与 15-modalities.md */
   payload: ModalityPayload;
 
-  /** 客户端原始格式（用于 fast path 与回写） */
+  /** 客户端原始格式（用于 raw passthrough 回写与 `conversion_chain`） */
   source_format: FormatId;
 
   /** 节点级 / 顶层级 raw 保留，见 §7 */
@@ -762,7 +762,7 @@ interface TokenUsage {
   cache_read_tokens: number;
   cache_write_tokens: number;
   reasoning_tokens: number;
-  /** 其他细分，透传保留 */
+  /** 其他细分，经 raw passthrough 保留 */
   details?: Record<string, number>;
   /**
    * 各细分的计价状态。用于表达"输入计费、输出免费"这类厂商差异：
@@ -837,7 +837,7 @@ interface RawEnvelope {
 - 80–99 = 按 `_raw` 覆盖率加权（消息数、part 数、tool 数、顶层键数各占一份）；
 - < 80 = 有未建模且未保留的部分。
 
-低于阈值时在响应 `degraded` 字段声明，**不静默**。这个指标同时是 fast path 关闭率的观测依据。
+低于阈值时在响应 `degraded` 字段声明，**不静默**。
 
 ---
 
@@ -939,7 +939,7 @@ schema/ag-ir-1/
 
 **注意 3**：`finish_reason` 必须**双向可逆**——归一值用于 canonical，原文（`raw.finish_reason_provider`）用于回写与对账。LiteLLM 的补偿手段是把原始 `stop_reason` 写进 `provider_specific_fields`，我们直接用 `raw` 承载。
 
-> `finish_reason` 的归一化是 fast path 下也要做的三件事之一（另两件：tool id 补全、usage 口径），见 [20-pipeline.md](./20-pipeline.md) §4.3。
+> `finish_reason` 的归一化是 canonical 往返中一律执行的三件事之一（另两件：tool id 补全、usage 口径），见 [20-pipeline.md](./20-pipeline.md) §4.3。
 
 ### 9.4 2026 年协议变更对映射表的影响（必读）
 
@@ -977,6 +977,6 @@ schema/ag-ir-1/
 9. **Q15**：`googleSearchRetrieval` 是否已正式废弃（API reference 仍列出，未见显式弃用声明）。
 10. **Q16**：`VideoPayload` 占位：v1 只留空 schema，是否要在能力矩阵里显式标 `unsupported`。
 11. ~~**Q18（decision）**~~ **已关闭**：三家 decision API 的确切字段名（问题类型枚举、选项集表示、概率/置信度结构、usage 形状）——**40-provider-adaptors.md §6.2 已按三家官方 API reference 回填完毕**。
-12. **Q19（decision）**：`probability` 与 `confidence` 在上游各自的定义（是否一个是模型自评确定性、一个是归一化边际）——决定 D8 的分建模是否需再加一层原值透传。
+12. **Q19（decision）**：`probability` 与 `confidence` 在上游各自的定义（是否一个是模型自评确定性、一个是归一化边际）——决定 D8 的分建模是否需再加一层原值保留。
 13. **Q20（decision）**：decision 模型的多模态输入上限（Gemini 报道 256K tokens）与批量上限（报道 1000 题）在不同上游是否一致。
 14. **Q17**：模型 ID 清单随时间变动（OpenAI `gpt-6-*`、Anthropic `claude-*-5-*`、Gemini `gemini-4-*`），网关应动态拉取模型列表而非硬编码——拉取频率与缓存策略待定。

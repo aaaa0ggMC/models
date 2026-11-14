@@ -21,13 +21,11 @@ interface PluginManifest {
   hooks: HookName[];               // 本插件关心的生命周期点
   capabilities?: PluginCapability[];
   config_schema?: JSONSchema;      // 配置项 schema，WebUI 据此自动生成配置表单
-  /** 请求侧插件需要 canonical 的哪一档（决定 fast path 能否准入，D-fastpath-2）：
-   *  - "envelope-only"：只读信封 + 路由相关字段，不做内容改写；
-   *  - "full-canonical"：需要完整 canonical（**默认，未声明按此处理**）。
-   *  仅当全部已启用的请求侧插件都是 "envelope-only"（或无请求侧插件）时才允许 fast path；
-   *  该条件由配置/组合根在启动时计算并缓存，运行中增删插件需失效重算。
-   *  见 20-pipeline.md §4.2。 */
-  scope?: "envelope-only" | "full-canonical";
+  /** 【已废弃 · D-fastpath-2】原用于 fast path 准入：请求侧插件声明只需要信封档还是完整
+   *  canonical，据此判断本请求能否走字节级 fast path。v1 一律完整走 canonical，该字段无其他
+   *  用途，**新插件不要声明，已声明的可安全删除**（删除不改变任何行为——插件永远看到完整
+   *  canonical）。见 20-pipeline.md §4.1。 */
+  scope?: never;
   /** 需要全量响应才能工作（如内容审核、用量改写）。
    *  声明后 Runner 仍以流式转发，但会额外维护聚合视图传给插件。 */
   needs?: "aggregate";
@@ -44,7 +42,7 @@ type HookName = "onRequest" | "onResponse" | "onStreamChunk" | "onError" | "onTo
 interface Plugin {
   manifest: PluginManifest;
   init?(cfg: unknown, gw: GatewayServices): void | Promise<void>;
-  /** 请求侧：可改写 canonical、可短路、可关闭 fast path */
+  /** 请求侧：可改写 canonical、可短路 */
   onRequest?(req: CanonicalRequest, ctx: RequestContext): PluginResult<CanonicalRequest>;
   /** 流式：逐事件处理，返回 null 表示丢弃 */
   onStreamChunk?(ev: CanonicalStreamEvent, ctx: RequestContext): CanonicalStreamEvent | CanonicalStreamEvent[] | null;
@@ -90,8 +88,6 @@ interface GatewayServices {
 ```typescript
 interface RequestContext {
   // ...见 20-pipeline.md
-  /** 关闭 fast path，之后本请求走完整结构转换 */
-  disableFastPath(reason: string): void;
   /** 记录一条 warning，最终进入 UsageRecord.warnings */
   warn(code: string, detail?: string): void;
   /** 读取/写入阶段间暂存区 */
@@ -105,7 +101,7 @@ interface RequestContext {
 init(插件加载时一次)
   │
   ▼
-┌─ onRequest ──────────── S3，可改写/短路/disableFastPath
+┌─ onRequest ──────────── S3，可改写/短路
 │      │
 │      ▼
 │   [上游调用 / 流式转发]
@@ -134,7 +130,7 @@ dispose(进程退出/热卸载)
 - `onStreamChunk` 返回数组 = 用多个事件替换一个事件（拆分）；返回 `null` = 丢弃。
 - **`onToolCall` 的触发条件**：仅当请求走**网关 agentic loop**（`ag_agentic_loop: true`，或 Responses 入站 + 带 `tools` + provider 无原生工具执行）时触发，在每次工具执行前后各一次；客户端循环模式下网关看不到工具执行，**不触发**。它与 `RequestContext.state.tool_id_map` 的维护同处（见 [20-pipeline.md](./20-pipeline.md) §5.2）。
 - **`onError` 与阶段失败的关系**：`onError` 不改变控制流（不能"重试"或"吞掉"错误），只做观测/告警/副作用；要阻断请求请用 `fatal: true` 的 `onRequest`。上表的"阶段职责表"逐阶段标了 `onError`。
-- 插件不得在 `onStreamChunk` 里阻塞等待（如调外部 LLM）超过 `timeout_ms`，否则降级为透传原事件 + warning。**长耗时压缩类工作必须在 `onRequest` 完成。**
+- 插件不得在 `onStreamChunk` 里阻塞等待（如调外部 LLM）超过 `timeout_ms`，否则放行原事件 + warning。**长耗时压缩类工作必须在 `onRequest` 完成。**
 
 ## 4. 内置插件：billion-context adaptor 设计草案
 
@@ -182,7 +178,6 @@ class BillionContextAdaptor implements Plugin {
   manifest = {
     name: "billion-context",
     hooks: ["onRequest"],
-    scope: "full-canonical",           // 要改写 messages，fast path 因此对它关闭
     config_schema: {/* 见下 */},
     order: 10,                          // 尽早跑，后续插件看到的是压缩后历史
   };
@@ -247,11 +242,11 @@ class BillionContextAdaptor implements Plugin {
 
 Anthropic 提供 `context_management`（beta：`clear_tool_uses_20250919` / `clear_thinking_20251015` / `compact_20260112`）与 `compaction`（`{type:"summarize"}`）；OpenAI Responses 提供 `context_management[{type:"compaction",compact_threshold}]`；Gemini 4 起显式缓存受限。
 
-**决策：网关默认把上下文管理收敛到自己的压缩插件，不透传上游的 compaction 参数。**
+**决策：网关默认把上下文管理收敛到自己的压缩插件，不把上游的 compaction 参数原样转给上游。**
 
-理由：① 上游 compaction 是 provider 特定的，透传会让"同一会话在不同 provider 上行为不一致"；② 上游 compaction 的结果不可见于 canonical，插件与计费都看不到发生了什么；③ 双压缩（上游压一次、网关压一次）会级联损失。
+理由：① 上游 compaction 是 provider 特定的，原样转发会让"同一会话在不同 provider 上行为不一致"；② 上游 compaction 的结果不可见于 canonical，插件与计费都看不到发生了什么；③ 双压缩（上游压一次、网关压一次）会级联损失。
 
-例外：客户端显式传 `native.<vendor>.context_management` 时透传，并在 `warnings` 声明"本次由上游执行 compaction，网关压缩插件已跳过"。
+例外：客户端显式传 `native.<vendor>.context_management` 时，经 canonical 的 `native` 命名空间**语义透传 + 方言映射**给上游，并在 `warnings` 声明"本次由上游执行 compaction，网关压缩插件已跳过"。
 
 ## 5. 插件配置的运行时形态
 

@@ -131,14 +131,14 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 **relaykit：明确不采用（review #8.4，作者已拍板定稿）**：`relaykit` 是仓库内的独立 Go module，其 README 明确说"HTTP 收发、SSE 读写、渠道选择、鉴权和计费由宿主程序完成，所以可以嵌进其他 Go 网关或代理"，表面看是一条"站在 NewAPI 肩膀上"获得 4 协议互转能力的捷径。**但结论是明确不采用**：
 
 1. **它与被拒的 NewAPI 同为 AGPL-3.0 + Section 7 附加条款**——而 §1.3 拒绝 NewAPI 的**首要**理由（上文「为什么不"在 NewAPI 上改"」第 1 条）正是 AGPL。直接依赖 `relaykit` 与"因为 AGPL 而不在 NewAPI 上改"面对的是同一个许可证约束，只是换了入口：依赖它的 module 同样触发"网络使用需开源 + 保留前端署名/可见链接"的义务，私有深度定制仓库并不因为"只用了一个 Go module"就豁免。**不采用的理由是许可证结论必须自相一致，不是技术**（它的成对转换器 + 质量分级设计确实值得借鉴）。
-2. **借鉴方式限定为"读设计、不引代码"**：转换结果对象（`From/To/Converter/Quality/Steps/Diagnostics`）、损耗策略三档、`RequestConversionChain` 记日志——这些已按设计借鉴落入本文（本节上文"可从 NewAPI 借鉴的"、[10-canonical-schema.md](./10-canonical-schema.md) 的 `ConversionDiagnostic`、[20-pipeline.md](./20-pipeline.md) §4.2 的 `conversion_chain`）。
+2. **借鉴方式限定为"读设计、不引代码"**：转换结果对象（`From/To/Converter/Quality/Steps/Diagnostics`）、损耗策略三档、`RequestConversionChain` 记日志——这些已按设计借鉴落入本文（本节上文"可从 NewAPI 借鉴的"、[10-canonical-schema.md](./10-canonical-schema.md) 的 `ConversionDiagnostic`、[20-pipeline.md](./20-pipeline.md) §3 S4 的 `conversion_chain`）。
 3. **若将来确需其代码**：必须以**独立进程/服务边界**隔离（本地 HTTP/stdio，不 link 进同一进程），**并且先做许可证评估**——AGPL 的传染性只覆盖"基于该程序的衍生作品"，跨进程边界通信是否构成衍生作品在业界有争议、无定论，需单独的法务判断，本文不预设结论。
 
 ### 1.4 核心价值主张（按优先级）
 
 1. **格式互转 + 无损可逆**：`raw passthrough` 机制保证未建模字段不丢（[10-canonical-schema.md](./10-canonical-schema.md) §7）。
-2. **统计口径错位修正**：同样一次调用，四种格式的 usage 字段名与语义不同（`prompt_tokens` vs `input_tokens` vs `promptTokenCount`；`cache_creation_input_tokens` vs 无对应）。canonical 把它们归一，这是**计费可信的前提**，也是 fast path 下唯一必须做的事。
-3. **fast path**：客户端格式 == 上游格式时跳过结构转换，透传原始字节，旁路只做计量；S1 只做信封级惰性解析。**不为功能牺牲性能**。
+2. **统计口径错位修正**：同样一次调用，四种格式的 usage 字段名与语义不同（`prompt_tokens` vs `input_tokens` vs `promptTokenCount`；`cache_creation_input_tokens` vs 无对应）。canonical 把它们归一，这是**计费可信的前提**，也是每次请求都必须做的事（v1 没有"跳过归一"的旁路）。
+3. **一律走 canonical（always-canonical）**：v1 不做字节级 fast path——每个请求都完整 decode → canonical → encode，响应再完整转回来。换来单一代码路径、插件永远可见 canonical、usage 标准化永远执行、round-trip 测试永远被走到。字节级 fast path 降级为"未来可选优化"，须实测数据支撑才加回（[20-pipeline.md](./20-pipeline.md) §4）。
 4. **插件系统**：generic hook，操作对象只有 canonical。
 5. **dog-fooding**：网关把自己的用量/计费/配置数据暴露成工具，让 AI agent 自己查询分析。
 
@@ -155,7 +155,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 |---|---|
 | canonical schema（AG-IR v1）：共享信封 + 9 模态 payload + 媒体引用 + 多单位 usage + raw passthrough | [v1] **穷尽普查，一次做全** |
 | 3 个 chat adaptor 写透：`openai.chat`、`openai.responses`、`anthropic.messages` | [v1] |
-| fast path 透传 + usage 旁路嗅探（S1 信封级惰性解析） | [v1] |
+| canonical 全量往返（无字节级 fast path；同格式请求也完整 decode/encode） | [v1] |
 | 异步 usage/计费管道（多单位）+ Tier-1 存储 | [v1] |
 | 数据面认证（virtual key）+ 控制面本地认证 + passkey | [v1]（Phase 1 就绪；其唯一使用方 WebUI 是 [v1.5]/Phase 4，中间由 CLI 消费——"能力先于消费者就绪"，不是依赖倒置） |
 | round-trip 测试框架（adaptor 层 6 条 + schema 层全覆盖用例） | [v1] |
@@ -195,7 +195,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 |---|---|---|
 | **隐私优先** | 聊天数据持久化**默认关闭**；usage 元数据默认开启；落盘即加密；provider key/Authorization 头永不入库 | 分层存储 + 开关 + 脱敏（[65-storage-and-retention.md](./65-storage-and-retention.md)） |
 | **自托管、无人值守** | 单机或小集群，无 KMS/HSM；重启要能自动起来 | 密钥三档来源，默认 OS keyring 档（[65-storage-and-retention.md](./65-storage-and-retention.md) §3） |
-| **性能** | fast path 附加延迟 < 3ms p99（S1 只做信封级惰性解析，完整 canonical 物化推迟到非 fast path）；不为功能强制走转换 | fast path + 旁路计量（[20-pipeline.md](./20-pipeline.md) §4） |
+| **性能** | canonical 往返附加延迟为**实测记录值，不作为硬性验收门限**——canonical 往返在 Node 里就是 JSON parse + 对象映射 + stringify，典型对话请求亚毫秒到几毫秒，相对 LLM 推理可忽略；**不为功能牺牲性能**，也不为省这点开销维护第二条代码路径 | 一律完整走 canonical（[20-pipeline.md](./20-pipeline.md) §4） |
 | **插件只面对 canonical** | 插件拿不到任何 provider 原始 body | adaptor 模式接外部能力（[30-plugin-api.md](./30-plugin-api.md)） |
 | **流式是第一公民** | 不允许隐藏的"等全量再下一步" | 统一流式帧信封（[25-streaming.md](./25-streaming.md)） |
 | **不计费不确定性** | "未知"绝不用 0 表示 | 多单位 usage + source provenance（[10-canonical-schema.md](./10-canonical-schema.md) §6） |
@@ -213,13 +213,13 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
   client (任意格式)  │  ┌────────┐   ┌────────┐   ┌─────────┐   ┌──────────────┐  │
  ───────────────────▶│  │ S0     │──▶│ S1     │──▶│ S2      │──▶│ S3 onRequest │  │
    openai.chat      │  │Ingress │   │Decode  │   │Route    │   │  插件链      │  │
-   openai.responses │  │鉴权/限流│   │→信封   │   │fast path│   │  (压缩/注入) │  │
+   openai.responses │  │鉴权/限流│   │→canon   │   │ 排序    │   │  (压缩/注入) │  │
    anthropic        │  └────────┘   └────────┘   │ 判定    │   └──────┬───────┘  │
    gemini           │                            └─────────┘          │          │
    tts/asr/image    │                                                 ▼          │
                     │  ┌──────────────────────────────────────────────────────┐  │
                     │  │ S4 Encode (canonical → provider)                     │  │
-                    │  │   fast path: 透传原始字节                             │  │
+                    │  │   一律由 canonical 重新编码（无字节级 fast path）                 │  │
                     │  └───────────────────────┬──────────────────────────────┘  │
                     │                          ▼                                 │
                     │  ┌──────────────────────────────────────────────────────┐  │
@@ -247,10 +247,10 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
              └────────────┘      └────────────────┘     └─────────────────┘
 ```
 
-> **S1 是信封级惰性解析（review #8.3，作者已拍板定稿）**：fast path 下 S1 只解析「信封 + 路由必需字段」
-> （客户端格式识别、model / access_path、usage 信封位置、是否流式、请求体字节长度），**完整 canonical 物化
-> 推迟到真正需要它的阶段**；某个请求能否走这条路，由已启用插件的 manifest `scope` 在启动时算出并缓存。
-> 详见 [20-pipeline.md](./20-pipeline.md) §3（S1）与 §4.2。
+> **S1 一律物化完整 canonical（always-canonical）**：v1 没有"只解析信封、透传原始字节"的快路径——
+> 每个请求都完整解码成 canonical、完整编码成上游格式，响应再完整转回来。原 review #8.3 拍板的
+> "信封级惰性解析 + 插件 manifest `scope` 准入"（D-fastpath-1 / D-fastpath-2）**已废弃**，理由与加回的
+> 实测触发条件见 [20-pipeline.md](./20-pipeline.md) §4。
 
 ### 4.2 模块划分
 
@@ -310,7 +310,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 | **access path** | 送达上游的路径标识（`openai` / `openai-codex` / `xai-supergrok` / `bedrock` …）。与 provider 的区别：同一 provider 可有多条 access path（API key vs 订阅 OAuth）。完整模型 id = `<access_path>/<model_namespace>/<model>` |
 | **credential** | 上游侧凭据（api_key / oauth_device_code / oauth_browser / session_cookie / cloud_iam / local / upstream_proxy）。与数据面的 virtual key 是两回事 |
 | **virtual key** | 数据面（客户端侧）凭据，`sk-ag-…`，计费主键 |
-| **fast path** | 客户端格式 == 上游格式时跳过结构转换、透传原始字节的路径 |
+| **fast path（已废弃）** | 原指"客户端格式 == 上游格式时跳过结构转换、透传原始字节"的字节级路径。v1 已废弃，降级为未来可选优化，加回须满足 [20-pipeline.md](./20-pipeline.md) §4.4 的实测触发条件 |
 | **capability matrix** | `(access_path, model, modality, streaming)` → 支持情况 的登记表，路由据此拒绝/降级。**注意键是 access_path 不是 model**（见 [45-credentials.md](./45-credentials.md) §6） |
 | **codec** | 具体某个格式的编解码实现（`OpenAIChatCodec`） |
 | **tier-1 / tier-2** | 存储分层：tier-1 = usage 元数据（常开）；tier-2 = 消息内容（opt-in、加密） |
@@ -335,7 +335,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 | [10-canonical-schema.md](./10-canonical-schema.md) | AG-IR v1：共享信封 + 按模态 payload + 媒体引用 + 多单位 usage + raw passthrough + 四格式字段映射表 |
 | [12-coverage-survey.md](./12-coverage-survey.md) | **canonical 覆盖普查**：主流厂商各模态特性并集（设计期目标=全覆盖）+ 前向兼容规则 + canonical 边界结论 |
 | [15-modalities.md](./15-modalities.md) | 多模态（TTS / ASR / Image / Embedding / decision）方法论 + 每模态一个完整示例 + 按需补充简表；§6 是 decision 与 chat 的对照表与网关自身消费点 |
-| [20-pipeline.md](./20-pipeline.md) | 请求生命周期 **11 个阶段（S0–S10）**、fast path 判定、流式处理、工具调用循环、错误映射与重试/fallback、**§6 control-plane 判断（decision 消费点）** |
+| [20-pipeline.md](./20-pipeline.md) | 请求生命周期 **11 个阶段（S0–S10）**、always-canonical（无字节级 fast path）、流式处理、工具调用循环、错误映射与重试/fallback、**§6 control-plane 判断（decision 消费点）** |
 | [25-streaming.md](./25-streaming.md) | 跨模态统一流式帧信封、三种上游流式形态桥接、ASR 中间态、TTS 细节、流式计量 |
 | [30-plugin-api.md](./30-plugin-api.md) | 插件 hook TS 接口、生命周期、billion-context adaptor 设计 |
 | [40-provider-adaptors.md](./40-provider-adaptors.md) | **adaptor 契约/注册/映射方法论/round-trip 测试模板/新增检查清单** + usage 口径差异对照表 + adaptor 覆盖矩阵 + **§6 decision adaptor 与降级路径** |
@@ -404,7 +404,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 
 据公开文档（[Compatibility](https://openrouter.ai/docs/guides/features/compatibility.md)、[Reasoning Tokens](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens.md)、[Prompt Caching](https://openrouter.ai/docs/guides/best-practices/prompt-caching.md)）：
 
-- **透传**：实现了 OpenAI 接口的 provider，tools 原样下发；
+- **透传（语义不变地完成一次格式转换）**：实现了 OpenAI 接口的 provider，tools 按 OpenAI 形态下发（方言一致，仍过 codec/mapping）；
 - **归一**：自定义接口的 provider，transform + map properties；再不行把 tools 转成 **YAML template**；
 - **丢弃 + 明示**：模型不支持的参数（如非 OpenAI 模型的 `logit_bias`、OpenAI 的 `top_k`）**静默忽略**——这是我们不采纳的一点，改用 `dropped_capabilities` + `warnings` 显式记录；
 - **TTL 不翻译**：`cache_control.ttl` → OpenAI 被 drop；`prompt_cache_breakpoint.ttl` → Anthropic/Google 被 drop。这是"cache 语义不可跨格式无损翻译"的实证，我们的 `CacheControl` 因此把 `ttl` 与 `cache_name` 都建模并在映射表里标注为"可能被丢弃"（[10-canonical-schema.md](./10-canonical-schema.md) §4.4）；
@@ -513,4 +513,4 @@ OpenRouter 的 `GET /api/v1/models` 返回模型元数据 + 定价 + per-model r
 2. **§7.4 双层加密中"整库 + 列级"的分工**——影响备份/迁移/查询能力；已按决策 S1 统一，若要改回"只做应用层"必须同时改 65 S1、sources.md §4 与 70 Phase 4。
 3. **[25-streaming.md](./25-streaming.md) §1 的兼容性矩阵**——"桥接不了就拒绝"的取舍是否过严。
 
-次优先：fast path 与插件需求的冲突消解（[20-pipeline.md](./20-pipeline.md) §4.1/§4.2——S1 信封级惰性解析 + 插件 manifest `scope` 准入）、多单位 usage 的计费复杂度（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §4）。
+次优先：多单位 usage 的计费复杂度（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §4）、canonical 往返开销的实测基线（[20-pipeline.md](./20-pipeline.md) §4.4——若实测证明占比可观，可重新评估字节级 fast path）。

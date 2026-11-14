@@ -152,6 +152,72 @@
 - `30-plugin-api.md` §4.2 的 billion-context adaptor 示例 manifest 补 `scope: "full-canonical"`（它要改写
   messages，fast path 因此对它关闭）。
 
+## [Unreleased] — 2026-11-14 · always-canonical 与「透传」术语定稿
+
+仓库主人追加两个架构决定，本轮落入文档。
+
+### 决定 A：v1 全部走 canonical，去掉字节级 fast path
+
+**理由**：canonical 往返在 Node 里就是 JSON parse + 对象映射 + stringify，典型对话请求亚毫秒到
+几毫秒，相对 LLM 推理可忽略；私人低流量网关不值得维护两条代码路径。
+**换来**：单一代码路径、插件永远可见 canonical、usage 标准化永远执行、round-trip 测试永远被走到。
+
+| 原决定 | 处置 |
+|---|---|
+| D-fastpath-1（S1 信封档惰性解码，完整 canonical 推迟到 S3/S4/S6） | **作废**，降级为"未来可选优化" |
+| D-fastpath-2（插件 manifest `scope: "envelope-only" \| "full-canonical"` 静态准入） | **作废**；`scope` 字段无其他用途，标注废弃 |
+
+**落点**：
+
+- `20-pipeline.md`：§1 设计原则第 2 条、§2 阶段职责表（S1/S2/S4/S6/S8 的"跳过完整互转"表述全部改为
+  "一律完整走 canonical"）与数据流图、§3 S1 的两档说明、§4 整节改为"已废弃 + 存档 + 加回条件"、
+  §6.4、§8 `RequestTrace`、§9 待验证；`RequestContext.fast_path` → `canonical_roundtrip`（恒 true）。
+- `00-overview.md`：§1.4 核心价值主张、§2.1 范围表、§3 性能约束（**删除"< 3ms p99"硬门限**，改为
+  "canonical 往返附加延迟为实测记录值，不作为硬性验收门限"）、§4.1 数据流图与说明、§5 术语表
+  （fast path 标为已废弃）、§6 索引、§9 Review 指引。
+- `70-roadmap.md`：§0 组织原则、§1.1 阶段总览与版本映射表、Phase 1 交付物/验收（压测与可观测性条目
+  重写）、Phase 3/4/5 相关条目、§8 风险表。
+- `AGENTS.md`：关键设计约束的 fast path 一条改写。
+- `40-provider-adaptors.md`：§1.1 `Adaptor` 接口（`decode` 两档说明、`EncodedRequest.raw_bytes` /
+  `fast_path` 标废弃）、§1.2 最小实现面、§1.4 有序偏好表、§1.5 round-trip 模板（断言 B 与测试名）、
+  §1.6 检查清单。
+- `30-plugin-api.md`：§2 `PluginManifest.scope` 标废弃（`scope?: never`）、§2.1 删 `disableFastPath`、
+  §3 时序图、§4.2 示例 manifest 删 `scope`。
+- `10-canonical-schema.md`：§7.4、§9.3 脚注；`12-coverage-survey.md` §4.2 判据；
+  `15-modalities.md` §6.4 决策消费表；`README.md` 核心设计/目录/状态。
+- **加回条件（写实，不拍脑袋）**：`20-pipeline.md` §4.4 列了五条，核心是「实测 canonical 往返开销
+  占端到端延迟比例已不可忽略」「私人网关流量高到有回报」「双路径行为一致性有测试保障」「插件可见性
+  不倒退」「计费口径不倒退」。任一条不满足就维持 always-canonical。
+
+### 决定 B：「透传」= 语义不变地完成一次格式转换，不是零 mapping
+
+目标格式既可以是标准 OpenAI 形态（`{"type": "web_search"}`、标准 chat.completions 结构），也可以是
+上游方言（如 DeepSeek 的 `deepseek_web_search` 参数）；无论哪种都过 codec/mapping、都有 round-trip
+测试。**系统内不存在"原样转发字节"的路径。**
+
+**落点**：
+
+- `00-overview.md` §5 术语表新增「**透传 / passthrough**」条目；§7.0.3 OpenRouter quirks 三档里的
+  "透传"一条补上定义。
+- `50-builtin-search.md`：§3.1 标题改为"模式 A：上游原生执行（**语义透传 + 方言映射**）"，开头写明
+  透传的定义，同格式行从"**完全透传**，`tools[]` 原样"改为"语义透传 + 方言映射"；原"fast path 保证"
+  一段改为"两条路径对客户端行为一致"；§1 理由第 2 条同步。
+- `AGENTS.md` 关键设计约束补「透传」定义条目。
+- `README.md` 内置搜索一节同步。
+- **全文 grep "透传" 后统一**：`10-canonical-schema.md`（`source_format` 注释、§7.4、§9.3 脚注、Q19）、
+  `15-modalities.md` §8.2/§8.3（ASR 实时的 WS 中继改称"**字节级中继**"并注明它是音频传输层中继、
+  不是格式转换路径）、`25-streaming.md`（§1 兼容性矩阵、§2.1、§3.1 删"透传模式：原样转发字节"一条、
+  §3.3 路径 1 改名"字节级中继代理"、§4、§8.3、§10）、`30-plugin-api.md` §3/§4.4b、
+  `40-provider-adaptors.md` §1.4/§2.2c、`70-roadmap.md` Phase 4/5。
+  `docs/sources.md` 里转述第三方（Vercel AI SDK / NewAPI / LiteLLM / llm-bridge）命名的"透传"保留原样。
+
+### 附带：always-canonical 的存储侧收益（落盘即 canonical）
+
+因为 v1 一律走 canonical，网关上落盘的所有聊天记录天然就是 canonical 格式。推论写入
+`65-storage-and-retention.md` 新增 §5.6 与 `60-billing-and-dogfooding.md` §5：落盘即 canonical
+（不需为每家厂商各写一套解析/统计）、前缀压缩按消息/parts 差分而非字节差分、usage 多单位已归一化
+可直接消费、任何一条会话都能重放成任意 dialect、存储层只依赖 `ir_version`。
+
 ### 已知未处理（留给作者）
 
 - **类型抽取成 `ir/*.ts`**（#3 建议 2）：只写了提案，未执行；`tsc`/`ajv` CI 因此标注为"待启用"。
