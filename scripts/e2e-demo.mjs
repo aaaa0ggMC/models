@@ -14,6 +14,7 @@
 
 import { createGateway } from '../dist/composition-root.js';
 import { startHttpServer } from '../dist/http/server.js';
+import { createModelsEndpoints } from '../dist/http/models-endpoint.js';
 import { MemoryClientSink } from '../dist/gateway-core/pipeline/sink.js';
 
 const PORT = Number(process.env['AG_PORT'] ?? 8787);
@@ -210,13 +211,144 @@ async function demoRunnerAnthropicToOpenAi() {
   return outcome;
 }
 
+/**
+ * 演示 C：模型目录端点（`GET /v1/models`）——元数据面，不进出 pipeline。
+ *
+ * 这条同时演示三件事：
+ *   1. 启动时同步：`startHttpServer` 在 listen 前 await `models.start()`，上游 `/models`
+ *      被拉一次并写回能力矩阵（脚本第一条就是它）；
+ *   2. 分层合并：响应里的窗口/模态/effort/constraints 来自能力矩阵（运行时真值），
+ *      family/发布日期/知识截止来自 vendored models.dev 快照，价格（带峰谷 tiers）与
+ *      并发限额来自 DeepSeek 静态表——`provenance` 逐字段记着是谁说的；
+ *   3. OpenAI 兼容 superset：`{object:"list", data:[{id, object, created, owned_by}]}`
+ *      之外全是扩展键，真实 OpenAI SDK 客户端按已知键取值、忽略多余键。
+ */
+async function demoModelsEndpoint() {
+  section('演示 C · 模型目录：GET /v1/models（分层元数据 + 启动时同步上游 /models）');
+
+  const { ScriptedTransport } = await import('../dist/gateway-core/transport.js');
+  const transport = new ScriptedTransport([
+    // 第一条：上游 GET /models（启动时同步消费掉）
+    {
+      status: 200,
+      body: JSON.stringify({
+        object: 'list',
+        data: [
+          {
+            id: 'deepseek-flash',
+            object: 'model',
+            owned_by: 'deepseek',
+            name: 'DeepSeek-V4.1-Flash',
+            context_window: 1048576,
+            max_output_tokens: 393216,
+            input_modalities: ['text', 'image'],
+            output_modalities: ['text'],
+            effort: { supported_levels: ['low', 'high', 'max'], default_level: 'high' },
+            api_capabilities: {
+              anthropic_messages: {
+                system_prompt_update: 'in-history',
+                tool_update: 'addition-only',
+              },
+            },
+          },
+          {
+            id: 'deepseek-v4-pro',
+            object: 'model',
+            owned_by: 'deepseek',
+            name: 'DeepSeek-V4-Pro',
+            context_window: 1048576,
+            max_output_tokens: 393216,
+            input_modalities: ['text'],
+            output_modalities: ['text'],
+            effort: { supported_levels: ['low', 'high', 'max'], default_level: 'high' },
+            api_capabilities: {
+              anthropic_messages: {
+                system_prompt_update: 'leading-only',
+                tool_update: 'leading-only',
+              },
+            },
+          },
+        ],
+      }),
+    },
+  ]);
+
+  const gateway = createGateway({
+    mode: 'production',
+    transport,
+    config: { port: PORT, host: HOST },
+  });
+
+  const models = createModelsEndpoints({
+    catalog: gateway.models,
+    sync: gateway.modelSync,
+  });
+
+  const server = await startHttpServer({
+    port: PORT,
+    host: HOST,
+    runner: gateway.runner,
+    models,
+  });
+  process.stdout.write(`ingress 已启动: http://${HOST}:${PORT}（含 /v1/models）\n`);
+
+  // 1) 列表（带过滤：只要 deepseek、按上下文窗口降序）
+  process.stdout.write('\n→ GET /v1/models?owned_by=deepseek&sort=-context_window\n');
+  const listRes = await fetch(
+    `http://${HOST}:${PORT}/v1/models?owned_by=deepseek&sort=-context_window`,
+  );
+  const list = await listRes.json();
+  process.stdout.write(
+    `← HTTP ${listRes.status} object=${list.object} total=${list.total}\n` +
+      list.data
+        .map(
+          (m) =>
+            `  ${m.id}  owned_by=${m.owned_by}  created=${m.created}  ctx=${m.context_window}\n` +
+            `    family=${m.family}  release_date=${m.release_date}  知识截止=${m.knowledge_cutoff ?? '(上游未提供)'}\n` +
+            `    modalities=${JSON.stringify(m.input_modalities)}→${JSON.stringify(m.output_modalities)}  effort=${JSON.stringify(m.effort)}\n` +
+            `    constraints=${JSON.stringify(m.constraints)}\n` +
+            `    pricing=${m.pricing?.table_version} tiers=${m.pricing?.tiers?.length ?? 0} 节假日=${m.pricing?.holidays?.year ?? '—'}\n` +
+            `    access_paths=${(m.access_paths ?? []).map((p) => `${p.access_path}[${p.credential?.kind}]`).join(', ')}\n` +
+            `    字段来源: ${JSON.stringify(m.provenance.fields)}`,
+        )
+        .join('\n'),
+  );
+
+  // 2) 详情
+  process.stdout.write('\n→ GET /v1/models/deepseek-flash\n');
+  const oneRes = await fetch(`http://${HOST}:${PORT}/v1/models/deepseek-flash`);
+  const one = await oneRes.json();
+  process.stdout.write(
+    `← HTTP ${oneRes.status} id=${one.id} object=${one.object} owned_by=${one.owned_by}\n` +
+      `  supported_parameters(${one.supported_parameters.length})=${JSON.stringify(one.supported_parameters)}\n` +
+      `  per_request_limits=${JSON.stringify(one.per_request_limits)} concurrency=${JSON.stringify(one.concurrency)}\n` +
+      `  stale=${one.provenance.stale} last_successful_fetch=${one.provenance.last_successful_fetch ?? '—'}\n`,
+  );
+
+  // 3) 退役别名：404 且解释原因
+  process.stdout.write('\n→ GET /v1/models/deepseek-chat（已退役别名）\n');
+  const retiredRes = await fetch(`http://${HOST}:${PORT}/v1/models/deepseek-chat`);
+  const retired = await retiredRes.json();
+  process.stdout.write(`← HTTP ${retiredRes.status} ${JSON.stringify(retired.error)}\n`);
+
+  // 4) 管理员路由：没配令牌 → 503（拒绝一切，而不是放行）
+  process.stdout.write('\n→ GET /ag/models/sync（未配 AG_ADMIN_TOKEN）\n');
+  const adminRes = await fetch(`http://${HOST}:${PORT}/ag/models/sync`);
+  process.stdout.write(`← HTTP ${adminRes.status} ${JSON.stringify(await adminRes.json())}\n`);
+
+  server.close();
+  await gateway.shutdown();
+}
+
 const results = [];
 results.push(await demoHttpOpenAiChat());
 results.push(await demoRunnerAnthropicToOpenAi());
+results.push(await demoModelsEndpoint());
 
 section('演示完成');
 process.stdout.write(
-  `两次往返都跑通了：\n` +
+  `三次往返都跑通了：\n` +
     `  A. HTTP ingress（OpenAI Chat 客户端 → 同格式上游，fast path）\n` +
-    `  B. Runner 直跑（Anthropic Messages 客户端 → OpenAI Chat 上游，慢路径 + usage 归一）\n`,
+    `  B. Runner 直跑（Anthropic Messages 客户端 → OpenAI Chat 上游，慢路径 + usage 归一）\n` +
+    `  C. 模型目录（GET /v1/models：分层元数据 + 启动时同步 + OpenAI 兼容 superset）\n`,
 );
