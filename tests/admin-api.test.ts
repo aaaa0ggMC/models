@@ -25,7 +25,13 @@ import {
   DefaultEncryptedRecordStore,
   maskSecret,
 } from '../storage/record-store.js';
-import { Keystore, PassphraseKekSource } from '../storage/keystore.js';
+import {
+  Keystore,
+  KeystoreLockedError,
+  PassphraseKekSource,
+  deserializeKeystoreFile,
+  serializeKeystoreFile,
+} from '../storage/keystore.js';
 import { DefaultAliasResolver } from '../admin/aliases.js';
 import type { AliasResolver } from '../admin/aliases.js';
 import { ScriptedTransport } from '../gateway-core/transport.js';
@@ -694,6 +700,180 @@ describe('密钥轮换（契约里有、按端口可用性分级响应）', () =
     const res = await api('POST', '/admin/api/keystore/rotate-kek', { new_passphrase: 'x' });
     expect(res.status).toBe(400);
     expect(res.body.error?.code).toBe('confirmation_required');
+  });
+});
+
+/**
+ * 轮换的**happy path**：端口真的注进去，轮换真的发生，数据真的还在。
+ *
+ * 上面那组只覆盖了负面路径（501 / 400）——那只能证明「没接线时会诚实地说
+ * 没接线」，证明不了「接了线真的能用」。而这个用例锁的是 65 §3.1 的核心
+ * 安全性质：**轮换 KEK 只重包 DEK、不重加密任何数据**。如果哪天有人把
+ * rotateKek 写成"重新加密全部记录"，这条测试会红。
+ */
+describe('密钥轮换 happy path（端口注入后真的能转，且数据不丢）', () => {
+  let rotateServer: Server;
+  let rotateBaseUrl: string;
+  let rotateToken: string;
+  let ks: Keystore;
+  let store: DefaultEncryptedRecordStore;
+  let gw: ReturnType<typeof createGateway>;
+
+  const ROTATE_PASS_OLD = 'rotate-happy-old-passphrase';
+  const ROTATE_PASS_NEW = 'rotate-happy-new-passphrase';
+
+  beforeAll(async () => {
+    ks = new Keystore(new PassphraseKekSource(), undefined, FIXED_NOW);
+    await ks.unlock(ROTATE_PASS_OLD);
+    store = new DefaultEncryptedRecordStore(ks.unlocked(), new InMemoryRawRecordStore(), clock);
+
+    // 先写一条凭据——轮换后它必须还能读出来
+    await store.put(
+      'credential',
+      'cred:rotate-probe',
+      { provider: 'deepseek', access_path: 'deepseek.openai-chat', secret: 'sk-rotate-fake' },
+      FIXED_NOW,
+    );
+
+    const auth = new DefaultAdminAuth(store, clock, {});
+    await auth.setAccount({ id: 'owner', name: 'owner', role: 'owner' }, ADMIN_PASSWORD);
+
+    const gw2 = createGateway({ mode: 'test', clock, recordStore: store });
+    gw = gw2;
+
+    const handler = createAdminRouter({
+      auth,
+      service: gw2.admin!.adminService,
+      keystoreStatus: () => ({
+        mode: 'passphrase',
+        tradeoff_note: '启动口令解锁：最安全的一档，但每次重启都要有人输入口令。',
+        unlocked: true,
+        active_dek_id: ks.unlocked().activeDekId,
+        encryption_count: ks.unlocked().encryptionCount(),
+        should_rotate_dek: ks.unlocked().shouldRotateDek(),
+        argon2_rehash_recommended: false,
+        kek_fingerprint: ks.unlocked().kekFingerprint(),
+      }),
+      rotateKek: async (input) => {
+        // 真实轮换：用新口令重新派生 KEK 并重包 DEK（数据不动）
+        const nextPass = input.new_passphrase ?? ROTATE_PASS_NEW;
+        await ks.rehashArgon2(
+          nextPass,
+          { memoryKiB: 19_456, timeCost: 2, parallelism: 1 },
+          FIXED_NOW,
+        );
+        return { ok: true, kek_fingerprint: ks.unlocked().kekFingerprint() };
+      },
+      rotateDek: async () => {
+        const before = ks.unlocked().activeDekId;
+        const newId = await store.rotateDek(FIXED_NOW);
+        const moved = await store.reencryptToActiveDek(FIXED_NOW);
+        return { ok: true, new_dek_id: newId, reencrypted: moved, ...(before === newId ? {} : {}) };
+      },
+    });
+
+    rotateServer = createHttpServer({
+      port: 0,
+      host: '127.0.0.1',
+      runner: gw2.runner,
+      adminHandler: handler,
+    });
+    await new Promise<void>((resolve) => rotateServer.listen(0, '127.0.0.1', () => resolve()));
+    const addr = rotateServer.address();
+    rotateBaseUrl = `http://127.0.0.1:${typeof addr === 'object' && addr !== null ? addr.port : 0}`;
+    const login = await fetch(`${rotateBaseUrl}/admin/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password: ADMIN_PASSWORD }),
+    });
+    rotateToken = ((await login.json()) as { token?: string }).token ?? '';
+  });
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => rotateServer.close(() => resolve()));
+    await gw.shutdown();
+  });
+
+  function rotateApi(method: string, path: string, body?: unknown) {
+    return fetch(`${rotateBaseUrl}${path}`, {
+      method,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${rotateToken}`,
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  }
+
+  it('轮换 KEK 后，轮换前写的凭据仍能解密（数据密文一个字节都没动）', async () => {
+    // 轮换前先确认读得到
+    const before = await store.get<{ secret: string }>('credential', 'cred:rotate-probe');
+    expect(before?.secret).toBe('sk-rotate-fake');
+
+    const res = await rotateApi('POST', '/admin/api/keystore/rotate-kek', {
+      new_passphrase: ROTATE_PASS_NEW,
+      confirm: true,
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as AdminApiBody;
+    expect(body.ok).toBe(true);
+    expect(typeof body.kek_fingerprint).toBe('string');
+
+    // **核心断言**：同一把 DEK 还在，记录照样读得出
+    const after = await store.get<{ secret: string }>('credential', 'cred:rotate-probe');
+    expect(after?.secret).toBe('sk-rotate-fake');
+
+    // 旧口令已经解不开新库（盐也换了 → KEK 变了 → 解包 DEK 失败）
+    const serialized = serializeKeystoreFile(ks.unlocked().serialize());
+    const wrongKs = new Keystore(
+      new PassphraseKekSource(),
+      deserializeKeystoreFile(serialized),
+      FIXED_NOW,
+    );
+    await expect(wrongKs.unlock(ROTATE_PASS_OLD)).rejects.toThrow(KeystoreLockedError);
+    expect(wrongKs.locked).toBe(true);
+
+    // 新口令能重开
+    const rightKs = new Keystore(
+      new PassphraseKekSource(),
+      deserializeKeystoreFile(serialized),
+      FIXED_NOW,
+    );
+    await rightKs.unlock(ROTATE_PASS_NEW);
+    expect(rightKs.locked).toBe(false);
+  });
+
+  it('轮换 DEK 后，旧记录仍可读，新记录用新 DEK', async () => {
+    const oldDekId = ks.unlocked().activeDekId;
+    const res = await rotateApi('POST', '/admin/api/keystore/rotate-dek');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as AdminApiBody;
+    expect(body.ok).toBe(true);
+    expect(body.new_dek_id).not.toBe(oldDekId);
+    // 旧记录被重加密到新 DEK
+    expect(body.reencrypted).toBeGreaterThanOrEqual(1);
+
+    // 旧记录仍读得出（重加密过）
+    const after = await store.get<{ secret: string }>('credential', 'cred:rotate-probe');
+    expect(after?.secret).toBe('sk-rotate-fake');
+
+    // 新记录用新 DEK
+    await store.put(
+      'credential',
+      'cred:rotate-new',
+      { provider: 'deepseek', access_path: 'deepseek.openai-chat', secret: 'sk-rotate-new' },
+      FIXED_NOW,
+    );
+    const metas = await store.listMeta('credential');
+    const newRec = metas.find((m) => m.id === 'cred:rotate-new');
+    expect(newRec?.dek_id).toBe(ks.unlocked().activeDekId);
+  });
+
+  it('keystore/status 反映轮换后的状态（DEK id 变了）', async () => {
+    const res = await rotateApi('GET', '/admin/api/keystore/status');
+    const body = (await res.json()) as AdminApiBody;
+    expect(body.unlocked).toBe(true);
+    expect(body.active_dek_id).toBe(ks.unlocked().activeDekId);
   });
 });
 

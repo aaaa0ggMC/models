@@ -486,8 +486,16 @@ export interface KeystoreRotateKekRequest {
 
 export interface KeystoreRotateKekResponse {
   ok: boolean;
-  /** 轮换后仍可解密的数据条数（0 = 全部改用新 KEK 成功）。 */
+  /**
+   * 失败原因（**不含 KEK / 口令 / 任何密文**）。ok 为 false 时必有。
+   *
+   * ⚠️ 这里曾经挂着一句「轮换后仍可解密的数据条数（0 = 全部改用新 KEK 成功）」——
+   * 从别的字段复制串了，而 `error?: string` 装不下条数。若将来真的需要
+   * 「轮换后校验了多少条记录仍可读」，请另加 `verified_count?: number`，
+   * 不要往 error 里塞。
+   */
   error?: string;
+  /** 轮换后的 KEK 指纹（SHA-256 前 8 字节；不含 KEK 本体）。 */
   kek_fingerprint?: string;
 }
 
