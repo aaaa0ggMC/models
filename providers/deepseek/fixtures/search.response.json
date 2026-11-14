@@ -1,0 +1,29 @@
+{
+  "results": [
+    {
+      "rerank_score": 2.87,
+      "title": "AgentGateway 架构总览（示例文档）",
+      "url": "https://example.com/docs/agentgateway/overview",
+      "snippet": "示例摘要：AgentGateway 用自研 canonical 中间格式连接多家 LLM provider，插件只操作 canonical，统计计费走独立异步管道，主链路不被拖慢。",
+      "summary": "示例长摘要：AgentGateway 的核心是 AG-IR canonical 中间格式——客户端可以用 OpenAI Chat、OpenAI Responses、Anthropic Messages、Gemini generateContent 等任意主流格式发请求，网关负责转成上游 provider 格式，再把响应转回客户端格式，并在链路上提供插件、内置工具、用量统计与计费能力。架构上分为 ir/（canonical 唯一事实来源）、adaptors/（只做格式映射，不放业务逻辑）、gateway-core/（含 pipeline/，只做阶段编排，不实现具体能力）、plugins/ 与 builtin/（通过 hook/tool 接口挂载，不反向依赖 pipeline 内部）、metering/（用量与计费旁路消费，不允许反向影响请求结果）。请求生命周期用显式 Pipeline 阶段 S0 到 S10 共十一个阶段，正确处理流式 SSE 与工具调用多轮循环；fast path 在客户端格式与上游 provider 格式相同时跳过完整互转，只做 usage、finish_reason、tool_call id 的标准化。",
+      "content": "# AgentGateway 架构总览\n\n本页为测试夹具内容（example.com 假数据）。\n\n- canonical：AG-IR\n- 阶段：S0–S10\n",
+      "site_name": "Example Docs",
+      "site_icon": "https://example.com/favicon.ico",
+      "date": "2026-10-01T08:30:00Z",
+      "authority": 4
+    },
+    {
+      "rerank_score": 1.42,
+      "title": "DeepSeek 工具端点简介",
+      "url": "https://example.com/blog/deepseek-tools",
+      "snippet": "示例摘要：DeepSeek 在 /v1/tools 下提供 search、fetch、ocr、asr、tts 五个独立端点，按次、按页、按音频小时、按字符分别计费。",
+      "summary": "示例长摘要：DeepSeek 的工具端点与 chat 端点相互独立：search 与 fetch 按成功请求计费，ocr 按成功识别的页计费，asr 按音频时长计费，tts 按字符计费且一个中文字符算两个字符。五个端点都走 Bearer 鉴权，返回的 usage 形态各不相同，网关需要为每个端点单独构造 canonical usage，不能套用 chat 的 token 口径。",
+      "content": "",
+      "site_name": null,
+      "site_icon": null,
+      "date": null,
+      "authority": -1
+    }
+  ],
+  "future_top_level_field": { "kept_for_raw": true, "note": "未知顶层键必须活着进 raw" }
+}

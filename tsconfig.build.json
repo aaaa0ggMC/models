@@ -13,6 +13,7 @@
     "metering/**/*.ts",
     "plugins/**/*.ts",
     "credentials/**/*.ts",
+    "providers/**/*.ts",
     "capability/**/*.ts",
     "http/**/*.ts",
     "composition-root.ts"

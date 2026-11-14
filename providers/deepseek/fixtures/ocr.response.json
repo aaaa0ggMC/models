@@ -1,0 +1,25 @@
+{
+  "id": "ocr-fixture-0001",
+  "object": "ocr.result",
+  "created": 1763000400,
+  "purpose": "rich_layout_recognition",
+  "page_count": 2,
+  "pages": [
+    {
+      "index": 0,
+      "text": "<|ref|>AgentGateway 架构总览<|/ref|><|box|>[[52, 40, 948, 96]]<|/box|>\n正文第一段：本页为测试夹具内容。",
+      "finish_reason": "stop"
+    },
+    {
+      "index": 1,
+      "text": "<|ref|>第二章 canonical<|/ref|><|box|>[[60, 120, 700, 160]]<|/box|>\n正文第二段：AG-IR 是唯一事实来源。",
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {
+    "input_tokens": 1234,
+    "output_tokens": 567,
+    "total_tokens": 1801
+  },
+  "future_top_level_field": "未知顶层键必须活着进 raw"
+}

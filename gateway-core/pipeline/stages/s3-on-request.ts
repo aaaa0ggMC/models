@@ -38,6 +38,10 @@ export class S3OnRequest implements Stage {
     }
 
     let req = state.canonical_override ?? lazy.full();
+    // S2 路由后把 provider 侧真实 model id 写进信封（ir/envelope.ts 的 resolved_model）：
+    // 不写的话 encode 时 body.model 会是**客户端别名**（如 deepseek-flash-messages），
+    // 上游对不上模型名直接 400；adaptor 查上游声明的行为约束也依赖这个 id。
+    if (req.resolved_model === undefined) req.resolved_model = ctx.route.model;
     state.canonical = req;
     state.materialized = true;
 

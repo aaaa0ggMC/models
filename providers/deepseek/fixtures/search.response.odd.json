@@ -1,0 +1,27 @@
+{
+  "results": [
+    "not-an-object",
+    {
+      "rerank_score": "2.5",
+      "title": 42,
+      "url": "https://example.com/odd",
+      "snippet": "字段类型全错的条目：数字 title、字符串 rerank_score、缺 summary/content/site_*/date/authority",
+      "site_name": 7,
+      "date": 1760000000,
+      "authority": null
+    },
+    {
+      "rerank_score": 0.5,
+      "title": "只有必要字段的条目",
+      "url": "https://example.com/sparse",
+      "snippet": "示例摘要：缺 title 之外的全部可选字段，用于验证 decode 的默认值路径。",
+      "summary": "",
+      "content": "",
+      "site_name": null,
+      "site_icon": null,
+      "date": null,
+      "authority": -1
+    }
+  ],
+  "extra": "results 之外的顶层键"
+}

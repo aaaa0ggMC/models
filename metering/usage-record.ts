@@ -20,6 +20,7 @@ import type {
   FormatId,
   NormalizedFinishReason,
 } from '../ir/index.js';
+import type { PriceSnapshot, UsageCost } from './pricing.js';
 
 export type UsageRecordStatus = 'success' | 'error' | 'short_circuit';
 
@@ -91,6 +92,8 @@ export interface UsageRecord {
   /** provider 侧真实 model id。 */
   model: string;
   model_alias?: string;
+  /** 请求时点的 access path（S10 填，如 "chat" / "web_search" / "ocr"）。 */
+  access_path?: string;
   fast_path: boolean;
   attempts: number;
   // ---- 规范 usage ----
@@ -108,8 +111,26 @@ export interface UsageRecord {
   compaction?: { removed_tokens: number; kept_tokens: number; cost_tokens?: number };
   control_plane_cost?: ControlPlaneCost;
   external_cost: Array<{ kind: string; units: number; unit_cost: number }>;
-  /** 网关侧计算的费用（USD）。Phase 1 恒 0——定价表在 Phase 2（60 §4.1）。 */
-  cost: UsageCostBreakdown;
+  /**
+   * 网关侧计算的费用（USD），双口径：`cash`（实际现金，订阅路径恒 0）+
+   * `as_api`（等价 API 用量价值，订阅路径也照算）。
+   *
+   * 从 Phase 1 的 `UsageCostBreakdown`（单口径全零）换成 `UsageCost`：定价表接上之后
+   * （60 §4.1 的 Phase 2）必须能区分"这笔没收钱"和"这笔没算钱"，单口径做不到。
+   * 缺省 = `{cash: 0, as_api: 0, status: 'unpriced'}`——未接定价，不是"免费"。
+   */
+  cost: UsageCost;
+  /**
+   * 命中价格的快照（对账/重算的唯一依据）。`null` = 请求时拿不到价格；
+   * **缺省 = 未接定价**。三者不可互相冒充（同 R5 的立场）。
+   */
+  price_snapshot?: PriceSnapshot | null;
+  /** as_api 走了字符启发式估算时标注方法（R2：估算值必须与真实值可区分）。 */
+  estimate_method?: string;
+  /** 补算时间（epoch ms）。见 backfillCost：绝不用"当前价格"补历史。 */
+  backfilled_at?: number;
+  /** 补算用的价格表版本（与 price_snapshot.price_table_version 应一致）。 */
+  backfill_price_table_version?: string;
   cost_caliber?: CostCaliber;
   degradation?: DegradationEvent[];
   // ---- 质量/异常 ----
@@ -124,7 +145,7 @@ export interface UsageRecord {
   redaction_profile: string;
 }
 
-/** 全零的费用拆分（Phase 1 未接定价表）。 */
+/** 全零的费用拆分（Phase 1 未接定价表时作为 UsageCost 的两个口径的占位）。 */
 export function zeroCost(): UsageCostBreakdown {
   return {
     input: 0,
@@ -162,6 +183,14 @@ export interface UsageRecordInit {
   tool_calls?: ToolCallUsage[];
   agentic_turns?: number;
   trace_id?: string;
+  /** 请求时点的 access path（S10 填）。 */
+  access_path?: string;
+  /** as_api 走了估算时标注方法（见 pricing.ts 的 estimateCanonicalUsage）。 */
+  estimate_method?: string;
+  /** 请求时已解析到的价格快照（对账用）。 */
+  price_snapshot?: PriceSnapshot | null;
+  /** 已算好的费用（双口径）。缺省 = 未接定价的 unpriced 占位。 */
+  cost?: UsageCost;
 }
 
 /** 构造一条 UsageRecord；可选字段缺省省略而不是填 0（同 usage 规则 2 的立场）。 */
@@ -176,10 +205,12 @@ export function createUsageRecord(init: UsageRecordInit): UsageRecord {
     provider_format: init.provider_format,
     model: init.model,
     ...(init.model_alias === undefined ? {} : { model_alias: init.model_alias }),
+    ...(init.access_path === undefined ? {} : { access_path: init.access_path }),
     fast_path: init.fast_path,
     attempts: init.attempts,
     usage: init.usage ?? { units: {}, source: 'provider' },
     ...(init.usage_raw === undefined ? {} : { usage_raw: init.usage_raw }),
+    ...(init.estimate_method === undefined ? {} : { estimate_method: init.estimate_method }),
     finish_reason: init.finish_reason ?? (init.status === 'error' ? 'error' : 'stop'),
     stream: init.stream,
     ttfb_ms: init.ttfb_ms,
@@ -188,7 +219,8 @@ export function createUsageRecord(init: UsageRecordInit): UsageRecord {
     agentic_turns: init.agentic_turns ?? 0,
     builtin_tool_usage: [],
     external_cost: [],
-    cost: zeroCost(),
+    cost: init.cost ?? { cash: zeroCost(), as_api: zeroCost(), status: 'unpriced' },
+    ...(init.price_snapshot === undefined ? {} : { price_snapshot: init.price_snapshot }),
     status: init.status,
     ...(init.error_code === undefined ? {} : { error_code: init.error_code }),
     warnings: init.warnings ?? [],

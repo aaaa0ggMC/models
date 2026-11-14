@@ -33,6 +33,8 @@ import type { UsageEmitter } from '../../metering/emitter.js';
 import type { CredentialResolver } from '../../credentials/resolver.js';
 import type { CapabilityRegistry } from '../../credentials/capability-registry.js';
 import type { Clock, GatewayConfig, IdGenerator, Logger, Metrics } from '../../di/ports.js';
+import type { ProviderProfileRegistry } from '../../di/ports.js';
+import type { PricingService } from '../../providers/deepseek/pricing-service.js';
 
 /** 一次请求的全部注入依赖。测试里可整体替换任一依赖。 */
 export interface PipelineDeps {
@@ -49,6 +51,21 @@ export interface PipelineDeps {
   capabilityRegistry: CapabilityRegistry;
   router: Router;
   fastPathAdmission: FastPathAdmission;
+  /**
+   * provider profile 注册表（可缺省）。
+   *
+   * S10 在计量边界按 access path 查 profile，把厂商专有 usage 字段名归一成
+   * canonical（DeepSeek 的 prompt_cache_hit_tokens 等）；codec 侧按同一个注册表
+   * 查端点路径 / builtin tool 方言映射。缺省 = 没有任何 provider 专有归一。
+   */
+  providerProfiles?: ProviderProfileRegistry;
+  /**
+   * 定价服务（可缺省）：S10 在请求完成时按**当时可得的价格**一次性算出 cost 并快照
+   * 固化（price_snapshot 含档位/生效日/表版本）。缺省 = 不接定价，cost 记 unpriced
+   * （Phase 1 历史行为）。价格表更新后**不重算**已有记录——补录走历史价格
+   * （metering/pricing.ts 的 backfillCost）。
+   */
+  pricingService?: PricingService;
   /**
    * 客户端写出通道。**每次请求不同**（http/server.ts 的 NodeResponseSink 或测试的
    * MemoryClientSink），因此 Runner 的构造函数收 `Omit<PipelineDeps, "sink">`，

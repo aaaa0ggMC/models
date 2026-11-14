@@ -3,5 +3,7 @@
  */
 
 export * from './usage-record.js';
+export * from './pricing.js';
 export * from './emitter.js';
 export * from './memory-emitter.js';
+export * from './reconciliation.js';
