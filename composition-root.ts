@@ -38,6 +38,8 @@ import {
   deepseekRouteAliases,
   DEEPSEEK_ACCESS_PATH_IDS,
   DeepSeekModelDiscovery,
+  createDeepSeekCatalogSource,
+  createDeepSeekUpstreamSource,
   createDeepSeekPricingService,
   DeepSeekBalanceClient,
 } from './providers/deepseek/index.js';
@@ -61,6 +63,14 @@ import { PipelineRunner } from './gateway-core/pipeline/runner.js';
 import { createFastPathAdmission } from './gateway-core/pipeline/fast-path.js';
 import type { FastPathAdmission } from './gateway-core/pipeline/fast-path.js';
 import type { CapabilityEntry } from './ir/index.js';
+import {
+  ModelCatalog,
+  ModelSyncService,
+  createModelsDevSource,
+  providerResolverFromRouteTable,
+  type AccessPathCredentialLister,
+  type ModelMetadataSource,
+} from './catalog/index.js';
 
 export interface GatewayOptions {
   /** 覆盖配置（测试用）。缺省从环境变量读。 */
@@ -89,6 +99,29 @@ export interface GatewayOptions {
    * 的实时元数据刷新能力矩阵（窗口/模态/effort/上游约束）。不注入 = 只用静态表。
    */
   modelDiscovery?: DeepSeekModelDiscovery;
+  /**
+   * 模型目录（`/v1/models`）的**离线层 + 配置层**元数据来源。
+   *
+   * 缺省装配两份离线来源（顺序即优先级，后者覆盖前者）：
+   *   1. `offline:models.dev`——vendored models.dev 快照（family / 发布日期 / 知识截止 /
+   *      温度与结构化输出支持 / 开放权重 / 模态 / 限额）；
+   *   2. `offline:deepseek-static`——DeepSeek provider 静态表（并发限额 / 带峰谷 tiers 的
+   *      价格 / 路由别名 / 退役别名 / 约束语义）。
+   * 测试可整体替换（例如只留一份假来源，专门验证分层优先级）。
+   */
+  modelMetadataSources?: ModelMetadataSource[];
+  /**
+   * 模型目录的**上游层**来源（可选）。缺省装配 DeepSeek `/models`；注入假来源即可在
+   * 不起真实 API 的情况下测"上游刷新 → 响应变化"。
+   */
+  upstreamMetadataSources?: ModelMetadataSource[];
+  /** 同步参数覆盖（测试用；缺省走 config 的 modelSync* 字段）。 */
+  modelSync?: {
+    intervalMs?: number;
+    ttlMs?: number;
+    syncOnStart?: boolean;
+    scheduler?: import('./catalog/index.js').TimerScheduler;
+  };
   /**
    * 定价服务（可缺省）：S10 在请求完成时按当时可得价格算 cost 并快照固化。
    * 缺省注入 DeepSeek 实现（读仓库内 pricing.json；查不到价格的模型记
@@ -128,6 +161,15 @@ export interface Gateway {
    * 注意 DeepSeek **赠送余额优先扣**，余额差不等于现金支出。
    */
   balanceClient: DeepSeekBalanceClient;
+  /**
+   * canonical 模型目录（`GET /v1/models` 的单一事实来源）。
+   *
+   * 分层合并能力矩阵（运行时真值）+ 离线目录 + 上游实时 + 配置覆盖，逐字段记录来源。
+   * 与能力矩阵同源：窗口/模态/effort/constraints 全部读矩阵，不另写一份。
+   */
+  models: ModelCatalog;
+  /** 元数据同步服务（启动 / 周期 / 管理员触发三种方式）。 */
+  modelSync: ModelSyncService;
   /** 优雅退出：冲刷 usage 队列 + dispose 插件。 */
   shutdown(): Promise<void>;
 }
@@ -255,6 +297,24 @@ class MemoryKVNamespace implements KVNamespace {
 }
 
 /**
+ * access path → 凭据形态（只报类型与条数，**绝不碰明文**）。
+ *
+ * 为什么目录需要它：`access_paths[]` 要能表达"同一模型经不同凭据路径（API key /
+ * 订阅 OAuth）可用的能力与限额差异"——而"这条路径上是 API key 还是订阅"只有凭据解析器
+ * 知道。这里只取 `type` 与数量， secret 一个字节都不进目录。
+ */
+function accessPathCredentialLister(resolver: CredentialResolver): AccessPathCredentialLister {
+  return (accessPath) => {
+    const path = resolver.accessPath(accessPath);
+    if (path === undefined) return undefined;
+    return {
+      requires_credential: path.requires_credential,
+      credentials: resolver.credentialsFor(accessPath).map((c) => ({ type: c.type })),
+    };
+  };
+}
+
+/**
  * 系统级探针（余额查询等）用的最小 RequestContext。
  *
  * 为什么需要它：CredentialResolver.headersFor 的签名要 ctx（trace 用），而系统探针
@@ -361,11 +421,23 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
 
   // ---- 模型发现（可选）：启动后刷新一次，或按周期手动触发 ----
   let lastDiscovery: DeepSeekModelsResponse | undefined;
+  const discovery =
+    options.modelDiscovery ??
+    new DeepSeekModelDiscovery({
+      transport,
+      headersProvider: async () => {
+        const { headers } = await credentialResolver.headersFor(
+          'deepseek.openai-chat',
+          systemProbeCtx(clock),
+        );
+        return headers;
+      },
+      ...(config.deepseekBaseUrl === undefined ? {} : { baseUrl: config.deepseekBaseUrl }),
+    });
   const refreshModelCapabilities = async (): Promise<DiscoveryRefreshResult | undefined> => {
-    if (options.modelDiscovery === undefined) return undefined;
     try {
-      const result = await options.modelDiscovery.refresh(capabilityRegistry);
-      lastDiscovery = await options.modelDiscovery.discover();
+      const result = await discovery.refresh(capabilityRegistry);
+      lastDiscovery = await discovery.discover();
       logger.info('deepseek: 模型发现完成，能力矩阵已刷新', {
         discovered: result.discovered.length,
         updated: result.updated.length,
@@ -381,6 +453,53 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       return undefined;
     }
   };
+
+  // 路由表提前建：模型目录要按它反推 access path → provider（`mock-anthropic` 这类
+  // 不遵守「点号前前缀」约定的 id 只有路由表知道对应哪个 provider）
+  const routeTable = options.routeTable ?? defaultRouteTable();
+
+  // ---- 模型目录（/v1/models）：分层元数据 + 同步服务 ----
+  // 离线层顺序即优先级：models.dev 快照在前（广而浅），provider 静态表在后（窄而深，
+  // 覆盖前者的扁平费率——它带峰谷 tiers）。配置层（如果有）排最后，优先级最高。
+  const metadataSources =
+    options.modelMetadataSources ??
+    ([
+      createModelsDevSource({ ...(options.clock === undefined ? {} : { clock: options.clock }) }),
+      createDeepSeekCatalogSource({
+        ...(options.clock === undefined ? {} : { clock: options.clock }),
+      }),
+    ] satisfies ModelMetadataSource[]);
+  const upstreamSources = options.upstreamMetadataSources ?? [
+    createDeepSeekUpstreamSource({ discovery, capabilityRegistry, clock }),
+  ];
+  container.registerValue(TOKENS.ModelMetadataSources, metadataSources);
+
+  const modelSync = new ModelSyncService({
+    clock,
+    sources: upstreamSources,
+    logger,
+    metrics,
+    intervalMs: options.modelSync?.intervalMs ?? config.modelSyncIntervalMs,
+    ttlMs: options.modelSync?.ttlMs ?? config.modelUpstreamTtlMs,
+    syncOnStart: options.modelSync?.syncOnStart ?? config.modelSyncOnStart,
+    ...(options.modelSync?.scheduler === undefined
+      ? {}
+      : { scheduler: options.modelSync.scheduler }),
+  });
+  container.registerValue(TOKENS.ModelSyncService, modelSync);
+
+  const modelCatalog = new ModelCatalog({
+    capabilityRegistry,
+    sources: metadataSources,
+    upstream: modelSync,
+    clock,
+    logger,
+    providerResolver: providerResolverFromRouteTable(routeTable),
+    credentialLister: accessPathCredentialLister(credentialResolver),
+  });
+  // 配置层对矩阵字段的修正在此写回矩阵（响应与路由同源，见 ModelCatalog 文件头）
+  modelCatalog.applyConfigOverrides();
+  container.registerValue(TOKENS.ModelCatalog, modelCatalog);
 
   // ---- 插件 ----
   const services: GatewayServices = {
@@ -414,13 +533,8 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
   container.registerValue(TOKENS.UsageEmitter, emitter);
 
   // ---- 路由 ----
-  const router = new StaticRouter(
-    options.routeTable ?? defaultRouteTable(),
-    capabilityRegistry,
-    credentialResolver,
-  );
+  const router = new StaticRouter(routeTable, capabilityRegistry, credentialResolver);
   container.registerValue(TOKENS.Router, router);
-
   // ---- fast path 准入（D-fastpath-2）：启动时计算并缓存 ----
   const fastPathAdmission = createFastPathAdmission(pluginHost);
 
@@ -473,6 +587,8 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
         return headers;
       },
     }),
+    models: modelCatalog,
+    modelSync,
     shutdown,
   };
 }

@@ -52,6 +52,12 @@ export const TOKENS = {
   // ---- provider profile（provider 专有知识：端点路径 / usage 归一 / builtin tool 映射）----
   ProviderProfiles: createToken<import('./ports.js').ProviderProfileRegistry>('ProviderProfiles'),
 
+  // ---- 模型目录（/v1/models 的分层元数据 + 同步服务）----
+  ModelCatalog: createToken<import('../catalog/registry.js').ModelCatalog>('ModelCatalog'),
+  ModelSyncService: createToken<import('../catalog/sync.js').ModelSyncService>('ModelSyncService'),
+  ModelMetadataSources:
+    createToken<import('../catalog/types.js').ModelMetadataSource[]>('ModelMetadataSources'),
+
   // ---- 路由 ----
   Router: createToken<import('../gateway-core/router.js').Router>('Router'),
 

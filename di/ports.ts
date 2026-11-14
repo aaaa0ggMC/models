@@ -98,6 +98,19 @@ export interface GatewayConfig {
    * 留空 = 用默认值 https://api.deepseek.com（代理/内网镜像场景才需要覆盖）。
    */
   deepseekBaseUrl?: string;
+  /** 模型目录：启动时是否同步一次上游元数据（默认 true；关掉=只用静态表）。 */
+  modelSyncOnStart: boolean;
+  /** 模型目录：周期同步间隔（ms）；<= 0 = 不定时。 */
+  modelSyncIntervalMs: number;
+  /** 模型目录：上游元数据 TTL（ms），超过即在响应里标 `stale: true`。 */
+  modelUpstreamTtlMs: number;
+  /**
+   * 管理员令牌（只从 `AG_ADMIN_TOKEN` 读；**值不落盘、不进日志/trace**）。
+   *
+   * 门禁 `/ag/models/sync`（手动触发元数据同步，给将来 WebUI 用）。未配置时该路由
+   * 返回 503 并拒绝一切请求——"没配令牌"与"令牌不对"必须可区分。
+   */
+  adminToken?: string;
 }
 
 export const DEFAULT_CONFIG: GatewayConfig = {
@@ -113,6 +126,9 @@ export const DEFAULT_CONFIG: GatewayConfig = {
   debug: false,
   port: 8787,
   host: '127.0.0.1',
+  modelSyncOnStart: true,
+  modelSyncIntervalMs: 15 * 60 * 1000,
+  modelUpstreamTtlMs: 60 * 60 * 1000,
 };
 
 /**
