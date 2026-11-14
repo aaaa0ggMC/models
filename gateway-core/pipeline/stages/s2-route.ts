@@ -46,12 +46,7 @@ export class S2Route implements Stage {
 
     // fast path 判定：§4.1 四条件 + D-fastpath-2 插件准入
     const rawBodyAvailable = state.lazy.raw.byteLength > 0;
-    let eligible = isFastPathEligible(
-      ctx,
-      result.route,
-      deps.fastPathAdmission,
-      rawBodyAvailable,
-    );
+    let eligible = isFastPathEligible(ctx, result.route, deps.fastPathAdmission, rawBodyAvailable);
 
     // ---- 别名改写模型名 → fast path 必须失效 ----
     //

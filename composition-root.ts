@@ -100,8 +100,19 @@ export interface GatewayOptions {
    * 不注入 = 管理面仍可起来，但所有存储操作报"未装配"。
    */
   recordStore?: import('./storage/record-store.js').EncryptedRecordStore;
-  /** 已解锁的密钥库（可选；管理面密钥状态展示用）。 */
-  keystore?: { status(): import('./admin/api-types.js').KeystoreStatusResponse };
+  /**
+   * 密钥库控制端口（可选；管理面密钥状态展示与轮换用）。
+   *
+   * `status` 必须提供；`rotateKek` / `rotateDek` 可选——不给就说明该部署
+   * 不支持轮换（例如 key_file 模式下没有新口令可换），路由会明确回 501。
+   */
+  keystore?: {
+    status(): import('./admin/api-types.js').KeystoreStatusResponse;
+    rotateKek?(input: {
+      new_passphrase?: string;
+    }): Promise<import('./admin/api-types.js').KeystoreRotateKekResponse>;
+    rotateDek?(): Promise<import('./admin/api-types.js').KeystoreRotateDekResponse>;
+  };
   /** 元数据同步端口（可选；管理面的"同步触发"按钮用）。 */
   metadataSync?: import('./admin/service.js').MetadataSyncPort;
   /** 余额探测端口（可选；管理面的"余额探测"按钮用）。 */
@@ -603,9 +614,7 @@ function assembleAdmin(input: {
     credentialResolver,
     aliasResolver,
     ...(options.metadataSync === undefined ? {} : { metadataSync: options.metadataSync }),
-    ...(options.balanceProbe === undefined
-      ? {}
-      : { balanceProbe: options.balanceProbe }),
+    ...(options.balanceProbe === undefined ? {} : { balanceProbe: options.balanceProbe }),
     ...(input.usageSink === undefined
       ? {}
       : {
@@ -614,8 +623,8 @@ function assembleAdmin(input: {
             // Record<string, number>（宽类型）。这里显式放宽，让 metering 的
             // MemoryUsageSink 能直接注入而不必包一层转换类。
             list: (fromTs, toTs) =>
-              input.usageSink!.records
-                .filter((r) => r.ts >= fromTs && r.ts < toTs)
+              input
+                .usageSink!.records.filter((r) => r.ts >= fromTs && r.ts < toTs)
                 .map((r) => ({
                   request_id: r.request_id,
                   ts: r.ts,
@@ -667,6 +676,19 @@ function assembleAdmin(input: {
         argon2_rehash_recommended: false,
         kek_fingerprint: '',
       })),
+    // ---- 密钥轮换端口 ----
+    // 不注入 = 路由明确回 501「未实现」，不假装成功。注入走 options.keystore
+    // （它同时提供 status 与轮换能力，见下面的 KeystoreControlPort）。
+    ...(options.keystore === undefined
+      ? {}
+      : {
+          ...(options.keystore.rotateKek === undefined
+            ? {}
+            : { rotateKek: options.keystore.rotateKek }),
+          ...(options.keystore.rotateDek === undefined
+            ? {}
+            : { rotateDek: options.keystore.rotateDek }),
+        }),
     ...(serveStatic === undefined ? {} : { serveStatic }),
   });
 
