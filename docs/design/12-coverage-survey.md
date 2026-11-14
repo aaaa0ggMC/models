@@ -21,7 +21,7 @@
 
 ---
 
-## 1. Canonical 覆盖矩阵（chat 模态）
+## 1. Canonical 覆盖矩阵（chat 与 decision 模态）
 
 图例：✅ canonical 已表达（含字段位置）；⚠️ 已表达但不完整（见备注）；❌ 未表达（**这是缺陷，要走 §5 流程**）。
 
@@ -172,6 +172,44 @@
 
 ---
 
+### 1.5 decision 模态（判断模型）`[v1.5]`
+
+> 第五个模态。三家官方 API reference 已全部读到，下表为字段级确认结果（2026-11，来源见 [../sources.md](../sources.md) §5）。完整字段映射见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.2。
+
+| 特性 | Gemini Decisions | Jev (TypeSafe SystemOne) | OpenAI Decisions | canonical 落点 | 状态 |
+|---|---|---|---|---|---|
+| 端点 | `POST /v1beta/decisions` | `POST /v1/systemone` | `POST /v1/decisions`（Azure 变体同路径） | access path | ✅ |
+| model id | `gemini-decision-1`（唯一） | `jev-1.14.0` / `jev-latest` | `gpt-6-luna`（唯一） | `resolved_model` | ✅ |
+| 鉴权 | `x-goog-api-key` | `Authorization: Bearer` | `Authorization: Bearer`（Azure 支持 Entra ID） | credential | ✅ |
+| SDK | `client.decisions.create()`（google-genai ≥3.2） | `client.system_one()` | `client.decisions.create()`（openai ≥3.26.0/7.30.0） | — | ✅ |
+| 多模态内容输入 | `input`（string\|Content\|Content[]），块类型 `text`/`image`/`audio`/`video`/`document`；**不支持 tool-call/thought 块** | `state`（string\|object\|array）+ 可选 `assets`（image map） | `input`（string\|DecisionInputMessage[]），part `input_text`/`input_image`/`input_json` | `DecisionContent[]` + `MediaRef` | ✅ |
+| context 上限 | 262,144 tokens | 默认 64k/request + 32k/question；`Long-Context` 头 → 262k/262k | 1,050,000（max input 922,000） | 能力矩阵 | ✅ |
+| 批量问题 | `questions` **map<key,Question>**，1–1000，key `[A-Za-z0-9_-]+` ≤64 | `questions` **map<name,Question>**，无独立上限 | `questions` **array**，1–400，每题带 `name` | `questions[]` + `question_id` | ✅ |
+| 是非判断 | `type:"noul"`，`criteria` 为 `{true_description,false_description}` | `type:"noul"`，`criteria` 为 `{true,false}` | `type:"predicate"`，**无 criteria**，只 `instructions`+`name` | `type:"binary"` | ✅ |
+| 定集选择 | `type:"choice"`，`criteria` 为 map<optionKey,desc>（2–255） | `type:"choice"`，`criteria` 为 map（1–255） | `type:"choice"`，`choices:[{value,description}]`（2–255，value 可 string\|boolean） | `type:"choice"` + `options[]` | ✅ |
+| 固定量表 | `type:"score"`，`criteria` 为 string[]（2–255，建议 2–10） | `type:"score"`，`criteria` 为 array（1–10） | `type:"score"`，`levels:[{label,description}]`（2–10） | `type:"scale"` + `scale{}` | ✅ |
+| rubric 评估 | **无对应原语** | **无对应原语** | **无对应原语** | `type:"rubric"` | ⚠️ canonical-only |
+| 边界框 | — | `type:"box"` → `{top,bottom,left,right}` | — | `type:"box"` | ⚠️ 仅 Jev |
+| 校准概率 | `noul` 0.01–0.99 / `probabilities[key]` | `noul` / `probabilities[name]` | `probability`（predicate）/ `probabilities[].probability` | `probability` | ✅ |
+| 置信度 | `confidence`（**含 noul**） | `confidence`（**noul 没有**；box 可为 null） | `confidence`（**predicate 没有**） | `confidence?` | ✅ |
+| 逐选项概率 | `probabilities` **map<key,p>** | `probabilities` **map<name,p>** | `probabilities` **[{value,probability}]（数组）** | `option_probabilities?[]` | ✅ |
+| 逐题拒答 | ❌（整请求 `prompt_feedback.block_reason`） | ❌ | **✅ `{type:"refusal",name}`**，其他题仍作答 | `refusal?` | ✅ |
+| 理由/解释 | ❌ | ❌ | ❌ | `rationale?`（前向兼容） | ⚠️ |
+| usage | `{total_input_tokens, input_tokens_by_modality[], total_output_tokens:0, total_tokens}` | `{input_tokens, output_tokens}`（**output 免费但非 0**） | `{input_tokens, input_tokens_details{cache_write_tokens,cached_tokens}, output_tokens, output_tokens_details{reasoning_tokens}, total_tokens}` | `units.tokens` + `usage_raw` | ✅ |
+| 输出计费 | **0 token 不计费** | **免费但 usage 非 0** | **不计费**（但上报） | `pricing_state.output="free"` | ✅ |
+| cache | ❌ | ❌ | ✅ `cached_tokens` / `cache_write_tokens` | `cache_read/write_tokens` | ⚠️ 仅 OpenAI |
+| 输入单价 | $0.10/M | $0.042/M | $0.10/M | 定价表 | ✅ |
+| 免费层 | Free：输入免费 + 200 RPM/50K TPM/10K RPD；Tier1 1,500/1M/50K；Tier2 5,000/4M/unlimited；Tier3 15,000/10M/unlimited | 未见免费额度文档 | 无专属限额表 **`[待验证]`** | 路由预算 | ⚠️ |
+| 延迟 | 150–250 ms e2e / 50–100 ms compute；**1→100 题近乎持平** | 自报 70–500 ms；cookbook mean 103 ms | ~10x 快于 Responses API（150 ms vs 1.6 s） | `RequestTrace` | ✅ |
+| 流式 | ❌ | ❌ | ❌ | `StreamOptions.mode:"none"` | ✅ |
+| 能否做 chat | ❌ model card 明确 text generation / structured outputs / function calling / thinking / caching / batch / Live API **全部 not-supported**，output token limit = 0 | ❌ "do not write replies, produce code, or generate explanations" | ❌ `/v1/decisions` 只收 questions 只回 typed answer（底层 gpt-6-luna 支持 Chat，但该端点不能用） | — | ✅ |
+| 错误码 | 400 + `error.code` ∈ {safety, prohibited_content, blocklist, image_safety, content_blocked}；超限也 400 | 400/401/413/415/422/429/529（body ≤32 MiB、嵌套 ≤64） | 401/403/429(rate_limit_error/slow_down/credit_balance_exhausted)/500/503(server_is_overloaded) | `CanonicalError` | ✅ |
+| 区域 | 仅 Gemini Developer API v1beta（Vertex "coming soon"） | — | US + Europe (EEA+CH)，EU residency，ZDR/HIPAA；Azure 版 East US 2 排除 | 路由过滤 | ✅ |
+
+**「1→100 题近乎持平」是批量优势的核心证据**：TypeSafe 实测 13 问合并 1 次调用 = 13 次单独调用的 **1/12.2 成本、1/11.8 时间**。因此控制面判断应**攒批**，不要一个判断发一次请求（见 [20-pipeline.md](./20-pipeline.md) §6）。
+
+**降级路径（重要）**：上游只有 chat 模型时，用 chat + `response_format: json_schema` 模拟 decision，响应标记 `calibration: "degraded"`。设计见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.3，实测代价见 [15-modalities.md](./15-modalities.md) §6.1。
+
 ## 2. Canonical 覆盖矩阵（多模态模态）
 
 图例同上。
@@ -239,6 +277,7 @@
 具体地，canonical **装得下**：
 - OpenAI / Anthropic / Gemini 三家 chat 格式的全部请求与响应字段（§1.1–1.3）；
 - TTS / ASR / Image / Embedding / Rerank / Moderation 六种模态的完备参数（§2）；
+- **decision 模态**：多模态内容引用 + 四类问题（binary / choice / scale / rubric）+ 校准概率与置信度 + 逐选项概率（§1.5）；
 - ElevenLabs / MiniMax / Azure / Google Cloud / Deepgram / AssemblyAI / Stability / BFL / Mistral / Cohere / Bedrock / Vertex 的专有特性（§1.4）——全部通过 `native.<vendor>.*` 命名空间或结构化字段表达；
 - 任何我们没想到的东西——通过 `raw.unmapped` / `_raw` / `UnknownPart`。
 
@@ -254,6 +293,7 @@ canonical **不装**：
 | 类别 | 例子 | 为什么先不做 adaptor |
 |---|---|---|
 | 我们不会用的厂商 | Azure TTS、Google Cloud TTS、Stability、BFL、Mistral、Cohere | 没有使用场景；adaptor 写了没测试会腐烂 |
+| decision 的非首选上游 | Jev / OpenAI Decisions（若 Gemini Decisions 够用） | 品类相同，先打通一家；其余按需 |
 | 已有等价替代的 | Deepgram / AssemblyAI（OpenAI Whisper 够用） | 按需再写 |
 | 实验性/不稳定的 | Gemini Live API、Anthropic `context_management` | 等稳定；canonical 已留位 |
 | 明确非目标 | Video | 只留 schema 占位 |
@@ -285,3 +325,19 @@ canonical **不装**：
 10. OpenAI `prompt_cache_breakpoint` + `prompt_cache_options{mode,ttl}` 的完整字段（GPT-5.6+）。
 11. Cohere rerank / Mistral 的完整字段集（只做了粗粒度）。
 12. Bedrock / Vertex 的专有参数全集（`additionalModelRequestFields` / `labels` / inference profile）。
+
+### 5.1 decision 模态的待验证项（Q21–Q24 已由本次调研解答，其余仍开放）
+
+**已解答**（结论见 §1.5 与 [../sources.md](../sources.md) §5）：
+- ~~Q21~~ 三家确切字段名/usage 形状/错误码——**已全部读到官方 API reference**，映射表在 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.2。
+- ~~Q22~~ Gemini 免费额度与区域、Jev 模型 id 与计价——**已确认**（Gemini Free 200 RPM/50K TPM/10K RPD、输入免费；Jev `jev-1.14.0` $0.042/M；OpenRouter 亦可用）。
+- ~~Q23~~ decision 能否 chat——**三家官方文档均明确不能**（Gemini model card output token limit = 0；Jev "do not write replies"；OpenAI 端点只收 questions）。
+- ~~Q24~~ chat 模拟的校准性/延迟/成本代价——**有已发表实测**（TypeSafe cookbook：26.8x–176.9x 慢、4.1x–1189x 贵；稳定性 LLM 变号 >10% vs Jev ≤6.7%）。
+
+**仍开放**：
+17. **Q25（decision）**：部分问题失败时的上游语义——canonical 已选"部分答案 + 每题 error"（OpenAI 的逐题 `refusal` 支持这个语义），但 Gemini 是**整请求**被拦（`prompt_feedback.block_reason`，`answers` 为空）、Jev 无对应机制。三家语义不齐，adaptor 需分别处理。
+18. **Q26（decision）**：OpenAI Decisions 的专属 rate limit 数值与是否与 `gpt-6-luna` chat/responses 共享配额池（无官方限额表）。
+19. **Q27（decision）**：OpenAI Decisions 的专属 4xx error code（questions >400、choices >255、images >128 等）——API reference 只列 200。
+20. **Q28（decision）**：Jev 的图片/`box` 能力需 opt-in header，该 header 经网关转发时的行为未验证。
+21. **Q29（decision）**：Gemini Decisions 的可用区域清单（官方只说 "Gemini Developer API (v1beta)"，Vertex "coming soon"，OpenRouter 标注无 EU in-region routing）。
+22. **Q30（decision）**：聚合校准度好是否等于我们的具体判断任务有可用阈值——AIHubMix 明确警告"不等于"，需在自己的 compact/escalate/stop 任务上抽样校准。

@@ -64,6 +64,19 @@ interface UsageRecord {
   agentic_turns: number;             // 网关工具循环轮数
   builtin_tool_usage: Array<{ name: string; count: number; backend?: string }>;
   compaction?: { removed_tokens: number; kept_tokens: number; cost_tokens?: number };
+  /** 控制面判断成本（decision 子请求：路由/策略/工具选择/循环控制）。
+   *  与 compaction 同级，**不计入用户 input_tokens**，但要可查询——否则看不到
+   *  「网关自己想花了多少钱」。见 20-pipeline.md §6.3。 */
+  control_plane_cost?: {
+    requests: number;                  // decision 子请求次数
+    questions: number;                 // 问的题目总数
+    input_tokens: number;
+    output_tokens: number;
+    /** 输出是否免费（decision 的典型定价形态） */
+    output_free: boolean;
+    cash_micros: number;
+    calibration: "native" | "degraded" | "skipped";
+  };
   external_cost: Array<{ kind: string; units: number; unit_cost: number }>; // 搜索 API 等
   cost: {                            // 网关侧计算的费用（USD）
     input: number; output: number; cache_read: number; cache_write: number;

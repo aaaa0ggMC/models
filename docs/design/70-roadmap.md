@@ -17,7 +17,7 @@
 | 1 | 骨架与最小闭环 | canonical + 3 个 chat adaptor + fast path + round-trip 框架 + 计费管道 v1 + 凭据模型 v1 |
 | 2 | 第二个 provider + 计费口径 | Gemini adaptor + usage 归一完整 + 流式全链路 + dog-fooding Tier-1 |
 | 3 | 插件系统与长上下文 | 5 hook + acp-kernel adaptor + 网关工具循环 |
-| 4 | 内置搜索 + 多模态 v1 + 加密存储 | web_search + 多模态示例 adaptor + Tier-2 加密 + 前缀压缩 + WebUI |
+| 4 | 内置搜索 + 多模态 v1 + decision + 加密存储 | web_search + 多模态示例 adaptor + **decision adaptor + 降级路径** + Tier-2 加密 + 前缀压缩 + WebUI |
 | 5 | 多模态补全 + 运维面 | 按需 adaptor + 能力矩阵三态 + 看板 + 备份恢复 |
 
 **交付物**
@@ -67,7 +67,7 @@
 - 双路计量（上游 usage + 自估算）+ `usage_mismatch` 告警（[25-streaming.md](./25-streaming.md) §8）
 - 定价表 + 成本计算（整数微美元）+ cache write 按 TTL 分档 + catalog base/overlay
 - 流式 SSE 全链路：chat 4 格式互转的流式（含 `part.begin/delta/end` 折叠）
-- 错误映射 + 重试/fallback 矩阵（[20-pipeline.md](./20-pipeline.md) §6.3）+ `capability_rejected: prompt_too_long` 约定 + 流式空闲超时
+- 错误映射 + 重试/fallback 矩阵（[20-pipeline.md](./20-pipeline.md) §7.3）+ `capability_rejected: prompt_too_long` 约定 + 流式空闲超时
 - dog-fooding agent 工具集 v1（Tier-1：`usage_query` / `cost_report`）
 - 凭据模型 v1.5：`oauth_device_code`（OpenAI Codex / xAI SuperGrok）+ 设备码登录流程 + 过期预警 + 自动降级（[45-credentials.md](./45-credentials.md) §5）
 
@@ -96,6 +96,7 @@
 - **压缩不破坏不透明思考块**（Anthropic `thinking.signature` / `redacted_thinking`、Gemini `thoughtSignature`、Responses `reasoning.encrypted_content`）——有专项测试
 - 插件抛异常不导致 5xx；`fatal: true` 的插件按预期阻断
 - fast path 关闭率可观测（"多少请求因插件/能力不支持走了转换"）有仪表盘
+- 工具循环的 continue/escalate/stop 决策先用**启发式**实现（decision  adaptor 在 Phase 4 落地后切换），接口上预留 `DecisionClient` 注入点
 
 ## 5. Phase 4 · 内置搜索 + 多模态 v1 + 加密存储
 
@@ -106,6 +107,7 @@
 - 两种实现模式（上游原生透传 / 网关自执行 + agentic loop）+ `max_tool_calls` 预算与"成本即停止条件"
 - `SearchBackend` 抽象 + searxng 后端 + 缓存 + 引用编号
 - 多模态 v1（方法论 + 每模态一个完整示例）：`tts`（OpenAI + ElevenLabs）、`asr`（OpenAI Whisper）、`image`（OpenAI images）、`embedding`（OpenAI）
+- **decision 模态 v1**：`gemini.decisions` adaptor（首选，有免费层 + 最低 ECE）+ chat 模拟降级路径（`calibration:"degraded"`）+ `DecisionClient` 注入点接通工具循环的路由/compact-escalate-stop 判断；**默认开启攒批**（[20-pipeline.md](./20-pipeline.md) §6.3）
 - 跨模态流式：统一帧信封 + SSE 命名 + 三种上游形态桥接 + WS 透传代理（[25-streaming.md](./25-streaming.md)）
 - **Tier-2 加密存储落地**：SQLite + 整库加密 + 列级信封加密 + 分层开关 + 脱敏 + 保留策略 + 前缀压缩（[65-storage-and-retention.md](./65-storage-and-retention.md)）
 
@@ -115,6 +117,7 @@
 - ASR 实时：透传模式下 WS 双向正常；转换模式下 interim 的 `revision` 语义正确
 - 开启 `persist_messages` 后：数据落盘即密文；用错误口令无法解密；导出文件可在另一台机器用正确口令恢复
 - 前缀压缩实测压缩率达到 [60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §7.3 的量级估计
+- **decision**：`/v1/decisions` 端到端跑通（多模态输入 + 批量问题 + 逐选项概率）；**三个映射陷阱各有 round-trip 测试**（map vs array 的 answers/probabilities、打乱 questions 顺序后答案仍对得上、confidence/probability 可选性）；**`usage` 三种"输出免费"表现都被正确处理**（Gemini 恒 0 / Jev 非 0 但免费 / OpenAI 上报不计费）；**Gemini option key 不用位置性命名**（字节序排序会改变相对位置）；上游只有 chat 时降级生效且响应带 `calibration:"degraded"`；**策略检查类判断在降级状态下明确失败而非静默用 chat 顶替**（有测试）；`usage` 正确区分"输出免费"（`pricing_state.output="free"`）与"上游没报 usage"（键省略 + warning）
 - WebUI v1：fork LibreChat 完成 rebrand + `/gateway` + `/usage` + `/plugins` 三个路由
 
 ## 6. Phase 5 · 多模态补全 + 运维面
@@ -144,6 +147,8 @@
 4. **不内置模型推理**。网关不跑模型，只做路由与转换。
 5. **不做响应侧内容压缩/摘要**（见 [25-streaming.md](./25-streaming.md) §7.3）。
 6. **Phase 5 前不做 video 模态**（能力矩阵里留位，schema 留位，实现不做）。
+7. **decision 不做流式**（三家官方均不支持，见 [15-modalities.md](./15-modalities.md) §6.2）；也不做"用 decision 替代 chat"的尝试——它是控制面能力，单向。
+8. **Phase 5 前不接入开源自托管 decision 模型**（261 个 open-weights 系统，Jeff / clef / mammoth-1 等）——先打通商业 API，自托管作为 `local` access path 的后续可选项。
 
 ## 8. 关键风险与缓解
 

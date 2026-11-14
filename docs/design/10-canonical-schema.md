@@ -202,6 +202,7 @@ type FormatId =
 ```typescript
 type ModalityKind =
   | "chat"        // [v1] 最丰富
+  | "decision"    // [v1.5] 第五模态：判断模型，见 15-modalities.md §6
   | "embedding"   // [v1]
   | "tts"         // [v1.5]
   | "asr"         // [v1.5]
@@ -212,6 +213,7 @@ type ModalityKind =
 
 type ModalityPayload =
   | ChatPayload              // kind === "chat"
+  | DecisionPayload          // kind === "decision"
   | EmbeddingPayload
   | TtsPayload
   | AsrPayload
@@ -221,7 +223,9 @@ type ModalityPayload =
   | VideoPayload;            // { } 空占位 + raw
 
 type ModalityResponsePayload =
-  | ChatResponsePayload | EmbeddingResponsePayload | TtsResponsePayload
+  | ChatResponsePayload
+  | DecisionResponsePayload  // kind === "decision"
+  | EmbeddingResponsePayload | TtsResponsePayload
   | AsrResponsePayload | ImageResponsePayload | RerankResponsePayload
   | ModerationResponsePayload | VideoResponsePayload;
 ```
@@ -502,7 +506,147 @@ interface StreamOptions {
 }
 ```
 
-`on_mismatch` 的默认值按模态不同：chat 默认 `bridge`（SSE 互转是成熟路径），`ws-duplex` 需求默认 `reject`（见 [25-streaming.md](./25-streaming.md) §1）。
+`on_mismatch` 的默认值按模态不同：chat 默认 `bridge`（SSE 互转是成熟路径），`ws-duplex` 需求默认 `reject`（见 [25-streaming.md](./25-streaming.md) §1）。**decision 模态默认 `reject`**——它没有流式语义（见 §4.6）。
+
+### 4.6 decision 模态 payload（判断模型）`[v1.5]`
+
+> **这不是 chat 的特例，是独立模型品类。** decision 模型不做对话、不写句子：输入多模态内容 + 一批相互独立的问题，一次前向计算对候选选项评分，返回**校准概率 + 置信度**。定位是低延迟控制面（工具选择、策略检查、模型路由、上下文质量评估、compact/escalate/stop 决策）。与 chat 的逐项对照见 [15-modalities.md](./15-modalities.md) §6.1。
+
+```typescript
+interface DecisionPayload {
+  /** 被判断的内容。复用 §5 的媒体引用模型（inline / uri / asset 三态） */
+  content: DecisionContent[];
+
+  /** 问题列表。问题之间相互独立，可批量（上游上限见能力矩阵，Gemini 报道为 1000） */
+  questions: DecisionQuestion[];
+
+  /** 是否要求逐选项概率（默认 true） */
+  include_option_probabilities?: boolean;
+  /** 是否要求解释/理由（部分上游支持；代价是延迟与输出计费） */
+  include_rationale?: boolean;
+
+  /** 温度类参数：decision 模型的"随机性"通常不可调或调了对校准有害 */
+  params?: {
+    /** 上游专有旋钮（如 Gemini 的 decision 特定配置） */
+    native?: Record<string, unknown>;
+  };
+
+  native?: Record<string, unknown>;
+  raw: RawEnvelope;
+}
+
+interface DecisionContent {
+  /** 文本片段 */
+  text?: string;
+  /** 多模态片段（图片/音频/视频/PDF），复用 MediaRef */
+  media?: MediaRef;
+  /** 该片段在判断中的角色（如 "context" / "candidate" / "rubric_reference"） */
+  role?: string;
+}
+
+/**
+ * 问题类型。canonical 用五种稳定类型，上游专有名字在 adaptor 层做别名映射。
+ *
+ * 实测三家原语命名不一致（2026-11 官方 API reference，见 40-provider-adaptors.md §6.2）：
+ *   Gemini ： noul    | choice | score   （另 document 块类型，非问题类型）
+ *   Jev    ： noul    | choice | score | box
+ *   OpenAI ： predicate | choice | score
+ * 即"是非判断"在三家有三个名字（noul / noul / predicate），canonical 统一为 binary。
+ */
+type DecisionQuestionType =
+  | "binary"        // 是非判断（yes/no）↔ Gemini/Jev noul、OpenAI predicate
+  | "choice"        // 定集选择（从 options 里选）↔ 三家 choice
+  | "scale"         // 固定量表评分（离散档）↔ 三家 score
+  | "rubric"        // rubric 评估。⚠️ **三家均无对应原语**，adaptor 映射为 choice 或 scale + criteria
+  | "box";          // 边界框（Jev 专有）。⚠️ 仅 Jev 实现，其余 adaptor 会 drop + warn
+
+interface DecisionQuestion {
+  id: string;                     // 问题稳定 id，响应按它回填
+  type: DecisionQuestionType;
+  /** 问题文本 / 判断指令 */
+  prompt: string;
+
+  /** 候选选项集。binary 可省略（默认 ["yes","no"]）；scale 用 labels 表达档位 */
+  options?: DecisionOption[];
+
+  /** scale 类型：量表定义 */
+  scale?: {
+    min: number;
+    max: number;
+    step?: number;
+    /** 档位标签（如 ["很差","差","中","好","很好"]） */
+    labels?: string[];
+  };
+
+  /** rubric 类型：评分标准 */
+  rubric?: {
+    /** 评分维度 */
+    criteria: string;
+    /** 达标阈值（达到即算通过） */
+    pass_threshold?: number;
+    /** 参考样例（可选） */
+    reference?: MediaRef[];
+  };
+
+  /** 该问题是否允许多选（choice 类型；默认 false） */
+  multiple?: boolean;
+  /** 该问题关联的内容片段索引（默认全部） */
+  content_refs?: number[];
+
+  native?: Record<string, unknown>;
+}
+
+interface DecisionOption {
+  /** 选项值（回传给客户端） */
+  value: string;
+  /** 选项展示名 */
+  label?: string;
+  /** 选项描述（帮助模型判断） */
+  description?: string;
+}
+
+interface DecisionResponsePayload {
+  /** 按 questions[].id 回填 */
+  answers: DecisionAnswer[];
+}
+
+interface DecisionAnswer {
+  question_id: string;
+  /** 选中的选项值（binary/choice）；scale 为档位值；rubric 为分数；box 为坐标对象 */
+  label: string;
+  /**
+   * 校准概率（0-1）。decision 模型的核心产出。
+   * ⚠️ **可选**：OpenAI 的 `predicate` 类型把它直接作为顶层字段返回，而 choice/score
+   * 把它放在 probabilities 里；极端情况下上游可能不给。缺省省略，不填 0（规则 2）。
+   */
+  probability?: number;
+  /**
+   * 置信度分数（0-1）。与 probability 语义不同，二者都保留。
+   * ⚠️ **可选且三家不一致**：Gemini 的 noul 有 confidence，Jev 的 noul 没有，
+   * OpenAI 的 predicate 也没有。因此绝不能假设它存在。
+   */
+  confidence?: number;
+  /** 逐选项概率。⚠️ 可选——同上，OpenAI predicate 不给 */
+  option_probabilities?: Array<{ value: string; probability: number }>;
+  /** 该题被拒答（OpenAI 的 `refusal`）。**逐题拒答，同请求其他题仍作答** */
+  refusal?: { reason: string };
+  /** 理由/解释。⚠️ **三家均不支持**（decision 不写句子），字段仅作前向兼容 */
+  rationale?: string;
+  /** 上游原始 answer 对象 */
+  raw?: unknown;
+}
+```
+
+**设计说明（D8）**：`probability`（校准概率）与 `confidence`（置信度分数）**分开建模，不合并**。上游对二者定义不一（有的是模型自评确定性，有的是归一化边际），合并会丢失"这次判断有多可信"与"这个选项有多可能"的区分——而前者正是 compact/escalate/stop 决策要用的信号。
+
+**设计说明（D8b）**：`DecisionQuestion.type` 用五种 canonical 稳定类型（`binary` / `choice` / `scale` / `rubric`），上游专有类型名（如 Gemini 的专有枚举）进 `native`。理由同 `BuiltinTool.name`（[50-builtin-search.md](./50-builtin-search.md) §2.2）：避免"同一能力在不同格式里有 5 个名字"导致配置与统计分裂。
+
+**设计说明（D8c，三个映射陷阱，adaptor 硬约束）**：这三条已由三家官方 API reference 实测确认，是 decision adaptor 最容易写错的地方：
+1. **`answers` 容器形态不一**：Gemini/Jev 是按问题 key 的 **map**，OpenAI 是**按 questions 顺序的 array**。canonical 统一为 array + `question_id`，因此 OpenAI adaptor 必须**按位置对齐** `questions[]` 与 `answers[]`（错位即全盘皆错），且必须有"打乱 questions 顺序后答案仍对得上"的 round-trip 测试。
+2. **`probabilities` 形态不一**：Gemini/Jev 是 `{key: p}` map，OpenAI 是 `[{value, probability}]` 数组。
+3. **`confidence` / `probability` / `option_probabilities` 的有无不一致**（见 `DecisionAnswer` 的 ⚠️ 注释）——所以这三个字段在 canonical 里**都是可选的**，缺省省略而非填 0。
+
+**流式**：decision **不设计流式**——一次前向计算就返回全部答案，分批返回没有意义（且会诱导客户端以为可以早停）。`StreamOptions.mode` 对 decision 恒为 `"none"`；客户端若请求流式，返回 `streaming_mode_unsupported`（[25-streaming.md](./25-streaming.md) §1 的 `reject` 档）。
 
 ---
 
@@ -587,8 +731,10 @@ interface CanonicalUsage {
 }
 
 interface UsageUnits {
-  /** ---- 按 token 计的模态（chat / embedding / rerank / image(gpt-image-1)） ---- */
+  /** ---- 按 token 计的模态（chat / embedding / rerank / image(gpt-image-1) / decision） ---- */
   tokens?: TokenUsage;
+  /** ---- decision：按问题数（部分上游按次计费或输出免费时的计量兜底） ---- */
+  questions?: { asked: number; answered: number };
   /** ---- TTS：按字符 ---- */
   characters?: { input: number; billed: number };
   /** ---- ASR / TTS：按音频时长 ---- */
@@ -612,7 +758,18 @@ interface TokenUsage {
   reasoning_tokens: number;
   /** 其他细分，透传保留 */
   details?: Record<string, number>;
+  /**
+   * 各细分的计价状态。用于表达"输入计费、输出免费"这类厂商差异：
+   *   "billed"    = 按该模态单价计费
+   *   "free"      = 上游明确免费（不是"未知"，见规则 2）
+   *   "included"  = 已计入另一细分（如 reasoning 计入 output），不重复计费
+   *   "unpriced"  = 上游未定价 / 我们不知道单价
+   * 缺省视为 "billed"。
+   */
+  pricing_state?: Record<"input" | "output" | "cache_read" | "cache_write" | "reasoning", PricingState>;
 }
+
+type PricingState = "billed" | "free" | "included" | "unpriced";
 ```
 
 ### 6.1 规则
@@ -621,6 +778,10 @@ interface TokenUsage {
 2. **"未知"绝不用 0 表示**。上游没给 usage 时 `units` 里对应的键**省略**，并置 `warnings += "usage_missing"`。用 0 表示未知会让看板静默少报。
 3. 缺 cache 单价时，计费层取该模型的最高已发布单价（高估不低估），避免 spend cap 静默失效。
 4. `total_tokens` 若上游已给且与 `input+output` 不一致，以上游为准并把差异记 `warnings`。
+5. **"免费"与"未知"必须可区分**（`pricing_state` 的原因）。decision 模态的典型形态是**输入计费、输出免费**（Gemini Decisions 报道为输入 $0.10/M tokens、输出 token 免费；Jev 报道为 $0.042/M 输入、输出免费，`[待验证]`）。若把"输出免费"实现成 `output_tokens: 0`，就与"上游没报 output usage"混为一谈——前者是**省了钱**，后者是**账没记上**。因此：
+   - 上游明确输出免费 → `output_tokens` 记真实值 + `pricing_state.output = "free"`；
+   - 上游没报 output usage → `output_tokens` 键省略 + `warnings += "usage_missing"`。
+6. **decision 的兜底计量是 `units.questions`**（问了多少题、答了多少题）。部分上游按次计费，或输出免费导致 token 口径无意义时，用它做成本归因。
 
 完整归一规则见 [40-provider-adaptors.md](./40-provider-adaptors.md) §2。
 
@@ -680,8 +841,9 @@ JSON Schema 与本文 TS 类型**一对一**，由代码生成（不让手写两
 schema/ag-ir-1/
   envelope.schema.json      # 共享信封
   chat.schema.json          # ChatPayload / ChatResponsePayload
+  decision.schema.json      # DecisionPayload / DecisionResponsePayload [v1.5]
   media.schema.json         # MediaRef 及子类型
-  usage.schema.json         # CanonicalUsage
+  usage.schema.json         # CanonicalUsage（含 PricingState）
   parts.schema.json         # Part 联合
   tools.schema.json         # CanonicalTool / ToolChoice
   tts.schema.json           # [v1.5]
@@ -804,4 +966,7 @@ schema/ag-ir-1/
 8. **Q14**：Gemini `functionResponse` 的 `Content.role`：Tool 文档仍写可用 `"function"`，但官方 function-calling 指南示例一律用 `"user"`——建议按 `"user"` 实现（已在指南交叉验证）。
 9. **Q15**：`googleSearchRetrieval` 是否已正式废弃（API reference 仍列出，未见显式弃用声明）。
 10. **Q16**：`VideoPayload` 占位：v1 只留空 schema，是否要在能力矩阵里显式标 `unsupported`。
-11. **Q17**：模型 ID 清单随时间变动（OpenAI `gpt-6-*`、Anthropic `claude-*-5-*`、Gemini `gemini-4-*`），网关应动态拉取模型列表而非硬编码——拉取频率与缓存策略待定。
+11. **Q18（decision）**：三家 decision API 的确切字段名（问题类型枚举、选项集表示、概率/置信度结构、usage 形状）——待 40-provider-adaptors.md §6 的调研补齐后回填。
+12. **Q19（decision）**：`probability` 与 `confidence` 在上游各自的定义（是否一个是模型自评确定性、一个是归一化边际）——决定 D8 的分建模是否需再加一层原值透传。
+13. **Q20（decision）**：decision 模型的多模态输入上限（Gemini 报道 256K tokens）与批量上限（报道 1000 题）在不同上游是否一致。
+14. **Q17**：模型 ID 清单随时间变动（OpenAI `gpt-6-*`、Anthropic `claude-*-5-*`、Gemini `gemini-4-*`），网关应动态拉取模型列表而非硬编码——拉取频率与缓存策略待定。

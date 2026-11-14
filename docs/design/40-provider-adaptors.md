@@ -8,7 +8,7 @@
 
 ## 0. 阅读指引
 
-§1 adaptor 接口；§2 **usage 口径差异对照表**（本文核心）；§3 reasoning 有损映射；§4 schema 归一化；§5 能力矩阵；§6 各 provider 注意事项；§7 Open Questions。
+§1 adaptor 接口（含契约/注册/映射方法论/round-trip 测试模板/新增检查清单）；§2 **usage 口径差异对照表**（本文核心）；§3 reasoning 有损映射；§4 schema 归一化；§5 adaptor 覆盖矩阵；**§6 decision 模态 adaptor（含降级路径）**；§7 各 provider 注意事项；§8 Open Questions。
 
 ---
 
@@ -440,13 +440,16 @@ interface NormalizeResult {
 | `openai.chat` | **已实现（v1 目标）** | v1 写透：字段映射、usage 归一、流式、错误映射、round-trip 测试 |
 | `openai.responses` | **已实现（v1 目标）** | 同上 |
 | `anthropic.messages` | **已实现（v1 目标）** | 同上 |
-| `gemini.generateContent` | 计划（v1.5） | 下一批；已知关键差异见 §6.3 |
+| `gemini.generateContent` | 计划（v1.5） | 下一批；已知关键差异见 §7.3 |
+| `gemini.decisions` | 计划（v1.5） | decision 模态首选上游；字段映射待 Q21 回填（§6.2） |
+| `jev.decisions` | 计划（v1.5） | decision 第二上游；经 TypeSafe / OpenRouter 接入 |
+| `openai.decisions` | 按需 | Luna；等 Gemini Decisions 打通后再评估 |
 | `openai.audio.speech` | 计划（v1.5，示例 adaptor） | 多模态方法论示例 |
 | `elevenlabs.tts` | 计划（v1.5，示例 adaptor） | 多模态方法论示例 |
 | `openai.audio.transcription` | 计划（v1.5，示例 adaptor） | ASR 示例 |
 | `openai.images.generations` | 计划（v1.5，示例 adaptor） | Image 示例 |
 | `openai.embeddings` | 计划（v1） | 简单，随 v1 |
-| 其余全部（Azure/Bedrock/Vertex/Stability/BFL/MiniMax/Deepgram/AssemblyAI/…） | **按需** | 用到再写。已知关键差异点见 [15-modalities.md](./15-modalities.md) §8 与本节 §6 的备注 |
+| 其余全部（Azure/Bedrock/Vertex/Stability/BFL/MiniMax/Deepgram/AssemblyAI/…） | **按需** | 用到再写。已知关键差异点见 [15-modalities.md](./15-modalities.md) §9 与本节 §7 的备注 |
 
 **规则**：`status: "planned"` 只允许存在于**当前 Phase 的交付物清单**里；不在当前 Phase 的一律 `on-demand`。防止 roadmap 膨胀成饼。
 
@@ -465,16 +468,230 @@ interface NormalizeResult {
 
 ---
 
-## 6. 各 Provider 注意事项
+## 6. decision 模态 adaptor `[v1.5]`
 
-### 6.1 OpenAI
+### 6.1 adaptor 契约（比 chat 简单）
+
+decision 的 adaptor **不需要流式**，因此 `decodeStream` / `encodeStream` 可以实现为"抛 `streaming_mode_unsupported`"或干脆不实现（`Adaptor` 接口的流式方法对 decision 是可选）。
+
+```typescript
+/** decision adaptor 的最小实现面 */
+interface DecisionAdaptor {
+  readonly format: FormatId;          // 如 "gemini.decisions" | "jev.decisions" | "openai.decisions"
+  readonly modality: "decision";
+
+  /** wire → canonical */
+  decode(raw: unknown, ctx: RequestContext): CanonicalRequestEnvelope;
+  /** canonical → wire */
+  encode(req: CanonicalRequestEnvelope, ctx: RequestContext): EncodedRequest;
+  /** wire → canonical */
+  decodeResponse(raw: unknown, ctx: RequestContext): CanonicalResponseEnvelope;
+  /** canonical → wire */
+  encodeResponse(res: CanonicalResponseEnvelope, ctx: RequestContext): unknown;
+
+  /** usage 抽取：必须处理"输入计费、输出免费"（pricing_state） */
+  extractUsage(raw: unknown): CanonicalUsage;
+}
+```
+
+**与 chat adaptor 的关键差异**：
+1. 没有 `tools` / `tool_choice` / `thinking` / `response_format` —— decision 不做这些；
+2. **必须实现 `pricing_state`**（见 §6.4）；
+3. **必须实现降级路径**（见 §6.3）——因为 decision 上游不是每个部署都有；
+4. 批量语义：`questions[]` 一次发出，响应 `answers[]` 按 `question_id` 回填。**部分上游失败时的语义要明确**：是整个请求失败，还是返回部分答案 + 每题的 `error`？canonical 选**后者**（`DecisionAnswer` 可带 `raw.error`），并在 `warnings` 记 `partial_answers`。
+
+### 6.2 三家字段映射表（已按官方 API reference 回填）
+
+> 依据 2026-11 官方 API reference，来源见 [../sources.md](../sources.md) §5。
+> 端点与 model id：Gemini `POST https://generativelanguage.googleapis.com/v1beta/decisions`（model `gemini-decision-1`，auth `x-goog-api-key`）；Jev `POST https://api.typesafe.ai/v1/systemone`（model `jev-1.14.0` / alias `jev-latest`，auth Bearer）；OpenAI `POST https://api.openai.com/v1/decisions`（model `gpt-6-luna`，auth Bearer；Azure 变体 `<res>.openai.azure.com/openai/v1/decisions`）。
+
+#### 6.2.1 请求映射（canonical → 三家）
+
+| canonical | Gemini Decisions | Jev (TypeSafe SystemOne) | OpenAI Decisions |
+|---|---|---|---|
+| 端点 | `/v1beta/decisions` | `/v1/systemone` | `/v1/decisions` |
+| `model` | `gemini-decision-1`（唯一） | `jev-1.14.0` / `jev-latest` | `gpt-6-luna`（唯一） |
+| `content[].text` | `input` 的 `text` 块 | `state`（string\|object\|array） | `input` 的 `input_text` part |
+| `content[].media` | `input` 的 `image`/`audio`/`video`/`document` 块 | `assets`（可选 image map）；**需头 `TypeSafe-Danger-Zone-Images: true`** | `input_image`（`image_url` + `detail`）/ `input_json`（`data`） |
+| `questions[]` | `questions`：**map<key, Question>**（1–1000，key `[A-Za-z0-9_-]+` ≤64） | `questions`：**map<name, Question>**（无独立数量上限，受 context 约束） | `questions`：**array**（1–400，每题带 `name`） |
+| `questions[].id` | map 的 key | map 的 name | 数组元素的 `name` |
+| `type: "binary"` | `type:"noul"` | `type:"noul"` | `type:"predicate"` |
+| `type: "choice"` | `type:"choice"` | `type:"choice"` | `type:"choice"` |
+| `type: "scale"` | `type:"score"` | `type:"score"` | `type:"score"` |
+| `type: "rubric"` | **无对应** → 映射为 `choice` 或 `score` + `criteria` | **无对应** → 同上 | **无对应** → 同上 |
+| `type: "box"`（Jev 专有） | — | `type:"box"` | — |
+| `questions[].prompt` | `instructions`（仅 text） | `instructions`（string\|object\|array\|null） | `instructions` |
+| `questions[].options[]`（choice） | `criteria`：**map<optionKey, 描述>**（2–255 项） | `criteria`：**map**（1–255 项） | `choices`：`[{value, description}]`（2–255，value 可 string\|boolean） |
+| `questions[].scale{min,max,labels}`（scale） | `criteria`：**string[]**（2–255，建议 2–10） | `criteria`：**array**（1–10） | `levels`：`[{label, description}]`（2–10） |
+| `questions[].rubric{criteria,pass_threshold}` | `criteria`（按映射后的类型） | 同 | 同 |
+| `questions[].multiple` | ❌ drop + warn | ❌ drop + warn | ❌ drop + warn |
+| `include_option_probabilities` | 恒返回（choice/score） | 恒返回（choice/score） | 恒返回（choice/score） |
+| `include_rationale` | ❌ 不支持 | ❌ 不支持 | ❌ 不支持 |
+| 上游专有旋钮 | — | `TypeSafe-Danger-Zone-Long-Context: true`（64k/req+32k/question → 262k/262k） | `prompt_cache_key` / `prompt_cache_options{mode,ttl}` / `safety_identifier` |
+
+#### 6.2.2 响应映射（三家 → canonical）
+
+| canonical | Gemini Decisions | Jev | OpenAI Decisions |
+|---|---|---|---|
+| `answers[]` 容器 | `answers`：**map（按 question key）** | `answers`：**map（按 question name）** | `answers`：**array（按 questions 顺序）** |
+| `answers[].question_id` | map 的 key | map 的 name | 元素的 `name` |
+| `answers[].label` | `choice`（choice）/ `score`（score）/ `noul` 0.01–0.99（binary） | 同 Gemini | `choice` / `score` / `probability`（predicate） |
+| `answers[].probability` | `noul`（binary，0.01–0.99）/ `probabilities[key]`（choice）/ `probabilities[score]`（score） | `noul`（binary）/ `probabilities[name]` | `probability`（predicate）/ `probabilities[].probability`（choice/score，**数组不是 map**） |
+| `answers[].confidence` | `confidence`（**含 noul**） | `confidence`（**noul 没有**；`box` 可为 `null`） | `confidence`（**predicate 没有**） |
+| `answers[].option_probabilities[]` | `probabilities`：**map<key, p>** | `probabilities`：**map<name, p>** | `probabilities`：**[{value, probability}]（数组）** |
+| `answers[].rationale` | ❌ | ❌ | ❌ |
+| `answers[].raw` | 上游原始 answer 对象 | 同 | 同 |
+| **逐题拒答** | ❌（整请求 `prompt_feedback.block_reason`） | ❌ | **✅ `{type:"refusal", name}`**——该题拒答，**其他题仍作答** |
+| `box` 类型 | — | `{type:"box", box:{top,bottom,left,right}, confidence:number\|null}` | — |
+
+**三个必须处理的映射陷阱（adaptor 实现时的硬约束）**：
+
+1. **key-map vs array**：Gemini/Jev 的 `answers` 是按问题 key/name 的 map，OpenAI 是**按 questions 顺序的 array**。canonical 统一为 array + `question_id`，因此 OpenAI adaptor 必须**按位置对齐** `questions[]` 与 `answers[]`（位置错位 = 全盘皆错），Gemini/Jev adaptor 按 key 回填。**位置对齐必须加 round-trip 测试**（打乱 questions 顺序后答案仍对得上）。
+2. **probabilities map vs array-of-objects**：Gemini/Jev 是 `{key: p}`，OpenAI 是 `[{value, probability}]`。canonical 统一为 array of `{value, probability}`。
+3. **confidence 的有无不一致**：Gemini 的 `noul` **有** confidence；Jev 的 `noul` **没有**；OpenAI 的 `predicate` **连 probabilities 都没有**。canonical 的 `confidence` / `option_probabilities` 因此必须是**可选字段**（缺省省略，不填 0）——这正是 [10-canonical-schema.md](./10-canonical-schema.md) §6 规则 2「未知绝不用 0 表示」的又一实例。
+
+#### 6.2.3 usage 映射（三家 → canonical）
+
+| canonical | Gemini | Jev | OpenAI |
+|---|---|---|---|
+| `units.tokens.input_tokens` | `usage.total_input_tokens` | `usage.input_tokens` | `usage.input_tokens` |
+| `units.tokens.output_tokens` | `usage.total_output_tokens`（**恒 0**） | `usage.output_tokens`（**免费但非 0**） | `usage.output_tokens` |
+| `pricing_state.output` | `"free"` | `"free"` | `"free"` |
+| `units.tokens.cache_read_tokens` | ❌ 无 | ❌ 无 | `input_tokens_details.cached_tokens` |
+| `units.tokens.cache_write_tokens` | ❌ 无 | ❌ 无 | `input_tokens_details.cache_write_tokens` |
+| `units.tokens.reasoning_tokens` | ❌ 无 | ❌ 无 | `output_tokens_details.reasoning_tokens` |
+| `units.tokens.details` | `input_tokens_by_modality[]`（按 modality 拆） | — | `input_tokens_details` / `output_tokens_details` 原样 |
+| `units.questions` | `questions` map 的 key 数 | `questions` map 的 name 数 | `questions` 数组长度 |
+| `usage_raw` | 上游 usage 原样 | 同 | 同 |
+
+**规则 P5b（已被三家实测验证）**：**"输出免费"有三种不同表现，绝不能假设 `output_tokens == 0`**：
+- Gemini：`total_output_tokens` 恒 `0`（真 0 token，不计费）；
+- Jev：`output_tokens` **非 0 但免费**；
+- OpenAI：`output_tokens` 上报（含 `reasoning_tokens`）但不计费。
+
+因此实现必须是「记真实值 + `pricing_state.output = "free"`」，**不是**「把 output_tokens 置 0」。把 Jev/OpenAI 的 output 置 0 会丢失"这次判断实际产出了多少 token"的信息，也让"上游没报 usage"与"输出免费"再次混为一谈。
+
+#### 6.2.4 限制、延迟、错误码（路由与能力矩阵用）
+
+| 项 | Gemini | Jev | OpenAI |
+|---|---|---|---|
+| 问题数 | 1–1000 | 无独立上限（受 context 约束） | 1–400 |
+| choice 选项数 | 2–255 | 1–255 | 2–255 |
+| score 层级数 | 2–255（建议 2–10） | 1–10 | 2–10 |
+| context | 262,144 tokens | 默认 64k/request + 32k/question；`Long-Context` 头 → 262k/262k | 1,050,000（max input 922,000） |
+| 延迟（官方/实测） | 150–250 ms e2e / 50–100 ms compute；**1→100 题近乎持平** | TypeSafe 自报 70–500 ms；cookbook 实测 mean 103 ms | 官方称 ~10x快于 Responses API（150 ms vs 1.6 s） |
+| 免费层 | Free：输入免费 + 200 RPM / 50,000 TPM / 10,000 RPD；Tier1 1,500/1M/50,000；Tier2 5,000/4M/unlimited；Tier3 15,000/10M/unlimited | 未见免费额度文档 | 无 Decisions 专属限额表 **`[待验证]`** |
+| 流式 | ❌ | ❌ | ❌ |
+| 错误码 | HTTP 400 + `error.code` ∈ {`safety`,`prohibited_content`,`blocklist`,`image_safety`,`content_blocked`}；超限也 400（message 指名规则） | 400/401/413/415/422/429/529（body ≤32 MiB、嵌套 ≤64） | 标准 envelope：401/403/429(`rate_limit_error`/`slow_down`/`credit_balance_exhausted`)/500/503(`server_is_overloaded`) |
+| 区域 | 仅 Gemini Developer API v1beta（Vertex/Google Cloud "coming soon"） | — | US + Europe (EEA+CH)，EU data residency，支持 ZDR/HIPAA；Azure 版 **East US 2 被排除** |
+| SDK | `client.decisions.create()`（google-genai ≥3.2，`apiVersion: v1beta`） | `client.system_one()`（`typesafe_sdk` / `@typesafe-ai/sdk`） | `client.decisions.create()`（openai ≥3.26.0 py / ≥7.30.0 js） |
+
+**「1→100 题近乎持平」是 decision 的批量优势的核心证据**——它意味着把多个判断合并成一次请求几乎是免费的（TypeSafe 实测：13 问合并 1 次调用 = 13 次单独调用的 **1/12.2 成本、1/11.8 时间**）。因此 S2/S3 的控制面判断应**攒批**，不要一个判断发一次请求。
+
+#### 6.2.5 实现陷阱与上游选型影响（官方文档确认，adaptor 硬约束）
+
+**陷阱 1：Gemini 会按 UTF-8 字节序对 option key 字典序排序后再求值。** 请求里 key 的顺序不影响结果；概率完全相同时取字典序最前的 key。**因此绝不能用位置性 key**（如 `none_of_the_above`、`option_1`）——字典序会改变它们的相对位置，导致"平分时选错项"。canonical 的 `DecisionOption.value` 应该是**语义化**的稳定值。
+
+**陷阱 2：Gemini 的共享 `input` 每请求只计一次 token**，不论问题数；每问只追加自身 instructions/criteria/formatting token。这是攒批（[20-pipeline.md](./20-pipeline.md) §6.3）成本收益的根源，也意味着**把公共上下文放 `input` 而不是重复进每问的 `instructions`** 能直接省钱。
+
+**陷阱 3：OpenAI 的 `usage.input_tokens_details.cached_tokens` / `cache_write_tokens` 已包含在 `input_tokens` 内**，不要重复相加（官方明确）。这与 chat 模态的口径一致（见 §2.2c I1）。
+
+**陷阱 4：Jev 的 `noul` 不返回 confidence，但可自算 `|2p − 1|`。** 官方 Confidence 页给出的公式：
+- Choice（n 个选项，`p_max` 为 top probability）：`confidence = (p_max − 1/n) / (1 − 1/n)`
+- Score（n 层，`m` 为最可能层）：`confidence = max(0, 1 − Σ p_i·|i−m| / MAD_unif)`，`MAD_unif = (1/n)·Σ|i − (n−1)/2|`
+- 官方同时警告：Choice 的 confidence 是 top probability 的线性变换，"checking both adds no independent evidence"——`(0.6,0.3,0.1)` 与 `(0.6,0.2,0.2)` 的 confidence 都是 0.4。
+
+  **对我们的含义**：`probability` 与 `confidence` 在 choice 类型下**不是独立信息**（D8 的"分开建模"仍然对——因为 noul 类型下二者确实不同，且 canonical 要保留上游原样）。但在**消费侧**（compact/escalate/stop 判据）不要同时用两个阈值，那等于同一个信号用两遍。
+
+**陷阱 5：媒体能力差异大，且大多有硬上限。**
+
+| 项 | Gemini | Jev | OpenAI |
+|---|---|---|---|
+| 模态 | text / image / audio / video / PDF | text + PNG/JPEG（**默认关**，需 `TypeSafe-Danger-Zone-Images: true`） | text / image / JSON |
+| 内联大小 | 每请求 ≤100 MB（PDF ≤50 MB） | body ≤32 MiB（压缩前后都算） | 图片 ≤128 张/请求、合计 ≤32 MB；单 URL ≤1 GiB |
+| 外部 URL | Files API `file.uri` 或公开/签名 HTTPS，每个 ≤15 MB | ❌ | 公开 HTTP(S) URL；**不支持 `file_id`** |
+| 结构化数据 | JSON 序列化成 text，instructions 里用反引号 key path 引用 | `state` 直接是 object/array | `input_json`（≤32 层、≤10,000 values、≤256 KiB） |
+
+**陷阱 6：只有 OpenAI Decisions 支持 prompt caching。** Gemini 明确 "doesn't support context caching… Repeated input across requests counts in full"；Jev 无。OpenAI：隐式 breakpoint 在 shared input 末尾，可复用前缀 ≥1024 token（**questions 内容不计入该阈值**），每请求最多写 4 个 breakpoint，cache matching 考虑最近 80 个。
+
+→ **上游选型的一个常被忽略的维度**："同一 state 反复问不同问题"的热点路径上，OpenAI Decisions 的 TCO 显著优于 Gemini/Jev；但若判断的 `content` 每次都不同（多数场景），缓存无收益，Gemini 的免费层与更低 ECE 更划算。
+
+**陷阱 7：配额不可静态推导。** Gemini 有公开分层表（Free 200 RPM/50K TPM/10K RPD → Tier3 15K/10M/unlimited）；Jev 只在 console 可见（按 tokens/s + requests/s，无公开数字）；OpenAI 无 Decisions 专属表（只能借用 `gpt-6-luna` 的 Build/Launch/Grow，且不确定是否共享配额池）。→ 网关限流器必须是"静态表 + 运行时 429 探测"混合，不能只靠配置。
+
+### 6.3 降级路径：用 chat 模拟 decision
+
+**问题**：decision 上游不是每个部署都有（需要额外开通、额外计费路径、可能不在免费额度内）。但网关内部的判断需求（工具选择、compact/escalate/stop）是**始终存在**的。
+
+**决策 D9：提供 chat 模拟 decision 的降级路径，但必须显式标记，且默认不自动启用。**
+
+```typescript
+interface DecisionDegradationPolicy {
+  /** 何时启用降级 */
+  mode: "never" | "on_missing_upstream" | "always";
+  /** 降级用的 chat 模型（access path + model） */
+  fallback_model?: string;
+  /** 是否允许把"高风险判断"降级（策略检查、stop 决策默认不允许） */
+  allow_degrade_high_stakes?: boolean;
+}
+```
+
+**何时启用**：
+- `on_missing_upstream`（**推荐默认**）：路由不到 decision 上游时降级；
+- `always`：明确想省钱/省一个依赖；
+- `never`：只要真 decision（高风险判断场景）。
+
+**代价（必须写进响应与文档）**：
+
+| 维度 | 真 decision | chat 模拟 | 代价 |
+|---|---|---|---|
+| 校准性 | 核心卖点 | **差**（LLM 自评置信度与真实正确率相关性弱） | 判断可信度下降；compact/escalate/stop 可能误判 |
+| 延迟 | 150–250 ms | 数百 ms ~ 数 s（要生成长结构化输出） | 控制面变慢 |
+| 成本 | 输入计费、输出免费 | **输入输出双向计费** | 输出 token 开始花钱 |
+| 批量 | 一次最多 ~1000 题 | 要么一次问全部（输出长、易漏题），要么 N 次请求（N 倍延迟与成本） | 批量优势没了 |
+| 结构化保证 | 原生 | 靠 `response_format: json_schema` | schema 违背时需重试 |
+
+**实现要点**：
+1. 降级时把 `questions[]` 渲染成一条 chat 请求：system 说明"你是判断引擎，逐题给出 label + probability + confidence"，user 放 `content[]` 的渲染结果 + 问题列表，`response_format` 用生成的 JSON Schema（含 `answers[]` 结构，每题必填）；
+2. 响应解析回 `DecisionAnswer[]`；**schema 违背时重试一次**，再失败返回 `capability_unsupported` 而不是猜；
+3. **响应信封必须带 `calibration: "degraded"`**（新增字段，见下），并在 `warnings` 说明用了哪个 chat 模型、为什么降级；
+4. **高风险判断默认不降级**：`allow_degrade_high_stakes` 默认 `false`，策略检查 / stop 决策 / 计费相关判断必须拿到真 decision，否则明确失败。
+
+```typescript
+/** 加在 CanonicalResponseEnvelope 上（decision 模态专用） */
+interface DecisionCalibration {
+  /** "native" = 真 decision 模型；"degraded" = chat 模拟 */
+  calibration: "native" | "degraded";
+  /** degraded 时的降级原因与替代模型 */
+  degraded_by?: { reason: string; model: string; chat_adaptor: string };
+}
+```
+
+### 6.4 usage 归一：decision 的"输入计费、输出免费"
+
+这是 decision 模态**最容易记错账**的地方，规则写死：
+
+| 场景 | `units.tokens.output_tokens` | `pricing_state.output` | `warnings` |
+|---|---|---|---|
+| 上游明确输出免费 | 记**真实值** | `"free"` | — |
+| 上游没报 output usage | 键**省略** | （缺省 = billed） | `usage_missing` |
+| 上游报了但没说要钱 | 记真实值 | `"billed"` | — |
+
+**规则 P5**：**"免费"与"未知"必须可区分。** 把"输出免费"实现成 `output_tokens: 0` 会与"上游没报 usage"混为一谈——前者是**省了钱**，后者是**账没记上**。看板会把前者显示成"0 成本"（对），把后者也显示成"0 成本"（错，静默少报）。
+
+**兜底计量**：`units.questions{asked, answered}` 始终记录。当上游 usage 形状不明、或输出免费导致 token 口径无归因意义时，用它做成本归因与容量规划。
+
+**reasoning / cache**：decision 模型没有 reasoning token 概念（一次前向计算），也没有 prompt cache 语义（输入不重复）。因此 `reasoning_tokens` / `cache_read_tokens` / `cache_write_tokens` 对 decision **恒省略**，不记 0。
+
+## 7. 各 Provider 注意事项
+
+### 7.1 OpenAI
 
 - `max_tokens` 已在新模型上被 `max_completion_tokens` 取代；codec 按模型版本选择字段名，`raw` 保留原名。
 - `parallel_tool_calls: false` 在 Anthropic/Gemini 无对应，只能 prompt 约束或事后拆轮（`warnings` 声明）。
 - Responses 的 `reasoning` item 多轮回传规则 **`[待验证]`**。
 - Responses 有状态（`previous_response_id` + `store`）。网关默认**不依赖**上游状态：始终发全量历史，把 `store` 关掉（除非客户端显式要）。理由：上游状态保留期（默认 30 天）与"网关要能完整 trace/重放"冲突。
 
-### 6.2 Anthropic
+### 7.2 Anthropic
 
 - `system` 是**顶层字段**，可以是 string 或 block 数组（block 才能带 `cache_control`）。多条 system message（OpenAI 风格）映射时需合并或保留为多个 block——llm-bridge 在这里有真实缺陷（只取第一条 system message，其余丢弃，见 [docs/sources.md](../sources.md) §llm-bridge）。我们的 codec **必须**支持多 system block。
 - `tool_use` block 必须**移到段尾**（AI SDK 的 `moveToolUseBlocksToEnd()` 专门处理这个硬约束，见 [convert-to-anthropic-prompt.ts](https://github.com/vercel/ai/blob/main/packages/anthropic/src/convert-to-anthropic-prompt.ts)）。
@@ -482,7 +699,7 @@ interface NormalizeResult {
 - `cache_control` 是**块级**且最多 4 个 breakpoint；`ttl` 支持 5m / 1h。
 - 1h / 5m cache write 在 usage 里是否分字段返回 **`[待验证]`**（影响 cache_write 计费拆分）。
 
-### 6.3 Gemini
+### 7.3 Gemini
 
 - `functionCall` **没有 id**。canonical 的 `ToolUsePart.id` 由网关合成（`call_<ulid>`），映射表存 `ctx.state.tool_id_map`。回传 `functionResponse` 时按 name + 序号或映射表匹配 **`[待验证]`**。
 - `finishReason` 里 `STOP` 可能同时表示"正常结束"和"工具调用后结束"，要靠 part 里有 `functionCall` 来判别 `tool_use`。
@@ -490,7 +707,7 @@ interface NormalizeResult {
 - `cachedContent` 是**资源级**缓存（要先创建 cache 再引用），与 Anthropic 的块级断点模型不同。canonical 用 `CacheControl.cache_name` 承载。
 - `systemInstruction` 被缓存后视为不可变，"cannot preserve an uncached dynamic tail inside that same message"（OpenRouter 文档，见 [docs/sources.md](../sources.md) §OpenRouter）——动态 system 尾巴要放到 user 消息里。
 
-### 6.4 OpenAI Responses（作为入站格式）
+### 7.4 OpenAI Responses（作为入站格式）
 
 - `input` 是 item 数组而非 messages；`instructions` 是 system。codec 要处理 item 类型判别（`message` / `function_call` / `function_call_output` / `reasoning` / `item_reference`）。
 - 工具调用 id 用 `call_id`，与 Chat 的 `tool_calls[].id` 不同名。canonical 统一为 `ToolUsePart.id`。
@@ -498,7 +715,7 @@ interface NormalizeResult {
 
 ---
 
-## 7. Open Questions
+## 8. Open Questions
 
 1. **Q1（最高优先级）**：OpenAI / Gemini 的 `input_tokens` 是否已含 cache read 部分。直接决定计费双算/少算。验证方式：同一长 prompt，第一次（未缓存）与第二次（已命中）对比 `prompt_tokens` 与 `cached_tokens` 的关系。
 2. **Q3**：Gemini `functionCall` 无 id，`functionResponse` 的匹配机制（name + 序 vs 网关映射表）。
@@ -508,3 +725,8 @@ interface NormalizeResult {
 6. Gemini `usageMetadata.toolUsePromptTokenCount` 的归属（是 input 的一部分还是独立项）。
 7. 非 chat 模态各家的 usage 原始字段（[15-modalities.md](./15-modalities.md) §9 Q5）。
 8. OpenAI `audio/speech` 是否支持流式分片（决定 TTS 流式能力矩阵该栏）。
+9. **Q21（decision）**：三家 decision API 的确切字段名与嵌套（问题类型枚举、选项集、`probability` / `confidence` / per-option probabilities、usage 形状、错误码）。**这是 decision adaptor 开工的前置依赖。**
+10. **Q22（decision）**：Gemini Decisions 的免费额度与可用区域；Jev 在 TypeSafe / OpenRouter 上的确切模型 id 与计价。
+11. **Q23（decision）**：decision 模型是否真的不能做 chat（需官方文档确认，非产品定位推断）。
+12. **Q24（decision）**：chat 模拟 decision 的校准性损失有无公开基准（决定降级路径是否值得默认开启）。
+13. **Q25（decision）**：部分问题失败时的上游语义（整个请求失败 vs 部分答案 + 每题 error）——canonical 已选后者，需确认三家都支持。
