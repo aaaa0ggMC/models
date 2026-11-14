@@ -543,3 +543,184 @@ export interface AuditLogEntry {
 }
 
 export type AuditLogResponse = Page<AuditLogEntry>;
+
+// ---------------------------------------------------------------------------
+// 数据面 virtual key（66 §2）
+// ---------------------------------------------------------------------------
+
+/**
+ * virtual key 的列表条目。
+ *
+ * **绝不明文回显**：这里只有 `key_id`、掩码与前 8 位（66 §2.2：「之后只能看
+ * key_id 与前 8 位」）。完整明文只在创建响应里出现一次，见
+ * `VirtualKeyCreateResponse.plaintext`。
+ */
+export interface VirtualKeyDto {
+  key_id: string;
+  name: string;
+  note?: string;
+  status: 'active' | 'revoked';
+  created_at: number;
+  updated_at: number;
+  revoked_at?: number;
+  expires_at?: number;
+  models?: string[];
+  providers?: string[];
+  allow_message_persistence?: boolean;
+  rate_limit?: { rpm?: number; tpm?: number };
+  budget_micros?: number;
+  team_id?: string;
+  user_id?: string;
+  /** 掩码（前 8 位 + 省略号；不露长度）。 */
+  masked: string;
+  /** 明文前 8 位（非敏感；便于人认出是哪把 key）。 */
+  head: string;
+}
+
+/** 该 key 的用量汇总（P0-6 的按 key 分组先在这里落地）。 */
+export interface VirtualKeyUsage {
+  key_id: string;
+  from_ts: number;
+  to_ts: number;
+  request_count: number;
+  error_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cash_total: number;
+  by_model: Array<{ model: string; request_count: number; cash_total: number }>;
+  by_provider: Array<{ provider: string; request_count: number; cash_total: number }>;
+}
+
+export interface VirtualKeyCreateRequest {
+  name: string;
+  note?: string;
+  /** 过期时间（ms epoch）。 */
+  expires_at?: number;
+  models?: string[];
+  providers?: string[];
+  allow_message_persistence?: boolean;
+  rate_limit?: { rpm?: number; tpm?: number };
+  budget_micros?: number;
+  team_id?: string;
+  user_id?: string;
+}
+
+/**
+ * 创建响应。
+ *
+ * `plaintext` 是**整个管理面唯一返回完整密钥的地方**，而且只返回这一次：
+ * 服务端不存它、列表不回显它、日志与 trace 里没有它。前端负责「展示一次即丢弃」
+ * （见 webui/admin/src/pages/VirtualKeys.tsx）。
+ */
+export interface VirtualKeyCreateResponse {
+  ok: boolean;
+  key: VirtualKeyDto;
+  plaintext: string;
+}
+
+export type VirtualKeyListResponse = Page<VirtualKeyDto>;
+
+export interface VirtualKeyRevokeResponse {
+  ok: boolean;
+  key: VirtualKeyDto;
+}
+
+export interface VirtualKeyDeleteResponse {
+  ok: boolean;
+  deleted: boolean;
+}
+
+export interface VirtualKeyUsageResponse {
+  ok: boolean;
+  usage: VirtualKeyUsage;
+}
+
+/** 当前数据面认证模式（互斥语义见 auth/data-plane.ts）。 */
+export interface AuthModeResponse {
+  mode: 'virtual_key' | 'access_token' | 'permissive';
+  virtual_key_count: number;
+  virtual_keys_enabled: boolean;
+  /** 是否配了 `AG_ACCESS_TOKEN`。**不暴露值**。 */
+  access_token_configured: boolean;
+  /** 因互斥而被忽略的配置（人类可读）。 */
+  ignored: string[];
+}
+
+// ---------------------------------------------------------------------------
+// 运行时设置（P0-2）
+// ---------------------------------------------------------------------------
+
+export type SettingSource = 'encrypted_storage' | 'env' | 'config_file' | 'default';
+
+export interface SettingDto {
+  key: string;
+  label: string;
+  description: string;
+  unit: string;
+  type: 'int' | 'enum';
+  value: number | string;
+  source: SettingSource;
+  /** 能不能在界面里改（env 锁命中为 false）。 */
+  editable: boolean;
+  /** 不能改时的人类可读原因。 */
+  reason?: string;
+  env_var?: string;
+  range?: { min: number; max: number };
+  options?: string[];
+  stored_value?: number | string;
+  updated_at?: number;
+  updated_by?: string;
+}
+
+export interface SettingsListResponse {
+  items: SettingDto[];
+  config_file_path?: string;
+}
+
+export interface SettingUpdateRequest {
+  value: number | string;
+}
+
+export interface SettingUpdateResponse {
+  ok: boolean;
+  item: SettingDto;
+}
+
+// ---------------------------------------------------------------------------
+// 敏感值引用登记（65 §3.1：只存 env:<VAR>，绝不存值）
+// ---------------------------------------------------------------------------
+
+export interface SecretRefDto {
+  name: string;
+  /** `env:<VAR>` 形态的引用。 */
+  ref: string;
+  note?: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface SecretRefListResponse {
+  items: SecretRefDto[];
+  total: number;
+}
+
+export interface SecretRefCreateRequest {
+  name: string;
+  env_var: string;
+  note?: string;
+  /**
+   * **不接受**。写这个字段会被 400 拒绝——敏感值只以引用形态登记，
+   * 值必须留在进程环境里。字段留在契约里是为了让「传了会被拒」有据可查。
+   */
+  value?: never;
+}
+
+export interface SecretRefCreateResponse {
+  ok: boolean;
+  ref: SecretRefDto;
+}
+
+export interface SecretRefDeleteResponse {
+  ok: boolean;
+  deleted: boolean;
+}

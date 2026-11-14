@@ -34,10 +34,21 @@ import {
 import type {
   AliasRuleDto,
   AuditLogEntry,
+  AuthModeResponse,
   MaskedCredential,
   ProviderConfig,
+  SecretRefCreateRequest,
+  SecretRefDto,
+  SettingDto,
+  SettingsListResponse,
   UsageDashboardResponse,
+  VirtualKeyCreateRequest,
+  VirtualKeyDto,
+  VirtualKeyUsage,
 } from './api-types.js';
+import type { VirtualKeyStore } from '../storage/virtual-keys.js';
+import { maskVirtualKey, type VirtualKeyRecord } from '../storage/virtual-keys.js';
+import type { SettingsService } from '../config/settings.js';
 
 // ---------------------------------------------------------------------------
 // 端口（全部注入）
@@ -62,15 +73,32 @@ export interface BalanceProbePort {
   }>;
 }
 
+/**
+ * usage 单位的窄视图。
+ *
+ * 只要 token 两类：聚合看板与按 key 归因都只关心 input / output。写成窄形状
+ * 而不是 `Record<string, number>` 是因为 `UsageUnits` 的真实形状是
+ * `{ tokens?: TokenUsage }`（**嵌套**），用扁平 Record 会让
+ * `units['input_tokens']` 恒为 undefined——那正是本文件早先的 bug
+ * （看板的 token 列永远是 0）。
+ */
+export interface UsageUnitsView {
+  tokens?: { input_tokens?: number; output_tokens?: number };
+}
+
 /** usage 记录源（metering 的内存 sink；只读）。 */
 export interface UsageRecordSource {
   /**
    * 读一段区间内的记录。
    *
    * 结构上兼容 `metering/usage-record.ts` 的 `UsageRecord`（窄依赖：
-   * 「记录里加字段」永远不影响这里）。`usage.units` 用 `Record<string, number>`
+   * 「记录里加字段」永远不影响这里）。`usage.units` 用 `UsageUnitsView`
    * 而不是 `UsageUnits`——后者是有名字段的接口，没有索引签名，宽类型在这里
    * 反而让注入方（MemoryUsageSink）塞不进来。
+   *
+   * `auth` 是**按 key 归因**的唯一入口（P0-1 的直接受益项）：它只带 `key_id`
+   * 与归属 id，**绝不含明文 key**（metering 侧的同款保证见
+   * usage-record.ts 的「绝不进入 UsageRecord 的字段」第 2 条）。
    */
   list(
     fromTs: number,
@@ -82,7 +110,8 @@ export interface UsageRecordSource {
     model: string;
     model_alias?: string;
     status: string;
-    usage: { units: Record<string, number> };
+    auth?: { key_id?: string; team_id?: string; user_id?: string };
+    usage: { units: UsageUnitsView };
     cost: { cash: { total: number }; as_api: { total: number }; status: string };
     finish_reason: string;
     fast_path: boolean;
@@ -118,6 +147,12 @@ export interface AdminServiceDeps {
   balanceProbe?: BalanceProbePort;
   usageSource?: UsageRecordSource;
   reconciliationSource?: ReconciliationSource;
+  /** 数据面 virtual key 存储（66 §2）。不注入 = 虚拟 key 端点 501。 */
+  virtualKeys?: VirtualKeyStore;
+  /** 数据面认证模式描述者（auth/data-plane.ts）。不注入 = 模式端点给缺省值。 */
+  dataPlaneAuth?: { describe(): Promise<AuthModeResponse> };
+  /** 运行时设置（P0-2）。不注入 = 设置端点 501。 */
+  settings?: SettingsService;
 }
 
 // ---------------------------------------------------------------------------
@@ -563,8 +598,8 @@ export class AdminService {
     let unpriced_count = 0;
 
     for (const r of records) {
-      input_tokens += r.usage.units['input_tokens'] ?? 0;
-      output_tokens += r.usage.units['output_tokens'] ?? 0;
+      input_tokens += r.usage.units.tokens?.input_tokens ?? 0;
+      output_tokens += r.usage.units.tokens?.output_tokens ?? 0;
       cash_total += r.cost.cash.total;
       as_api_total += r.cost.as_api.total;
       if (r.cost.status === 'unpriced' || r.cost.status === 'pending_price') unpriced_count += 1;
@@ -589,8 +624,8 @@ export class AdminService {
         model: r.model,
         ...(r.model_alias === undefined ? {} : { model_alias: r.model_alias }),
         status: r.status,
-        input_tokens: r.usage.units['input_tokens'] ?? 0,
-        output_tokens: r.usage.units['output_tokens'] ?? 0,
+        input_tokens: r.usage.units.tokens?.input_tokens ?? 0,
+        output_tokens: r.usage.units.tokens?.output_tokens ?? 0,
         cash_total: r.cost.cash.total,
         finish_reason: r.finish_reason,
         fast_path: r.fast_path,
@@ -720,6 +755,275 @@ export class AdminService {
   /** 该 access path 上已登记的凭据（Resolver 视角，含 env 档）。 */
   credentialsForAccessPath(accessPath: string): UpstreamCredential[] {
     return this.deps.credentialResolver.credentialsFor(accessPath);
+  }
+
+  // ---- 数据面 virtual key（66 §2）----
+
+  /**
+   * 列出一把 key 的 DTO。
+   *
+   * **绝不明文回显**：`maskVirtualKey` 只拿记录里的 `prefix`（明文前 8 位），
+   * 而记录本身没有承载明文的字段（见 storage/virtual-keys.ts 的类型说明）。
+   */
+  private toDto(rec: VirtualKeyRecord): VirtualKeyDto {
+    return {
+      key_id: rec.key_id,
+      name: rec.name,
+      status: rec.status,
+      created_at: rec.created_at,
+      updated_at: rec.updated_at,
+      masked: maskVirtualKey(rec.prefix),
+      head: rec.prefix.slice(0, 8),
+      ...(rec.note === undefined ? {} : { note: rec.note }),
+      ...(rec.revoked_at === undefined ? {} : { revoked_at: rec.revoked_at }),
+      ...(rec.expires_at === undefined ? {} : { expires_at: rec.expires_at }),
+      ...(rec.models === undefined ? {} : { models: rec.models }),
+      ...(rec.providers === undefined ? {} : { providers: rec.providers }),
+      ...(rec.allow_message_persistence === undefined
+        ? {}
+        : { allow_message_persistence: rec.allow_message_persistence }),
+      ...(rec.rate_limit === undefined ? {} : { rate_limit: rec.rate_limit }),
+      ...(rec.budget_micros === undefined ? {} : { budget_micros: rec.budget_micros }),
+      ...(rec.team_id === undefined ? {} : { team_id: rec.team_id }),
+      ...(rec.user_id === undefined ? {} : { user_id: rec.user_id }),
+    };
+  }
+
+  /**
+   * 列出全部 virtual key（掩码 + 元数据）。
+   *
+   * 审计**不写**：读操作不留痕（与 `listCredentials` 同立场），否则审计日志
+   * 会被每次刷新页面刷满。
+   */
+  async listVirtualKeys(): Promise<VirtualKeyDto[]> {
+    if (this.deps.virtualKeys === undefined) return [];
+    return (await this.deps.virtualKeys.list()).map((r) => this.toDto(r));
+  }
+
+  /**
+   * 建一把新 key。**明文只在返回值里出现一次**。
+   *
+   * 审计只记 `key_id` 与名字，绝不记明文；`detail` 里连掩码都不给——
+   * 掩码对审计没用（认不出是哪一把），而 `key_id` 已经唯一。
+   */
+  async createVirtualKey(
+    actor: string,
+    input: VirtualKeyCreateRequest,
+  ): Promise<{ ok: true; key: VirtualKeyDto; plaintext: string } | { ok: false; error: string }> {
+    if (this.deps.virtualKeys === undefined) {
+      return { ok: false, error: '未装配虚拟 key 存储（recordStore）' };
+    }
+    const name = input.name.trim();
+    if (name.length === 0) return { ok: false, error: 'name 不能为空' };
+    if (input.models !== undefined && input.models.some((m) => m.trim().length === 0)) {
+      return { ok: false, error: 'models 里不能有空串' };
+    }
+    if (input.providers !== undefined && input.providers.some((p) => p.trim().length === 0)) {
+      return { ok: false, error: 'providers 里不能有空串' };
+    }
+    if (input.expires_at !== undefined && input.expires_at <= this.deps.clock.now()) {
+      return { ok: false, error: 'expires_at 必须是未来的时间' };
+    }
+
+    const created = await this.deps.virtualKeys.create({
+      name,
+      created_by: actor,
+      ...(input.note === undefined ? {} : { note: input.note }),
+      ...(input.expires_at === undefined ? {} : { expires_at: input.expires_at }),
+      ...(input.models === undefined ? {} : { models: input.models }),
+      ...(input.providers === undefined ? {} : { providers: input.providers }),
+      ...(input.allow_message_persistence === undefined
+        ? {}
+        : { allow_message_persistence: input.allow_message_persistence }),
+      ...(input.rate_limit === undefined ? {} : { rate_limit: input.rate_limit }),
+      ...(input.budget_micros === undefined ? {} : { budget_micros: input.budget_micros }),
+      ...(input.team_id === undefined ? {} : { team_id: input.team_id }),
+      ...(input.user_id === undefined ? {} : { user_id: input.user_id }),
+    });
+    await this.audit(
+      actor,
+      'virtual_key.create',
+      `virtual_key/${created.key_id}`,
+      'ok',
+      `name=${name}`,
+    );
+    return { ok: true, key: this.toDto(created.record), plaintext: created.plaintext };
+  }
+
+  /**
+   * 撤销一把 key（记录保留，立刻不可用）。
+   *
+   * 「立刻」的保证来自 `DefaultVirtualKeyStore.invalidate()`：撤销会清掉校验
+   * 缓存，下一个请求重新走 Argon2id 并发现记录已撤销。
+   */
+  async revokeVirtualKey(
+    actor: string,
+    keyId: string,
+  ): Promise<{ ok: true; key: VirtualKeyDto } | { ok: false; error: string }> {
+    if (this.deps.virtualKeys === undefined) {
+      return { ok: false, error: '未装配虚拟 key 存储（recordStore）' };
+    }
+    const revoked = await this.deps.virtualKeys.revoke(keyId, this.deps.clock.now());
+    if (revoked === undefined) {
+      return { ok: false, error: 'key 不存在或已撤销' };
+    }
+    await this.audit(actor, 'virtual_key.revoke', `virtual_key/${keyId}`, 'ok');
+    return { ok: true, key: this.toDto(revoked) };
+  }
+
+  async deleteVirtualKey(actor: string, keyId: string): Promise<boolean> {
+    if (this.deps.virtualKeys === undefined) return false;
+    const deleted = await this.deps.virtualKeys.delete(keyId);
+    if (deleted) await this.audit(actor, 'virtual_key.delete', `virtual_key/${keyId}`, 'ok');
+    return deleted;
+  }
+
+  /** 该 key 的用量（按 `key_id` 归因；P0-6 的按 key 分组先落在这里）。 */
+  async virtualKeyUsage(keyId: string, fromTs?: number, toTs?: number): Promise<VirtualKeyUsage> {
+    const now = this.deps.clock.now();
+    const from = fromTs ?? now - 24 * 60 * 60 * 1000;
+    const to = toTs ?? now;
+    const records = (this.deps.usageSource?.list(from, to) ?? []).filter(
+      (r) => r.auth?.key_id === keyId,
+    );
+    const byModel = new Map<string, { request_count: number; cash_total: number }>();
+    const byProvider = new Map<string, { request_count: number; cash_total: number }>();
+    let input_tokens = 0;
+    let output_tokens = 0;
+    let cash_total = 0;
+    let error_count = 0;
+    for (const r of records) {
+      input_tokens += r.usage.units.tokens?.input_tokens ?? 0;
+      output_tokens += r.usage.units.tokens?.output_tokens ?? 0;
+      cash_total += r.cost.cash.total;
+      if (r.status !== 'success') error_count += 1;
+      const m = byModel.get(r.model) ?? { request_count: 0, cash_total: 0 };
+      m.request_count += 1;
+      m.cash_total += r.cost.cash.total;
+      byModel.set(r.model, m);
+      const p = byProvider.get(r.provider) ?? { request_count: 0, cash_total: 0 };
+      p.request_count += 1;
+      p.cash_total += r.cost.cash.total;
+      byProvider.set(r.provider, p);
+    }
+    return {
+      key_id: keyId,
+      from_ts: from,
+      to_ts: to,
+      request_count: records.length,
+      error_count,
+      input_tokens,
+      output_tokens,
+      cash_total,
+      by_model: [...byModel].map(([model, v]) => ({ model, ...v })),
+      by_provider: [...byProvider].map(([provider, v]) => ({ provider, ...v })),
+    };
+  }
+
+  /** 当前数据面认证模式（虚拟 key / access token / permissive；互斥语义见 auth/data-plane.ts）。 */
+  async describeDataPlaneAuth(): Promise<AuthModeResponse> {
+    if (this.deps.dataPlaneAuth === undefined) {
+      return {
+        mode: 'permissive',
+        virtual_key_count: (await this.deps.virtualKeys?.count()) ?? 0,
+        virtual_keys_enabled: false,
+        access_token_configured: false,
+        ignored: [],
+      };
+    }
+    return this.deps.dataPlaneAuth.describe();
+  }
+
+  // ---- 运行时设置（P0-2）----
+
+  async listSettings(): Promise<SettingsListResponse> {
+    if (this.deps.settings === undefined) {
+      return { items: [] };
+    }
+    const described = await this.deps.settings.describe();
+    return {
+      items: described.items.map((s): SettingDto => ({ ...s })),
+      ...(described.config_file_path === undefined
+        ? {}
+        : { config_file_path: described.config_file_path }),
+    };
+  }
+
+  /**
+   * 改一个设置。审计只记 key 与新值（**设置值不是敏感值**，记下来才有对账价值）；
+   * env 锁命中时记 `error` 并原样带回原因。
+   */
+  async updateSetting(
+    actor: string,
+    key: string,
+    value: unknown,
+  ): Promise<{ ok: true; item: SettingDto } | { ok: false; status: 400 | 409; error: string }> {
+    if (this.deps.settings === undefined) {
+      return { ok: false, status: 400, error: '未装配设置服务（recordStore）' };
+    }
+    const result = await this.deps.settings.update(actor, key, value);
+    if (!result.ok) {
+      await this.audit(actor, 'setting.update', `setting/${key}`, 'error', result.error);
+      return { ok: false, status: result.status, error: result.error };
+    }
+    await this.audit(
+      actor,
+      'setting.update',
+      `setting/${key}`,
+      'ok',
+      `value=${String(result.item.value)} source=${result.item.source}`,
+    );
+    return { ok: true, item: result.item };
+  }
+
+  async listSecretRefs(): Promise<SecretRefDto[]> {
+    if (this.deps.settings === undefined) return [];
+    return this.deps.settings.listSecretRefs();
+  }
+
+  /**
+   * 登记一个敏感值引用（只存 `env:<VAR>`）。
+   *
+   * 传入 `value` 会被设置服务 400 拒绝；这里再兜一道：绝不把 value 塞进审计。
+   */
+  async registerSecretRef(
+    actor: string,
+    input: SecretRefCreateRequest & { value?: unknown },
+  ): Promise<{ ok: true; ref: SecretRefDto } | { ok: false; status: 400; error: string }> {
+    if (this.deps.settings === undefined) {
+      return { ok: false, status: 400, error: '未装配设置服务（recordStore）' };
+    }
+    const result = await this.deps.settings.registerSecretRef({
+      name: input.name,
+      env_var: input.env_var,
+      ...(input.note === undefined ? {} : { note: input.note }),
+      ...(input.value === undefined ? {} : { value: input.value }),
+    });
+    if (!result.ok) {
+      await this.audit(
+        actor,
+        'secret_ref.create',
+        `secret_ref/${input.name}`,
+        'error',
+        result.error,
+      );
+      return { ok: false, status: result.status, error: result.error };
+    }
+    await this.audit(
+      actor,
+      'secret_ref.create',
+      `secret_ref/${input.name}`,
+      'ok',
+      `ref=${result.ref.ref}`,
+    );
+    return { ok: true, ref: result.ref };
+  }
+
+  async deleteSecretRef(actor: string, name: string): Promise<boolean> {
+    if (this.deps.settings === undefined) return false;
+    const deleted = await this.deps.settings.deleteSecretRef(name);
+    if (deleted) await this.audit(actor, 'secret_ref.delete', `secret_ref/${name}`, 'ok');
+    return deleted;
   }
 }
 

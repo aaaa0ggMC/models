@@ -70,6 +70,8 @@ async function demoHttpOpenAiChat() {
     port: PORT,
     host: HOST,
     runner: gateway.runner,
+    // 把加密存储里的运行时设置应用回 config（没配 recordStore 时是 no-op）
+    startup: () => gateway.loadSettings(),
   });
   process.stdout.write(`ingress 已启动: http://${HOST}:${PORT}\n`);
 
@@ -289,6 +291,8 @@ async function demoModelsEndpoint() {
     host: HOST,
     runner: gateway.runner,
     models,
+    // 把加密存储里的运行时设置应用回 config（没配 recordStore 时是 no-op）
+    startup: () => gateway.loadSettings(),
   });
   process.stdout.write(`ingress 已启动: http://${HOST}:${PORT}（含 /v1/models）\n`);
 

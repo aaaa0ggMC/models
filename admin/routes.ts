@@ -41,7 +41,16 @@ import type {
   PageQuery,
   ProviderPresetListResponse,
   ProviderUpsertRequest,
+  SecretRefCreateRequest,
+  SecretRefCreateResponse,
+  SecretRefListResponse,
+  SettingUpdateRequest,
+  SettingUpdateResponse,
   SyncTriggerRequest,
+  VirtualKeyCreateRequest,
+  VirtualKeyCreateResponse,
+  VirtualKeyRevokeResponse,
+  VirtualKeyUsageResponse,
 } from './api-types.js';
 import { ADMIN_API_VERSION } from './auth.js';
 
@@ -339,6 +348,126 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
         }
         const result = await deps.rotateDek();
         sendJson(res, result.ok ? 200 : 400, result);
+        return true;
+      }
+
+      // ---- 数据面 virtual key（66 §2）----
+      if (route === 'virtual-keys' && method === 'GET') {
+        const items = await service.listVirtualKeys();
+        const page = pageOf(items, url);
+        sendJson(res, 200, { ...page, items: page.items });
+        return true;
+      }
+      if (route === 'virtual-keys' && method === 'POST') {
+        const body = await readJson<VirtualKeyCreateRequest>(req, res);
+        if (body === undefined) return true;
+        const result = await service.createVirtualKey(actor, body);
+        if (!result.ok) {
+          sendJson(res, 400, { error: { code: 'invalid_virtual_key', message: result.error } });
+          return true;
+        }
+        // **全管理面唯一返回明文的地方**，且只返回这一次。响应带 no-store
+        // （sendJson 统一加），不进日志、不进审计。
+        const out: VirtualKeyCreateResponse = {
+          ok: true,
+          key: result.key,
+          plaintext: result.plaintext,
+        };
+        sendJson(res, 200, out);
+        return true;
+      }
+      const vkMatch = /^virtual-keys\/([^/]+)$/.exec(route);
+      if (vkMatch !== null && method === 'DELETE') {
+        const deleted = await service.deleteVirtualKey(actor, decodeURIComponent(vkMatch[1]!));
+        sendJson(res, 200, { ok: true, deleted });
+        return true;
+      }
+      const vkRevokeMatch = /^virtual-keys\/([^/]+)\/revoke$/.exec(route);
+      if (vkRevokeMatch !== null && method === 'POST') {
+        const result = await service.revokeVirtualKey(actor, decodeURIComponent(vkRevokeMatch[1]!));
+        if (!result.ok) {
+          sendJson(res, 404, { error: { code: 'not_found', message: result.error } });
+          return true;
+        }
+        const out: VirtualKeyRevokeResponse = { ok: true, key: result.key };
+        sendJson(res, 200, out);
+        return true;
+      }
+      const vkUsageMatch = /^virtual-keys\/([^/]+)\/usage$/.exec(route);
+      if (vkUsageMatch !== null && method === 'GET') {
+        const q = url.searchParams;
+        const usage = await service.virtualKeyUsage(
+          decodeURIComponent(vkUsageMatch[1]!),
+          parseIntOrUndefined(q.get('from_ts')),
+          parseIntOrUndefined(q.get('to_ts')),
+        );
+        const out: VirtualKeyUsageResponse = { ok: true, usage };
+        sendJson(res, 200, out);
+        return true;
+      }
+
+      // ---- 数据面认证模式（互斥语义的可见性）----
+      if (route === 'auth-mode' && method === 'GET') {
+        sendJson(res, 200, await service.describeDataPlaneAuth());
+        return true;
+      }
+
+      // ---- 运行时设置（P0-2）----
+      if (route === 'settings' && method === 'GET') {
+        sendJson(res, 200, await service.listSettings());
+        return true;
+      }
+      const settingMatch = /^settings\/([^/]+)$/.exec(route);
+      if (settingMatch !== null && method === 'PUT') {
+        const body = await readJson<SettingUpdateRequest>(req, res);
+        if (body === undefined) return true;
+        const result = await service.updateSetting(
+          actor,
+          decodeURIComponent(settingMatch[1]!),
+          body.value,
+        );
+        if (!result.ok) {
+          sendJson(res, result.status, {
+            error: {
+              code: result.status === 409 ? 'env_locked' : 'invalid_setting',
+              message: result.error,
+            },
+          });
+          return true;
+        }
+        const out: SettingUpdateResponse = { ok: true, item: result.item };
+        sendJson(res, 200, out);
+        return true;
+      }
+
+      // ---- 敏感值引用登记（只存 env:<VAR>，绝不存值）----
+      if (route === 'secret-refs' && method === 'GET') {
+        const items = await service.listSecretRefs();
+        const out: SecretRefListResponse = { items, total: items.length };
+        sendJson(res, 200, out);
+        return true;
+      }
+      if (route === 'secret-refs' && method === 'POST') {
+        const body = await readJson<SecretRefCreateRequest & { value?: unknown }>(req, res);
+        if (body === undefined) return true;
+        const result = await service.registerSecretRef(actor, body);
+        if (!result.ok) {
+          sendJson(res, result.status, {
+            error: { code: 'invalid_secret_ref', message: result.error },
+          });
+          return true;
+        }
+        const out: SecretRefCreateResponse = { ok: true, ref: result.ref };
+        sendJson(res, 200, out);
+        return true;
+      }
+      const secretRefMatch = /^secret-refs\/([^/]+)$/.exec(route);
+      if (secretRefMatch !== null && method === 'DELETE') {
+        const deleted = await service.deleteSecretRef(
+          actor,
+          decodeURIComponent(secretRefMatch[1]!),
+        );
+        sendJson(res, 200, { ok: true, deleted });
         return true;
       }
 

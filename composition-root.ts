@@ -68,6 +68,11 @@ import { createFastPathAdmission } from './gateway-core/pipeline/fast-path.js';
 import type { FastPathAdmission } from './gateway-core/pipeline/fast-path.js';
 import type { CapabilityEntry } from './ir/index.js';
 import { DefaultAliasResolver, defaultAliasRules } from './admin/aliases.js';
+import { DefaultVirtualKeyStore } from './storage/virtual-keys.js';
+import type { VirtualKeyStore } from './storage/virtual-keys.js';
+import { DataPlaneAuthenticator } from './auth/data-plane.js';
+import type { DataPlaneAuthDescription } from './auth/data-plane.js';
+import { SettingsService } from './config/settings.js';
 import { AdminService } from './admin/service.js';
 import { DefaultAdminAuth } from './admin/auth.js';
 import { createAdminRouter } from './admin/routes.js';
@@ -177,7 +182,25 @@ export interface GatewayOptions {
   pricingService?: PricingService;
   /** 用内存实现还是生产实现（logger/metrics/ids/transport 的默认值）。 */
   mode?: 'production' | 'test';
+  /**
+   * 配置文件路径（`config/layering.ts` 的第三层，非敏感默认值）。
+   *
+   * 给了但文件不存在 = 没有这一层（退到编译期默认值）。不传则设置界面
+   * 不显示「配置文件」这一来源。
+   */
+  configFilePath?: string;
+  /**
+   * 设置服务的 env 快照（**测试 seam**）。
+   *
+   * 让「哪一项被 env 覆盖了」的判定读这份快照，而不是真 `process.env`——
+   * 于是测试可以在不动全局环境的情况下验 env 锁。读 env 本身仍然只发生在
+   * di/config.ts（本选项只是把那份读取结果换一个来源）。
+   */
+  settingsEnv?: NodeJS.ProcessEnv;
 }
+
+/** 配置文件（`config/layering.ts` 第三层）的缺省路径；不存在即没有这一层。 */
+export const DEFAULT_CONFIG_FILE_PATH = 'config/gateway.json';
 
 export interface Gateway {
   container: Container;
@@ -213,6 +236,33 @@ export interface Gateway {
    * 此时网关没有管理面，`createHttpServer` 也不需要挂 `adminHandler`。
    */
   admin?: AdminAssembly;
+  /**
+   * 数据面 virtual key 存储（66 §2）。需要 `recordStore`；没配就是 undefined，
+   * 此时数据面退到极简 / permissive 模式（见 auth/data-plane.ts）。
+   */
+  virtualKeys?: VirtualKeyStore;
+  /** 数据面鉴权器（S0 注入的就是它）。总是装配的，与有没有存储无关。 */
+  dataPlaneAuth: DataPlaneAuthenticator;
+  /** 运行时设置服务（P0-2）。需要 `recordStore`。 */
+  settings?: SettingsService;
+  /**
+   * 把加密存储里的运行时设置应用回 config（**启动时必须 await 一次**）。
+   *
+   * 幂等：重复调用拿到同一个 Promise。典型用法：
+   *   `await startHttpServer({ ..., startup: () => gateway.loadSettings() })`
+   * 或在起服务前 `await gateway.loadSettings()`。
+   *
+   * **不 await 的后果**：启动后的短暂窗口内，请求路径用的是 env / 配置文件 /
+   * 默认值合并出的 config，而不是加密存储里那份。设置界面本身仍然显示正确的
+   * 当前值（它直接读存储），所以这个错误是「能看到但没生效」，不是静默的。
+   */
+  loadSettings(): Promise<number>;
+  /**
+   * 打一条数据面认证模式的告警（互斥被触发时）。
+   *
+   * 与 `loadSettings()` 同一个时机调：那时候才数得清库里有几把 key。
+   */
+  reportDataPlaneAuthMode(): Promise<DataPlaneAuthDescription>;
   /**
    * canonical 模型目录（`GET /v1/models` 的单一事实来源）。
    *
@@ -567,6 +617,45 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
   }
   container.registerValue(TOKENS.PluginHost, pluginHost);
 
+  // ---- 数据面鉴权（66 §2）----
+  // 虚拟 key 存储与鉴权器都在这里建：S0 经 PipelineRunner 的 `authenticator`
+  // 选项拿到鉴权器，管理面经 AdminService 拿到存储——两边共享**同一个实例**，
+  // 于是「撤销后立即失效」不需要任何跨组件通知（存储内部的写操作会清缓存）。
+  const virtualKeyStore =
+    options.recordStore === undefined
+      ? undefined
+      : new DefaultVirtualKeyStore(options.recordStore, clock);
+  const dataPlaneAuth = new DataPlaneAuthenticator({
+    ...(virtualKeyStore === undefined ? {} : { store: virtualKeyStore }),
+    clock,
+    ...(config.accessToken === undefined ? {} : { accessToken: config.accessToken }),
+    ...(config.virtualKeysEnabled === true ? { virtualKeys: true } : {}),
+  });
+
+  // ---- 运行时设置（P0-2）----
+  // 加密存储最高层的可写入口。`config` 传的是**同一个引用**，改设置就是改
+  // pipeline 各阶段经 `deps.config` 读到的那个对象（热生效）。
+  const settingsService =
+    options.recordStore === undefined
+      ? undefined
+      : new SettingsService({
+          store: options.recordStore,
+          clock,
+          config,
+          // 第三层（配置文件）的缺省路径。文件不存在 = 没有这一层
+          // （loadLayeredConfigFile 的既有立场），所以给个默认值不会改变
+          // 「没配文件」的部署的行为。
+          configFilePath: options.configFilePath ?? DEFAULT_CONFIG_FILE_PATH,
+          ...(options.settingsEnv === undefined ? {} : { env: options.settingsEnv }),
+          runtime: { modelSync, pluginHost },
+        });
+  let settingsLoaded: Promise<number> | undefined;
+  const loadSettings = (): Promise<number> => {
+    if (settingsService === undefined) return Promise.resolve(0);
+    settingsLoaded ??= settingsService.load();
+    return settingsLoaded;
+  };
+
   // ---- 计量 ----
   let usageSink: MemoryUsageSink | undefined;
   const emitter = new MemoryUsageEmitter({
@@ -611,6 +700,9 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
           return headers;
         },
       }),
+    ...(virtualKeyStore === undefined ? {} : { virtualKeys: virtualKeyStore }),
+    dataPlaneAuth,
+    ...(settingsService === undefined ? {} : { settings: settingsService }),
   });
 
   // ---- 路由 ----
@@ -629,23 +721,29 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
   const fastPathAdmission = createFastPathAdmission(pluginHost);
 
   // ---- PipelineRunner ----
-  const runner = new PipelineRunner({
-    config,
-    clock,
-    logger,
-    metrics,
-    ids,
-    transport,
-    adaptors: adaptorRegistry,
-    pluginHost,
-    usageEmitter: emitter,
-    credentialResolver,
-    capabilityRegistry,
-    router,
-    fastPathAdmission,
-    providerProfiles,
-    pricingService: options.pricingService ?? createDeepSeekPricingService(),
-  });
+  const runner = new PipelineRunner(
+    {
+      config,
+      clock,
+      logger,
+      metrics,
+      ids,
+      transport,
+      adaptors: adaptorRegistry,
+      pluginHost,
+      usageEmitter: emitter,
+      credentialResolver,
+      capabilityRegistry,
+      router,
+      fastPathAdmission,
+      providerProfiles,
+      pricingService: options.pricingService ?? createDeepSeekPricingService(),
+    },
+    {
+      // 数据面鉴权（66 §2）。不传 = S0 用 PERMISSIVE_AUTHENTICATOR，行为与本轮之前一致。
+      authenticator: dataPlaneAuth,
+    },
+  );
   container.registerValue(TOKENS.PipelineRunner, runner);
 
   const shutdown = async (): Promise<void> => {
@@ -678,6 +776,24 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       },
     }),
     ...(admin === undefined ? {} : { admin }),
+    ...(virtualKeyStore === undefined ? {} : { virtualKeys: virtualKeyStore }),
+    dataPlaneAuth,
+    ...(settingsService === undefined ? {} : { settings: settingsService }),
+    loadSettings,
+    reportDataPlaneAuthMode: async () => {
+      const described = await dataPlaneAuth.describe();
+      // 互斥被触发时打 error：access token 被静默忽略是这个设计里唯一的陷阱，
+      // 补偿手段之一就是启动时吼一声（另两个见 auth/data-plane.ts 文件头）。
+      if (described.ignored.length > 0) {
+        logger.error('数据面认证：配置冲突', { ignored: described.ignored });
+      } else {
+        logger.info('数据面认证模式', {
+          mode: described.mode,
+          virtual_key_count: described.virtual_key_count,
+        });
+      }
+      return described;
+    },
     models: modelCatalog,
     modelSync,
     shutdown,
@@ -697,7 +813,6 @@ export interface AdminAssembly {
   /** 把库里持久化的别名规则灌进解析器（启动时 await 一次）。 */
   loadAliases(): Promise<number>;
 }
-
 /**
  * 管理面静态资源的默认目录：`dist/webui/admin`（相对本编译产物所在目录解析）。
  *
@@ -724,6 +839,12 @@ function assembleAdmin(input: {
   clock: import('./ir/clock.js').Clock;
   usageSink?: import('./metering/memory-emitter.js').MemoryUsageSink;
   balanceClientFactory: () => import('./providers/deepseek/balance.js').DeepSeekBalanceClient;
+  /** 数据面 virtual key 存储（66 §2；与 S0 的鉴权器共享同一个实例）。 */
+  virtualKeys?: import('./storage/virtual-keys.js').VirtualKeyStore;
+  /** 数据面认证模式描述者（互斥语义的可见性）。 */
+  dataPlaneAuth: import('./auth/data-plane.js').DataPlaneAuthenticator;
+  /** 运行时设置（P0-2）。 */
+  settings?: import('./config/settings.js').SettingsService;
 }): AdminAssembly | undefined {
   const { options, capabilityRegistry, credentialResolver, clock } = input;
   if (options.recordStore === undefined) return undefined;
@@ -766,28 +887,41 @@ function assembleAdmin(input: {
               // MemoryUsageSink 能直接注入而不必包一层转换类。
               list: (fromTs, toTs) =>
                 input
-                .usageSink!.records.filter((r) => r.ts >= fromTs && r.ts < toTs)
-                .map((r) => ({
-                  request_id: r.request_id,
-                  ts: r.ts,
-                  provider: r.provider,
-                  model: r.model,
-                  ...(r.model_alias === undefined ? {} : { model_alias: r.model_alias }),
-                  status: r.status,
-                  usage: { units: r.usage.units as unknown as Record<string, number> },
-                  cost: {
-                    cash: { total: r.cost.cash.total },
-                    as_api: { total: r.cost.as_api.total },
-                    status: r.cost.status,
-                  },
-                  finish_reason: r.finish_reason,
-                  fast_path: r.fast_path,
-                })),
-          },
-        }),
+                  .usageSink!.records.filter((r) => r.ts >= fromTs && r.ts < toTs)
+                  .map((r) => ({
+                    request_id: r.request_id,
+                    ts: r.ts,
+                    provider: r.provider,
+                    model: r.model,
+                    ...(r.model_alias === undefined ? {} : { model_alias: r.model_alias }),
+                    status: r.status,
+                    // auth：**按 key 归因**的唯一入口（P0-1 的直接受益项）。
+                    // UsageRecord 侧的保证是「绝不含明文 key」，这里原样透出。
+                    auth: {
+                      key_id: r.auth.key_id,
+                      ...(r.auth.team_id === undefined ? {} : { team_id: r.auth.team_id }),
+                      ...(r.auth.user_id === undefined ? {} : { user_id: r.auth.user_id }),
+                    },
+                    usage: {
+                      units: r.usage
+                        .units as unknown as import('./admin/service.js').UsageUnitsView,
+                    },
+                    cost: {
+                      cash: { total: r.cost.cash.total },
+                      as_api: { total: r.cost.as_api.total },
+                      status: r.cost.status,
+                    },
+                    finish_reason: r.finish_reason,
+                    fast_path: r.fast_path,
+                  })),
+            },
+          }),
     ...(options.reconciliationSource === undefined
       ? {}
       : { reconciliationSource: options.reconciliationSource }),
+    ...(input.virtualKeys === undefined ? {} : { virtualKeys: input.virtualKeys }),
+    dataPlaneAuth: input.dataPlaneAuth,
+    ...(input.settings === undefined ? {} : { settings: input.settings }),
   });
 
   // ---- 认证 ----
