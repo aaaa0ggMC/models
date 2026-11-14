@@ -1,59 +1,130 @@
-# models
+# AgentGateway
 
-> **私有仓库 · WIP（work in progress）** —— 本仓库目前只有骨架，尚无可用代码。
+> **私有仓库 · WIP（work in progress）** —— 当前只有定位说明与骨架，尚无可用代码。
 >
-> 技术栈与架构尚未确定，请勿基于当前内容做任何集成。
+> 架构与详细设计见 [`docs/design/`](docs/design/)（撰写中）。
+> 在定稿前，本文件描述的是设计意图，不是已实现的行为。
 
 ## 项目定位
 
-一个**简单的模型聚合 & 分析平台**（model aggregation & analysis platform）。
+**AgentGateway** 是一个 **LLM API 网关**：客户端可以用任意主流格式发请求，
+由网关负责在不同格式与不同上游 provider 之间互转，并在链路上提供插件、
+内置工具、用量统计与计费等横切能力。
 
-从多个公开数据源聚合 AI / LLM 模型的信息，归一化成统一的数据模型，
-然后在其上做分析：价格对比、上下文长度对比、能力对比、调用成本估算。
+> 仓库名沿用 `models`（历史原因），项目名是 **AgentGateway**。
 
-目标是把"这个模型多少钱、能吃多长的上下文、擅长什么"这类分散在各家文档里的信息
-集中到一处，可比较、可筛选、可估算成本。
+要解决的核心问题：
 
-## 计划中的功能
+- 客户端与上游 provider 的格式互相绑定，换模型就要改代码；
+- 各家 usage / finish_reason / tool_call 表示不一致，难以统一计量；
+- 长会话、搜索、压缩等能力每个应用各写一遍；
+- 用量数据散落各处，无法统一查询与分析。
 
-- **多源聚合**：从多个公开数据源拉取模型列表与元数据（如 OpenRouter、models.dev、
-  LiteLLM 的模型价格表、ArtificialAnalysis 等），保留来源与抓取时间。
-- **归一化数据模型**：把各源字段映射到统一的 schema，统一价格单位（如 USD / 1M tokens）、
-  统一上下文长度表示、统一能力标签。
-- **对比分析**：价格、上下文长度、能力维度的横向对比；排序、筛选、分组。
-- **成本计算器**：输入 prompt / completion token 量（或按请求数估算），
-  算出各模型的调用成本并排序。
-- **数据快照与历史**：保留每次抓取的快照，便于观察模型上下线、价格变动。
+## 核心设计
 
-> ⚠️ 以上为规划，尚未实现。任何需要 API key 的数据源，key 一律走环境变量，
-> 不写入仓库。
+### 1. 格式互转
 
-## 目录结构规划
+客户端请求可以是任意主流格式，例如：
+
+- OpenAI Chat Completions
+- OpenAI Responses
+- Anthropic Messages
+- Gemini `generateContent`
+
+网关把请求转成上游 provider 的格式，再把上游响应转回客户端请求的格式。
+**新增一种客户端格式或一家上游 provider，不应影响其他格式与其他链路环节。**
+
+### 2. 自研 canonical 中间格式
+
+网关内部使用**自研的 canonical 中间格式**——它是一个**超集 schema**，
+不直接拿某个厂商的格式当超集（厂商格式各有私有字段与语义，做超集会漏水）。
+
+- 保留 raw passthrough 字段，保证**无损可逆**：转过去再转回来，语义不丢。
+- **fast path**：当客户端格式 == 上游 provider 格式时，跳过完整互转，
+  只做轻量标准化（usage 字段归一、finish_reason 归一、tool_call id 归一）。
+- canonical 是插件、内置工具、统计计费唯一看到的数据形态。
+
+### 3. 插件系统
+
+- **generic hook**：`onRequest` / `onResponse` / `onStreamChunk`，
+  只操作 canonical，不接触具体厂商格式——插件作者不需要懂所有 provider。
+- **adaptor 模式**：外部能力通过 adaptor 接入，而不是把逻辑硬编码进网关。
+- 首个计划接入：[billion-context](https://github.com/ranxianglei/billion-context)
+  （长会话上下文压缩插件），作为**请求侧压缩**的验证场景。
+
+### 4. 内置搜索
+
+在 canonical 里，搜索被建模为一个 **built-in tool**（`web_search`）：
+
+- 上游 provider **原生支持** → 透传，由 provider 执行；
+- 上游**不支持** → 网关自己实现搜索结果，并以 tool 结果的形式注入对话。
+
+对客户端而言，两种路径的可见行为一致。
+
+### 5. 统计与计费
+
+- **独立异步管道**：不阻塞请求主链路；请求完成后旁路归一化 usage 并落库。
+- 规范化 usage：统一 token 口径、缓存命中、计费档位，兼容各 provider 的差异。
+- **dog-fooding**：提供 **agent 接口**，让 AI 自己查询/分析用量数据
+  （例如"上个月哪个模型花了最多钱""哪些请求触发了压缩"）。
+- **WebUI**：复用现成 Agent 前端（Open WebUI / LibreChat 等，选型中），
+  **不从零画**。
+
+### 6. 显式 Pipeline 请求生命周期
+
+请求生命周期由显式的 Pipeline 阶段驱动，而不是散落在路由里的隐式逻辑。
+阶段之间传递 canonical 数据，插件与观测点可以查看任意阶段的中间数据。
+需要正确处理的两类复杂情况：
+
+- **流式 SSE**：chunk 级的互转、hook 与背压；
+- **工具调用多轮循环**：模型发起 tool_call → 执行 → 回填 → 再次请求。
+
+## 目录结构规划（草案）
+
+> 草案，随设计文档演进；实现动工前以 `docs/design/` 为准。
 
 ```text
 models/
-├── README.md            # 本文件
-├── AGENTS.md            # 项目级协作约定
-├── LICENSE              # MIT
+├── README.md              # 本文件
+├── AGENTS.md              # 项目级协作约定
+├── LICENSE                # MIT
 ├── .gitignore
-├── docs/                # 设计文档：数据源清单、schema 设计、分析口径
-├── data/
-│   ├── raw/             # 各数据源原始快照（按 source + 日期归档）
-│   └── normalized/      # 归一化后的统一 catalog（JSON / YAML）
-├── ingest/              # 采集管道，按数据源拆分
-├── analysis/            # 分析逻辑：归一化、对比、成本计算
-├── web/                 # 前端看板（技术栈待定）
-└── scripts/             # 一次性工具脚本、数据校验
+├── docs/
+│   └── design/            # 详细设计文档（撰写中）
+├── src/
+│   ├── canonical/         # canonical 中间格式：类型定义、校验、默认值、raw passthrough
+│   ├── adaptors/          # 客户端格式 ↔ 上游 provider 格式互转（含 fast path）
+│   ├── pipeline/          # 显式请求生命周期阶段编排（SSE、工具调用多轮循环）
+│   ├── plugins/           # 插件系统：generic hook + adaptor 接入外部能力
+│   ├── builtin/           # 内置能力：web_search 等 built-in tool
+│   ├── upstream/          # 上游 provider 客户端、连接管理、重试
+│   ├── usage/             # usage 归一化、统计与计费管道（异步）
+│   ├── agentapi/          # dog-fooding：供 AI 查询/分析用量的接口
+│   └── server/            # HTTP/SSE 入口、路由、鉴权、限流
+├── webui/                 # 前端：复用现成 Agent 前端，不从零画
+├── config/                # 配置样例（仅 .example；凭据走环境变量）
+└── tests/
+    ├── unit/
+    ├── contract/          # 各格式互转的往返（round-trip）测试
+    └── e2e/
 ```
+
+## 状态与路线
+
+- [x] 仓库与协作约定就绪
+- [ ] `docs/design/` 详细设计定稿
+- [ ] canonical schema 与往返互转（含 fast path）
+- [ ] Pipeline 骨架与 SSE / 工具调用循环
+- [ ] 插件系统 + billion-context 请求侧压缩
+- [ ] 内置 `web_search`（透传 + 网关自实现两条路径）
+- [ ] 异步用量统计/计费管道 + agent 查询接口
+- [ ] WebUI 接入
 
 ## 开发与运行
 
-> 🚧 待定。技术栈确认后补充：依赖安装、数据抓取、本地启动、测试与部署说明。
-
-## 数据来源说明
-
-仅使用公开可访问的数据源；需要鉴权的源通过环境变量提供凭据。
-各数据源的许可与使用条款需要在 `docs/sources.md` 中单独记录后再接入。
+> 🚧 待设计定稿后补充：依赖安装、本地启动、配置说明、测试与部署。
+>
+> 需要 provider 凭据的部分一律走环境变量，仓库内只保留 `.example` 样例。
 
 ## 许可
 
