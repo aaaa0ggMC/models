@@ -1,6 +1,8 @@
 # AgentGateway — 实现运行说明
 
-> 本节是**实现侧**的运行说明；设计文档在 [`docs/design/`](docs/design/)（00–70 共 15 篇），
+> 本节是**实现侧**的运行说明；完整实现报告（模块职责、DI 选型理由、两条 fast path 拍板的落地位置、
+> 测试覆盖、deferred 清单、**文档问题清单**、commit 列表）见 [`IMPLEMENTATION-REPORT.md`](IMPLEMENTATION-REPORT.md)。
+> 设计文档在 [`docs/design/`](docs/design/)（00–70 共 15 篇），
 > 架构与行为的唯一事实来源是那套文档，不是本文件。遇到文档矛盾/歧义时以文档为准并上报，
 > 不要按本文件的描述擅自发明。
 
