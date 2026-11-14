@@ -29,13 +29,10 @@
  * 用量看板      GET    /admin/api/usage?from_ts=&to_ts=
  * 余额探测      POST   /admin/api/balance/probe
  * 密钥状态      GET    /admin/api/keystore/status
+ * 密钥轮换      POST   /admin/api/keystore/rotate-kek（破坏性，需 confirm:true）
+ *               POST   /admin/api/keystore/rotate-dek
  * 审计日志      GET    /admin/api/audit?limit=&offset=
  * ```
- *
- * **未落地因而没有 UI 入口**的契约端点：`keystore/rotate-kek`、`keystore/rotate-dek`
- * （api-types.ts 定义了 KeystoreRotateKekRequest / KeystoreRotateDekResponse，
- * routes.ts 尚未实现）。界面上这两个按钮保留，点了会明确报「接口不可用」——
- * 按任务书要求：缺端点就显示清晰的不可用状态，不 invent 路由。
  *
  * ## 三条安全约定（写进代码而不是只写进文档）
  *
@@ -79,8 +76,8 @@ const EP = {
   usage: [`${API}/usage`],
   balanceProbe: [`${API}/balance/probe`],
   keystoreStatus: [`${API}/keystore/status`],
-  // 下面两个 routes.ts 尚未实现（api-types.ts 已定义请求/响应类型）；
-  // 点了会明确报「接口不可用」，不 invent 路由。
+  // KEK 轮换是破坏性操作：契约要求显式 confirm:true（旧密钥表作废，
+  // 没备份的数据永久解不开），UI 也必须先弹二次确认。
   keystoreRotateKek: [`${API}/keystore/rotate-kek`],
   keystoreRotateDek: [`${API}/keystore/rotate-dek`],
   audit: [`${API}/audit`],
@@ -942,7 +939,7 @@ function viewOverview() {
       h(
         'div',
         { class: 'btn-row' },
-        h('button', { type: 'submit', class: 'btn btn-primary', text: '轮换 KEK' }),
+        h('button', { type: 'submit', class: 'btn btn-danger', text: '轮换 KEK' }),
       ),
       kekBox.node,
     );
@@ -959,7 +956,9 @@ function viewOverview() {
     rotateCard.body.append(
       h('p', {
         class: 'card-note',
-        text: '轮换是写操作，会记入审计日志。KEK 轮换只重包裹 DEK，数据密文不动；DEK 轮换会重加密历史记录。',
+        text:
+          '轮换是写操作，会记入审计日志。KEK 轮换只重包裹 DEK，数据密文不动；DEK 轮换会重加密历史记录。' +
+          '网关没注入对应端口时会明确返回 501，不会假装成功。',
       }),
       h('fieldset', {}, h('legend', { text: 'KEK（包裹 DEK 的那把钥匙）' }), kekForm),
       h(
@@ -980,6 +979,18 @@ function viewOverview() {
         }
         body.new_passphrase = kekPass.value;
       }
+      // 破坏性操作：契约要求显式 confirm，且 UI 必须先弹二次确认
+      // （KeystoreRotateKekRequest.confirm：「没备份的数据永久解不开」）
+      if (
+        !confirm(
+          '轮换 KEK 会让旧密钥表作废：没有备份的数据将永久解不开。\n' +
+            (ks.mode === 'passphrase' ? '旧口令也会立即失效。' : 'key 文件内容会被替换。') +
+            '\n确定继续？',
+        )
+      ) {
+        return;
+      }
+      body.confirm = true;
       kekBox.loading('正在轮换 KEK…');
       try {
         const res = assertOk(await api(EP.keystoreRotateKek, { method: 'POST', body }), '轮换 KEK');
@@ -1387,7 +1398,8 @@ function storageText(s) {
 }
 
 /**
- * 用 GET /admin/api/access-paths 填 access_path 输入框的候选下拉。
+ * 用 GET /admin/api/access-paths 填 access_path 输入框的候选下拉
+ * （契约 AccessPathDto：{ id, label, requires_credential }）。
  *
  * **纯便利**：拉不到（端点不存在 / 形状变了）就静默退化成自由文本，
  * 不影响提交——access_path 本身是用户说了算的字符串。
@@ -1396,12 +1408,23 @@ async function fillAccessPathOptions(dataList) {
   try {
     const data = await api(EP.accessPaths);
     const items = Array.isArray(data.items) ? data.items : [];
-    const values = items
+    const entries = items
       .map((it) =>
-        typeof it === 'string' ? it : (it?.id ?? it?.access_path ?? it?.path ?? it?.label),
+        typeof it === 'string'
+          ? { value: it, label: it }
+          : {
+              value: it?.id ?? it?.access_path ?? it?.path ?? it?.label,
+              label: it?.label,
+            },
       )
-      .filter((v) => typeof v === 'string' && v.length > 0);
-    dataList.replaceChildren(...values.map((v) => h('option', { value: v })));
+      .filter((e) => typeof e.value === 'string' && e.value.length > 0);
+    dataList.replaceChildren(
+      ...entries.map((e) =>
+        e.label && e.label !== e.value
+          ? h('option', { value: e.value, label: e.label })
+          : h('option', { value: e.value }),
+      ),
+    );
   } catch {
     // 没有这个端点就算了：下拉为空，输入框仍是自由文本
   }

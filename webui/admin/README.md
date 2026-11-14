@@ -56,14 +56,16 @@
    §3.2b「自动解锁换不来运行时防护」）用 `textContent` 写入，**不截断、不改写、
    不"优化"**；页面顶部横幅与「密钥存储」卡片两处都是原文，并各自标注来源。
 
-## 已知缺口（契约有、路由未实现的端点）
+## 密钥轮换（破坏性操作）
 
-`admin/api-types.ts` 定义了 `KeystoreRotateKekRequest` /
-`KeystoreRotateDekResponse`，但 `admin/routes.ts` 尚未实现
-`keystore/rotate-kek` / `keystore/rotate-dek`。界面上这两个按钮保留，
-点击后明确显示「接口不可用：POST /admin/api/keystore/rotate-dek
-（服务端返回 404）」——按任务书要求，缺端点就显示清晰的不可用状态，
-不 invent 路由。
+`POST /admin/api/keystore/rotate-kek` 与 `rotate-dek` 都要求显式确认：
+
+- **KEK 轮换**契约层就要 `confirm: true`（`KeystoreRotateKekRequest.confirm`）——
+  旧密钥表会作废，没备份的数据永久解不开。UI 除了传 `confirm: true`，
+  还会先弹一次原生二次确认，不让用户一键触发。
+- **DEK 轮换**同样弹确认（会把历史记录用新 DEK 重加密）。
+- 网关没注入对应端口时返回 501 `not_implemented`，界面直接把服务端的
+  message 显示出来，不假装成功。
 
 ## 验证
 
