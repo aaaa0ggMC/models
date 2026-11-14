@@ -2,7 +2,6 @@
 
 > 版本：v1.0-draft ｜ 日期：2026-11-14 ｜ 状态：**draft（待 review）**
 > 上游依赖：[10-canonical-schema.md](./10-canonical-schema.md)
-> 下游被引用于：[40-provider-adaptors.md](./40-provider-adaptors.md)（adaptor 矩阵与之分离）
 
 ---
 
@@ -275,6 +274,7 @@
 **canonical 的边界 = 「主流厂商截至 2026-11 已公开表达的特性并集」+ 「多模态各模态的完备参数集」+ 「raw passthrough 逃生口」。**
 
 具体地，canonical **装得下**：
+
 - OpenAI / Anthropic / Gemini 三家 chat 格式的全部请求与响应字段（§1.1–1.3）；
 - TTS / ASR / Image / Embedding / Rerank / Moderation 六种模态的完备参数（§2）；
 - **decision 模态**：多模态内容引用 + 四类问题（binary / choice / scale / rubric）+ 校准概率与置信度 + 逐选项概率（§1.5）；
@@ -282,6 +282,7 @@
 - 任何我们没想到的东西——通过 `raw.unmapped` / `_raw` / `UnknownPart`。
 
 canonical **不装**：
+
 - 计费金额（只做计量，见 [10-canonical-schema.md](./10-canonical-schema.md) D5）；
 - 网关自身的路由/策略配置（那是 `route` 的职责，不是 IR 的）；
 - 视频模态的实现（只留空占位，见 [70-roadmap.md](./70-roadmap.md) §7 非目标）。
@@ -313,31 +314,36 @@ canonical **不装**：
 
 ## 5. Open Questions（普查本身的不确定项）
 
-1. OpenAI Responses 的 `reasoning` item 多轮回传规则（是否必须原样、`encrypted_content` 字段名）。
-2. OpenAI Responses 的 `computer_use` / `mcp` 工具配置字段全集。
-3. Anthropic `cache_creation.ephemeral_5m/1h_input_tokens` 是否分字段返回。
-4. Anthropic `context_management`（context editing / memory tool）的确切字段与语义。
-5. Gemini `googleSearchRetrieval` 是否已废弃（被 `googleSearch` 取代）。
-6. Gemini `thoughtSignature` 的确切字段名与回传要求。
-7. Gemini 是否有原生 TTS / ASR / Imagen 端点及其字段。
-8. Gemini Live API 的实时音视频协议（WS 帧结构）——canonical 的 WS 双路径是否够用。
-9. `parallel_tool_calls: false` → Anthropic / Gemini 的映射（目前判定"无对应"）。
-10. OpenAI `prompt_cache_breakpoint` + `prompt_cache_options{mode,ttl}` 的完整字段（GPT-5.6+）。
-11. Cohere rerank / Mistral 的完整字段集（只做了粗粒度）。
-12. Bedrock / Vertex 的专有参数全集（`additionalModelRequestFields` / `labels` / inference profile）。
+> **编号规则**：1–12 原是**无 Q 编号的本地编号**，且列表从 12 直接跳到 17，造成"跳号"。
+> 现已给 1–12 补上全局 Q 编号 **Q31–Q42**；原 17–22 重排为 **13–18**，仍对应全局 **Q25–Q30**。
+> 全表 1–18 连续无跳号。全局登记表见 [00-overview.md](./00-overview.md) §8。
+
+1. **Q31**：OpenAI Responses 的 `reasoning` item 多轮回传规则（是否必须原样、`encrypted_content` 字段名）。
+2. **Q32**：OpenAI Responses 的 `computer_use` / `mcp` 工具配置字段全集。
+3. **Q33**：Anthropic `cache_creation.ephemeral_5m/1h_input_tokens` 是否分字段返回。
+4. **Q34**：Anthropic `context_management`（context editing / memory tool）的确切字段与语义。
+5. **Q35**：Gemini `googleSearchRetrieval` 是否已废弃（被 `googleSearch` 取代）。
+6. **Q36**：Gemini `thoughtSignature` 的确切字段名与回传要求。
+7. **Q37**：Gemini 是否有原生 TTS / ASR / Imagen 端点及其字段。
+8. **Q38**：Gemini Live API 的实时音视频协议（WS 帧结构）——canonical 的 WS 双路径是否够用。
+9. **Q39**：`parallel_tool_calls: false` → Anthropic / Gemini 的映射（目前判定"无对应"）。
+10. **Q40**：OpenAI `prompt_cache_breakpoint` + `prompt_cache_options{mode,ttl}` 的完整字段（GPT-5.6+）。
+11. **Q41**：Cohere rerank / Mistral 的完整字段集（只做了粗粒度）。
+12. **Q42**：Bedrock / Vertex 的专有参数全集（`additionalModelRequestFields` / `labels` / inference profile）。
 
 ### 5.1 decision 模态的待验证项（Q21–Q24 已由本次调研解答，其余仍开放）
 
 **已解答**（结论见 §1.5 与 [../sources.md](../sources.md) §5）：
+
 - ~~Q21~~ 三家确切字段名/usage 形状/错误码——**已全部读到官方 API reference**，映射表在 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.2。
 - ~~Q22~~ Gemini 免费额度与区域、Jev 模型 id 与计价——**已确认**（Gemini Free 200 RPM/50K TPM/10K RPD、输入免费；Jev `jev-1.14.0` $0.042/M；OpenRouter 亦可用）。
 - ~~Q23~~ decision 能否 chat——**三家官方文档均明确不能**（Gemini model card output token limit = 0；Jev "do not write replies"；OpenAI 端点只收 questions）。
 - ~~Q24~~ chat 模拟的校准性/延迟/成本代价——**有已发表实测**（TypeSafe cookbook：26.8x–176.9x 慢、4.1x–1189x 贵；稳定性 LLM 变号 >10% vs Jev ≤6.7%）。
 
 **仍开放**：
-17. **Q25（decision）**：部分问题失败时的上游语义——canonical 已选"部分答案 + 每题 error"（OpenAI 的逐题 `refusal` 支持这个语义），但 Gemini 是**整请求**被拦（`prompt_feedback.block_reason`，`answers` 为空）、Jev 无对应机制。三家语义不齐，adaptor 需分别处理。
-18. **Q26（decision）**：OpenAI Decisions 的专属 rate limit 数值与是否与 `gpt-6-luna` chat/responses 共享配额池（无官方限额表）。
-19. **Q27（decision）**：OpenAI Decisions 的专属 4xx error code（questions >400、choices >255、images >128 等）——API reference 只列 200。
-20. **Q28（decision）**：Jev 的图片/`box` 能力需 opt-in header，该 header 经网关转发时的行为未验证。
-21. **Q29（decision）**：Gemini Decisions 的可用区域清单（官方只说 "Gemini Developer API (v1beta)"，Vertex "coming soon"，OpenRouter 标注无 EU in-region routing）。
-22. **Q30（decision）**：聚合校准度好是否等于我们的具体判断任务有可用阈值——AIHubMix 明确警告"不等于"，需在自己的 compact/escalate/stop 任务上抽样校准。
+13. **Q25（decision）**：部分问题失败时的上游语义——canonical 已选"部分答案 + 每题 error"（OpenAI 的逐题 `refusal` 支持这个语义），但 Gemini 是**整请求**被拦（`prompt_feedback.block_reason`，`answers` 为空）、Jev 无对应机制。三家语义不齐，adaptor 需分别处理。
+14. **Q26（decision）**：OpenAI Decisions 的专属 rate limit 数值与是否与 `gpt-6-luna` chat/responses 共享配额池（无官方限额表）。
+15. **Q27（decision）**：OpenAI Decisions 的专属 4xx error code（questions >400、choices >255、images >128 等）——API reference 只列 200。
+16. **Q28（decision）**：Jev 的图片/`box` 能力需 opt-in header，该 header 经网关转发时的行为未验证。
+17. **Q29（decision）**：Gemini Decisions 的可用区域清单（官方只说 "Gemini Developer API (v1beta)"，Vertex "coming soon"，OpenRouter 标注无 EU in-region routing）。
+18. **Q30（decision）**：聚合校准度好是否等于我们的具体判断任务有可用阈值——AIHubMix 明确警告"不等于"，需在自己的 compact/escalate/stop 任务上抽样校准。

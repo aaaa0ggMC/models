@@ -12,7 +12,7 @@
 
 ## 2. 管道结构
 
-```
+```text
 S10 UsageEmitter
    │  内存环形队列（有界，默认 10k 条）
    ▼
@@ -25,12 +25,12 @@ S10 UsageEmitter
          │
          ├──▶ Tier-1 存储：usage_events / usage_rollup（小、非敏感，默认常开）
          │
-         └──▶ [仅当 persist_messages = on]
+         └──▶ [仅当 persistence.messages = on]
               Tier-2 存储：request_bodies（大、敏感、加密）
                      │
                      ├─▶ 前缀压缩 / delta 链（§5）
                      ├─▶ zstd + 共享字典
-                     └─▶ 应用层信封加密（§6，详见 65 号文档）
+                     └──▶ 应用层信封加密（详见 [65-storage-and-retention.md](./65-storage-and-retention.md) 决策 S1）
 ```
 
 聚合器与主链路之间只有一条单向通道，**没有回压路径**：队列满时按 `drop_policy`（默认丢最旧 + 计数 + 告警）处理，绝不阻塞请求。
@@ -97,7 +97,7 @@ interface UsageRecord {
   warnings: string[];
   dropped_capabilities: string[];
   // ---- 外链 ----
-  body_ref?: string;                 // 指向 Tier-2 加密内容的 id（仅 persist_messages=on）
+  body_ref?: string;                 // 指向 Tier-2 加密内容的 id（仅 persistence.messages=on）
   // ---- 脱敏标记 ----
   redaction_profile: string;         // 使用的脱敏规则集 id
 }
@@ -127,149 +127,32 @@ interface UsageRecord {
 
 ## 5. 分层存储与消息内容持久化（默认关闭）
 
-### 5.1 两层
+> **本节已按 review #5 去重**：分层存储、开关语义、Tier-2 表结构、前缀压缩、保留策略、脱敏规则的**唯一事实来源**是
+> [65-storage-and-retention.md](./65-storage-and-retention.md) §4–§7。此前本文 §5/§7–§9 抄了一份，已经和 65 漂移：
+> 字典表名一边写 `zstd_dict` 一边写 `zstd_dicts`；单条无字典压缩率一边写 3–5× 一边写 1.25–5×；加密范围一边写"只做应用层"
+> 一边写"整库 + 列级双层"。两处分别维护必然分叉，故删除副本，只留指针。
+> **本文只保留"计费管道需要存储提供什么"这一个视角**：
 
-| 层 | 内容 | 体积 | 敏感度 | 默认 |
-|---|---|---|---|---|
-| **Tier-1** | `UsageRecord`、`RequestTrace` 摘要（request_id、耗时、模型、token、finish_reason、错误码、**不含消息正文**） | 小（~1KB/请求） | 低（可能含 model 名与用户 id） | **常开** |
-| **Tier-2** | 完整 canonical request/response（消息正文、工具调用参数与结果、搜索结果正文） | 大（数 KB ~ 数 MB） | 高 | **关闭** |
-
-### 5.2 开关语义
-
-```
-设置项：persistence.messages  ∈ { off, on }
-        persistence.usage     ∈ { on }        # 暂不支持关闭（计费必需）
-```
-
-- `off`：Tier-2 完全不落盘；Tier-1 的 `body_ref` 为空；trace 只保留摘要与 hash。
-- `on`：Tier-2 落盘到加密库，按 §6 加密、按 §7 压缩、按 §8 保留。
-- 切换开关**不追溯**：开启前的请求没有内容，开启后关闭的请求内容按保留策略清理。
-- 开关粒度：全局默认 + 虚拟 key 级覆盖（某些 key 可强制 `off`，用于高敏感场景）。
-
-### 5.3 Tier-2 里存什么
-
-```typescript
-interface StoredConversation {
-  id: string;                        // = request_id
-  session_key: string;               // 长会话分组键（用于前缀压缩）
-  turn_index: number;
-  ts: number;
-  client_format: FormatId;
-  provider_format: FormatId;
-  model: string;
-  /** 完整 canonical 请求（压缩前） */
-  request: CanonicalRequest;
-  /** 完整 canonical 响应（聚合后） */
-  response: CanonicalResponse;
-  /** 网关 agentic loop 的每一轮中间 canonical */
-  turns?: Array<{ request: CanonicalRequest; response: CanonicalResponse }>;
-  usage: CanonicalUsage;
-  trace: RequestTrace;               // 见 20-pipeline.md §7
-  redaction_profile: string;
-}
-```
-
-## 6. 加密与密钥管理（结论详见 [65-storage-and-retention.md](./65-storage-and-retention.md)）
-
-**结论先行**：**SQLite 单文件 + 应用层信封加密（Argon2id 派生 KEK，AES-256-GCM 加密每条记录，AAD 绑定 `request_id`）**，加密文件放在数据目录；**不选** SQLCipher / libsql 加密，理由（DB 级加密会把密钥生命周期和"库打开即全解密"耦合，且 libsql 的加密仍是 experimental；应用层加密能做到"按记录粒度 + 备份可移植 + 可换算法"）。
-
-密钥来源三档，按部署形态自选：
-
-| 档位 | 解锁方式 | 适用 | 取舍 |
-|---|---|---|---|
-| A | 启动时交互输入口令（Argon2id → KEK） | 有人值守 | 最安全；网关无法自动重启 |
-| B | OS keyring / systemd credential 里的 KEK 或密文口令 | 无人值守常用 | 依赖 OS 账户权限；root 可读 |
-| C | 明文 key 文件 + 严格权限（0600，属主隔离） | 完全无人值守 | 等同"密钥与数据同机"，只防备份/拷贝泄露，不防本机 root |
-
-**硬规则**：密钥/口令/密文**不进 git**、不打印、不写日志；`.env` 只在部署机本地，仓库里只有 `.env.example`。
-
-无人值守场景下的诚实结论：**单机私有时，B 档是本项目推荐默认值**——它能防"备份文件被拷走 / 数据库文件外泄"，不能防"攻陷运行账号"。要防后者需要 TPM/KMS/HSM，超出本项目范围（在 65 号文档标 **待验证**）。
-
-## 7. 消息内容的前缀压缩 / 增量存储
-
-### 7.1 问题
-
-同一会话的连续请求共享极长公共前缀：system prompt + 工具定义 + 全部历史消息，只有最后 1~2 轮是新的。 naive 存整份 canonical，第 N 轮的存储量 ≈ O(N²)（累计）。一个 50 轮的会话，光历史就可能存 50 份近乎相同的副本。
-
-### 7.2 方案：会话 delta 链 + zstd 共享字典
-
-```
-session_key = S
-  turn 0:  BASE    ── 完整 canonical（压缩后）
-  turn 1:  DELTA   ── diff(BASE, canonical_1) = { append: [...], mutate: [{path, value}] }
-  turn 2:  DELTA   ── diff(canonical_1, canonical_2)
-  ...
-  turn k:  SNAPSHOT ── 每 snapshot_every_turns（默认 20）轮打一个完整快照，限制回放成本
-```
-
-- **diff 表示**：因为请求历史基本是"追加 + 极少数原地改"（system 微调、cache_control 断点移动），用 JSON Patch（RFC 6902）子集足够：`add`（追加数组元素）、`replace`（按 path）、`remove`。整段替换的字段（如 `response`）直接存整值，不做细粒度 diff——细粒度 diff 对大 JSON 收益低、复杂度高。
-- **编码**：每条 delta 单独 zstd 压缩（level 3）；同一 `session_key` 的所有 delta 共用一个**共享字典**。
-- **共享字典**：用 zstd 训练（`zstd --train`，`--maxdict` 默认 112KB，样本取该会话前若干轮的 canonical 序列化文本）。字典本身也入库（`zstd_dict` 表，按 `session_key` + 训练时间版本化），字典未命中时退化为无字典压缩。
-- **读取**：`BASE → 回放 delta 链 → 目标轮`。回放成本 O(轮数)，所以有 snapshot；快照本身也可压缩。
-
-### 7.3 压缩率估算（量级判断，需实测）
-
-| 场景 | 预计压缩率 | 依据 |
+| 计费管道用到的存储能力 | 归属 | 本文的用法 |
 |---|---|---|
-| 单条 canonical 单独 zstd（无字典） | 3–5× | 文本类 JSON 的常规水平 |
-| 同会话 delta 链 + 共享字典 | 相对"每轮存全量"再降 **10–50×** | 前缀重复度极高；zstd 字典对重复子串的收益主要来自"短匹配变长匹配" |
-| 端到端（含"只有最后几 KB 是新内容"的 diff） | 50 轮会话从 ~O(N²) 全量降到 ~O(N) 全量 × 1/20 | 结构性的，不依赖压缩算法 |
+| Tier-1 `usage_events` / `usage_rollup_*` | 65 §4.3 | `UsageRecord` 的结构见本文 §3；rollup 规则见 §4.1 |
+| Tier-2 完整 canonical（`StoredConversation`） | 65 §4.3 / §5 | 只在 `persistence.messages = on` 时存在；dog-fooding 的 `trace_get` / `conversation_search` 依赖它，见 §6 |
+| `RequestTrace` | 65 §4.1 | Tier-1 摘要，不含正文 |
+| 脱敏（`redaction_profile`） | 65 §6 | 写入 Tier-2 **之前**执行；`UsageRecord.redaction_profile` 记用了哪套规则 |
+| 保留与导出 | 65 §7 | `retention.*` 配置项在 65 §7，不在这里重复 |
 
-**这些是量级估计，不是承诺**。Phase 1 要用真实 trace 抽样实测并写进 [docs/sources.md](../sources.md) 的基准小节（样本：10/30/50 轮会话，各 provider 格式）。
+**开关**：`persistence.messages`（默认 `off`）、`persistence.usage`（恒 `on`）、`persistence.media`（默认 `off`）。
+**`off` 时 Tier-2 完全不落盘**：`UsageRecord.body_ref` 为空，trace 只保留摘要与 hash；§6 的 `trace_get` / `conversation_search`
+直接不出现在工具列表里（不是"返回错误"，而是"不可见"，这样 agent 不会反复试探）。
 
-### 7.4 跨会话去重（可选，Phase 2+）
+---
 
-system prompt 和工具定义在多个会话间也高度重复。用**内容定义分块（CDC，FastCDC）**对 canonical 序列化文本切块，按块 hash 去重，块级存储。收益取决于 system prompt 的复用程度；复杂度明显高于 §7.2，默认关闭。
+## 6. Dog-fooding Agent 接口
 
-### 7.5 实现要点
+> **编号修正（review #5 去重的连带后果）**：本文原有的分层存储/前缀压缩/保留/脱敏四节已改为指向 [65-storage-and-retention.md](./65-storage-and-retention.md) 的指针，
+> 原 §10/§11 顺次前移为 §6/§7，避免出现 5 → 10 的跳号。外部引用已同步（66 §4、15 §6.4）。
 
-1. **加密顺序**：先压缩、后加密（加密后密文不可压缩，顺序反了会让压缩率归零）。delta 链在明文态计算 diff，落盘前压 + 加密。
-2. **字典安全**：字典从该会话自身的明文训练而来，因此**必须与数据同级加密保管**（它本身会泄漏前缀特征）。不要把字典当成非敏感资产。
-3. **回放性能**：单请求最多触发一次回放（dog-fooding agent 读历史时），不做随机访问优化；需要随机访问时以 snapshot 为入口。
-4. **AAD 绑定**：每条密文的 AAD 绑 `id + session_key + turn_index`，防止密文块被换位/重放（见 §6）。
-
-## 8. 保留策略
-
-| 配置 | 默认 | 说明 |
-|---|---|---|
-| `retention.messages_days` | `30` | Tier-2 消息内容保留天数；`0` = 不自动清理 |
-| `retention.messages_max_count` | `20000` | Tier-2 条数上限，超出按时间淘汰最旧 |
-| `retention.usage_days` | `365` | Tier-1 usage 保留天数 |
-| `retention.rollup_after_days` | `90` | 超过该天数的 usage 聚合为日/月 rollup 行，明细可归档删除 |
-| `cleanup.schedule` | 每日 04:00 本地时间 | 清理任务 cron |
-| `export.format` | 加密 JSONL + zstd | 手动导出用 |
-
-- 清理是**物理删除**（不是软删），并在 `retention_log` 表记一条"删了哪个时间区间的多少条"（只记统计，不记内容）。
-- 加密导出：用 age 或 AES-256-GCM + Argon2id 派生密钥（与 §6 同一套 KDF 参数），导出文件含版本头与 KDF 参数，便于跨机恢复。
-
-## 9. 脱敏规则
-
-在写入 Tier-2 **之前**执行，`redaction_profile` 记录用了哪套规则。
-
-### 9.1 硬编码黑名单（永不可配置关闭）
-
-| 目标 | 处置 |
-|---|---|
-| `Authorization` / `x-api-key` / `x-goog-api-key` / `api-key` 等 header | 整个 header 丢弃 |
-| provider base_url 的 userinfo 段（URL 里 `scheme://用户名:口令@主机` 那种内联凭据写法） | 剥离 userinfo |
-| 疑似 API key 的字符串（`sk-`、`sk-ant-`、`AIza`、`ghp_`、`xoxb-` 等前缀 + 长度特征） | 替换为 `<REDACTED:key>` |
-| JWT（`eyJ` 开头三段 base64） | 替换为 `<REDACTED:jwt>` |
-| `.env` 内容 / 私钥块（`-----BEGIN … PRIVATE KEY-----`） | 整块替换 |
-
-### 9.2 可配置规则
-
-- JSON path 黑名单：如 `messages[*].parts[*].raw.headers`；
-- 正则规则集（用户自定义，如内部域名、项目代号）；
-- 采样/截断：超过 `max_stored_content_bytes`（默认 256KB/请求）的内容截断并标记 `truncated: true`；
-- **模式**：`redaction.mode ∈ { store_redacted, drop_message }`，默认前者。
-
-### 9.3 与 trace 的关系
-
-`RequestTrace` 默认不含正文，因此 Tier-1 几乎不触发脱敏；但 `plugin_log`、`warnings` 里可能夹带用户内容，统一走 §9.2 的路径规则。
-
-## 10. Dog-fooding Agent 接口
-
-### 10.1 分层访问约束（与 §5.2 强一致）
+### 6.1 分层访问约束（与 [65-storage-and-retention.md](./65-storage-and-retention.md) §4.2 强一致）
 
 | `persistence.messages` | agent 能读 |
 |---|---|
@@ -278,17 +161,17 @@ system prompt 和工具定义在多个会话间也高度重复。用**内容定�
 
 agent 拿不到密钥材料，也拿不到脱敏前的数据——脱敏在入库前完成，agent 读的是已脱敏结果。
 
-### 10.2 接口形态
+### 6.2 接口形态
 
 agent 通过**网关自身的 OpenAI 兼容端点**访问（dog-fooding：网关把内部能力暴露成 tools，自己当自己的 client）。
 
-```
+```text
 POST /v1/chat/completions            # 标准入口，模型可选"内置分析模型"
   tools: [
     { type: "function", name: "usage_query",   ... },
     { type: "function", name: "cost_report",   ... },
-    { type: "function", name: "trace_get",     ... },   # 受 persist_messages 约束
-    { type: "function", name: "conversation_search", ... }, # 受 persist_messages 约束
+    { type: "function", name: "trace_get",     ... },   # 受 persistence.messages 约束
+    { type: "function", name: "conversation_search", ... }, # 受 persistence.messages 约束
     { type: "function", name: "plugin_config_get", ... },
     { type: "function", name: "provider_health", ... }
   ]
@@ -296,32 +179,36 @@ POST /v1/chat/completions            # 标准入口，模型可选"内置分析�
 
 工具集是**白名单制**：只有显式开启的 tool 才会出现在列表里，且每个 tool 声明自己的 tier 依赖（`requires_persistence: "messages"`）。`off` 时 `trace_get` / `conversation_search` 直接不出现在 tools 列表——不是"返回错误"，而是"不可见"，这样 agent 不会反复试探。
 
-### 10.3 工具草案
+### 6.3 工具草案
 
 ```typescript
-/**  Tier-1，默认可用 */
-usage_query(params: {
-  from: string; to: string;
-  group_by?: ("hour"|"day"|"model"|"provider"|"key_id"|"client_format")[];
-  filters?: { model?: string; provider?: string; key_id?: string; status?: string };
-  metrics?: ("tokens"|"cost"|"requests"|"latency_p50"|"latency_p95"|"error_rate"|"cache_hit_rate")[];
-}): { rows: Array<Record<string, number>>; totals: Record<string, number> };
+/** dog-fooding 工具集的方法签名（不是可执行代码，是契约草案）。
+ *  包在 interface 里是为了让 tsc 能解析——此前是裸的函数签名行，TS1005 报 21 处。 */
+interface DogfoodingTools {
+  /** Tier-1，默认可用 */
+  usage_query(params: {
+    from: string; to: string;
+    group_by?: ("hour"|"day"|"model"|"provider"|"key_id"|"client_format")[];
+    filters?: { model?: string; provider?: string; key_id?: string; status?: string };
+    metrics?: ("tokens"|"cost"|"requests"|"latency_p50"|"latency_p95"|"error_rate"|"cache_hit_rate")[];
+  }): { rows: Array<Record<string, number>>; totals: Record<string, number> };
 
-cost_report(params: { from: string; to: string; group_by?: "model"|"provider"|"day" }): CostReport;
+  cost_report(params: { from: string; to: string; group_by?: "model"|"provider"|"day" }): CostReport;
 
-/**  Tier-2，仅 persist_messages=on */
-trace_get(params: { request_id: string; include_body?: boolean }): RequestTrace & { body?: StoredConversation };
-conversation_search(params: {
-  query?: string; session_key?: string; from?: string; to?: string;
-  limit?: number; include_body?: boolean;
-}): { hits: Array<{ request_id: string; session_key: string; turn_index: number; snippet?: string }> };
+  /** Tier-2，仅 persistence.messages=on */
+  trace_get(params: { request_id: string; include_body?: boolean }): RequestTrace & { body?: StoredConversation };
+  conversation_search(params: {
+    query?: string; session_key?: string; from?: string; to?: string;
+    limit?: number; include_body?: boolean;
+  }): { hits: Array<{ request_id: string; session_key: string; turn_index: number; snippet?: string }> };
+}
 ```
 
-### 10.4 与 WebUI 的关系
+### 6.4 与 WebUI 的关系
 
 WebUI 的"agent 对话"页就是普通聊天界面，指向上述端点；数据面与 Tier-1/Tier-2 完全一致，不存在"后台另一套权限"。UI 选型见 [00-overview.md](./00-overview.md)。
 
-## 11. 待验证清单
+## 7. 待验证清单
 
 1. 各 provider `input_tokens` 是否已含 cache read（决定 §4 规则 2 的最终写法）。
 2. zstd 共享字典在"短 delta + 长公共前缀"上的实测压缩率，以及字典训练耗时（应控制在百 ms 级，否则要离线预训练）。

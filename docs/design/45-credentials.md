@@ -2,7 +2,6 @@
 
 > 版本：v1.0-draft ｜ 日期：2026-11-14 ｜ 状态：**draft（待 review）**
 > 上游依赖：[10-canonical-schema.md](./10-canonical-schema.md)（canonical 只管请求语义，凭据是正交的第二根支柱）、[65-storage-and-retention.md](./65-storage-and-retention.md)（加密存储）、[66-auth.md](./66-auth.md)（数据面 virtual key 是"客户端侧"凭据，本文是"上游侧"凭据，两者不要混）
-> 下游被引用于：[40-provider-adaptors.md](./40-provider-adaptors.md)（能力矩阵的键）、[20-pipeline.md](./20-pipeline.md)（S2 路由）、[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md)（双口径成本）
 
 ---
 
@@ -25,6 +24,9 @@
 ## 2. 凭据类型（统一抽象）
 
 ```typescript
+// ⚠️ 命名注意（review #3 补充发现）：`Credential` 与 Web 平台的全局 `Credential` 接口同名，
+// 在带 DOM lib 的 tsc --strict 下会报 TS2300 Duplicate identifier。
+// 类型抽取成 ir/credential.ts 时建议改名 `UpstreamCredential`（本文只标注，不擅自改）。
 type Credential =
   | ApiKeyCredential
   | OAuthDeviceCodeCredential
@@ -126,7 +128,7 @@ interface CredentialHealth {
 
 同一个模型名在不同路径下是不同东西：
 
-```
+```text
 access_path: "openai"                model_namespace: "openai"
   → openai/gpt-5.4                   API key，按 token 计费，有 usage API
 
@@ -212,7 +214,7 @@ interface AccessPreference {
 
 ### 4.2 决策时序（S2 内）
 
-```
+```text
 1. 解析 model 字符串 → (access_path 候选列表, model)
    （客户端可显式指定 access path：`openai-codex/gpt-5.4`；
      未指定则按 RoutingPolicy 展开候选）
@@ -254,7 +256,7 @@ interface AccessPreference {
 
 ### 5.1 设备码登录流程（`oauth_device_code`）
 
-```
+```text
 [IDLE] ──发起──▶ [PENDING_USER] ──用户完成登录──▶ [AUTHORIZED]
    │                    │                              │
    │               轮询超时/拒绝                        ▼
@@ -269,6 +271,7 @@ interface AccessPreference {
 ```
 
 要点：
+
 - 发起：网关向上游请求 device code，返回 `verification_uri` + `user_code`，通过 WebUI / CLI / 通知展示给用户。
 - 轮询：按上游要求的间隔轮询授权端点（**不得快于上游规定**，否则可能被限流）。
 - 落盘：拿到 access_token + refresh_token 后**立即加密入库**（或写 OS keyring），永不明文落盘。

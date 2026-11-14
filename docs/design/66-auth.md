@@ -2,7 +2,6 @@
 
 > 版本：v1.0-draft ｜ 日期：2026-11-14 ｜ 状态：**draft（待 review）**
 > 上游依赖：[00-overview.md](./00-overview.md)（UI 选型结论：fork LibreChat）、[65-storage-and-retention.md](./65-storage-and-retention.md)（密钥处理）
-> 下游被引用于：[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md)（`auth.key_id` 是计费主键）
 
 ---
 
@@ -62,6 +61,7 @@ interface VirtualKey {
 **v1 默认：本地账号（密码 + Argon2id）+ passkey/WebAuthn，二选一或并用。不带任何 OAuth。**
 
 **理由**：
+
 1. 私人自用、单用户/少用户——本地账号零外部依赖、零注册手续、断网可用；
 2. passkey 抗钓鱼且无需记密码，是这个场景下体验最好的方案；
 3. **OAuth 的固定成本被严重低估**（见 §3.2），为一个"只有我登录"的面板引入三家 OAuth App 注册与维护不划算；
@@ -105,7 +105,7 @@ LibreChat 已有 RBAC + capabilities（`read:configs` / `manage:configs:<section
 | 角色 | 能做什么 |
 |---|---|
 | `owner` | 全部：provider/key 管理、插件配置、用量看板、消息持久化开关 |
-| `viewer` | 只看用量看板与 trace（受 `persistence.messages` 约束，见 [60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §10.1） |
+| `viewer` | 只看用量看板与 trace（受 `persistence.messages` 约束，见 [60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §6.1） |
 | `agent` | 只有 dog-fooding agent 的服务账号（数据面 virtual key，不是人） |
 
 **隐私开关优先于角色**：`persistence.messages = off` 时，`owner` 也看不到消息正文——开关是硬边界，角色只在开关之内分配可见性。

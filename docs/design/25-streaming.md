@@ -45,8 +45,8 @@ interface StreamFrame<E extends StreamEventType = StreamEventType> {
   ts: number;
 }
 
-type ModalityKind =
-  | "chat" | "image" | "tts" | "asr" | "embedding" | "rerank" | "moderation" | "video";
+// `ModalityKind` 的唯一定义在 10-canonical-schema.md §3.1（含 decision）。
+// 这里不再重复定义——此前本文件抄了一份且漏了 decision，review #3 用 tsc 抓到重复定义。
 
 type StreamEventType = "start" | "delta" | "end" | "error" | "usage" | "meta";
 
@@ -103,7 +103,7 @@ interface MetaData {
 
 网关对客户端暴露为 SSE 时，事件名统一为 `ag.frame`，帧体为 JSON。这样**新增模态不需要新事件名**，客户端一个 handler 走全部：
 
-```
+```text
 event: ag.frame
 data: {"event":"start","seq":0,"kind":"tts","data":{...}}
 
@@ -127,7 +127,7 @@ data: {"event":"delta","seq":1,"kind":"tts","data":{"audio":{"encoding":"base64"
 
 上游没有 JSON 信封，只有 `Transfer-Encoding: chunked` 的音频字节。桥接方案：
 
-```
+```text
 上游 chunked bytes
    │
    ▼
@@ -155,7 +155,7 @@ Deepgram / AssemblyAI 的实时 ASR 是 WS：客户端边说边上传音频，�
 
 #### 路径 1：透传代理（默认，推荐）
 
-```
+```text
 客户端 WS ◀══════ 网关 WS 代理 ══════▶ 上游 WS
              （只做：鉴权、限流、计量、观测、审计）
 ```
@@ -167,7 +167,7 @@ Deepgram / AssemblyAI 的实时 ASR 是 WS：客户端边说边上传音频，�
 
 #### 路径 2：转换模式（插件需要介入时）
 
-```
+```text
 客户端 WS ──▶ 网关 [ASR Ingress]  ──▶ 上游（拉模式或 WS）
                 │ 音频帧 → canonical MediaChunk
                 │ 转写帧 ← canonical StreamFrame{kind:"asr"}
@@ -295,7 +295,7 @@ interface StreamChunkBuffer {
 
 ### 8.2 双路设计
 
-```
+```text
                     ┌── 路 1：上游 usage ────────────────────┐
                     │  流内 usage 帧 / 流结束时的 usage 字段   │
                     │  非流式：响应体 usage                   │

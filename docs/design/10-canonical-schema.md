@@ -3,7 +3,9 @@
 > 版本：v1.0-draft ｜ 日期：2026-11-14 ｜ 状态：**draft（待 review）**
 > 定位：AgentGateway 的唯一中间表示（Intermediate Representation, IR）。所有 adaptor、插件、计费、trace 只面对本文定义的类型。
 > 上游依赖：[00-overview.md](./00-overview.md)（术语表与定位）
-> 下游被引用于：[20-pipeline.md](./20-pipeline.md)、[25-streaming.md](./25-streaming.md)、[30-plugin-api.md](./30-plugin-api.md)、[40-provider-adaptors.md](./40-provider-adaptors.md)、[50-builtin-search.md](./50-builtin-search.md)、[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md)、[15-modalities.md](./15-modalities.md)
+> **类型唯一事实来源**：本文的 `ModalityKind`、`BuiltinTool`、`CapabilityEntry`、`CanonicalRequestEnvelope` / `CanonicalResponseEnvelope` 是**唯一定义处**。其他文档里出现的同名类型一律是引用，不得重复定义或改写字段——这正是 review #3 用 `tsc` 抓到的漂移源头（`ModalityKind` 在 25 被重复定义且漏了 `decision`；`BuiltinTool.name` 在 50 被写成含厂商专有名的联合；`CapabilityEntry` 在 15/45 有两份不同形状）。
+> **长期方案（提案，未执行）**：把这些类型抽成真实代码文件（`ir/` 下的 `envelope.ts` / `chat.ts` / `decision.ts` / `stream.ts` / `usage.ts` / `plugin.ts` / `credential.ts` / `capability.ts`），JSON Schema 由 TS 生成，文档改为引用文件；**在作者拍板前本文仍以 Markdown 代码块为准**，且 CI 里的 `tsc` 检查暂标注为"待类型抽取后启用"。
+> **已修的编译错误**：§2.1 `FormatId` 里 `| "gemini.generateContent";` 的多余分号（会让后面所有多模态格式报 TS1109）已删除。
 
 ---
 
@@ -31,11 +33,13 @@
 **决策**：顶层是 `CanonicalEnvelope`，用 `kind` 判别模态（`chat` / `tts` / `asr` / `image` / `embedding` / `rerank` / `moderation` / `video`）。chat payload 最丰富，但图片/音频**不塞进 messages**。
 
 **理由**：
+
 1. TTS/ASR/Image 的输入输出结构与 chat 完全正交（TTS 输入是纯文本 + 声音规格，输出是音频；ASR 输入是音频，输出是带时间戳的分段）。硬塞进 messages 会让 canonical 出现"假消息"（把一段音频包成 `role:user` 的 message 再解包），每加一种模态就往 messages 里加一种特判。
 2. 共享信封（request_id / model / usage / error / streaming / raw）是跨模态**真正**共用的部分，抽出来才不会被反复重写。
 3. `kind` 判别 + 注册表使新增模态**不改信封、不改现有 codec**。
 
 **考虑过的替代方案**：
+
 - *A. 以 OpenAI Chat Completions 为枢轴，其余模态都映射成 message*（llmshim 的做法，见 [docs/sources.md](../sources.md)）。否掉理由：TTS 没有"消息"，Image 没有"对话"，映射过去必然发明不存在的字段；且枢轴格式的更新会强制 canonical 跟着改。
 - *B. 每种模态一套完全独立的顶层 schema*。否掉理由：信封字段（auth/usage/error/streaming/raw）会复制 8 份，且跨模态统计与计费无法统一。
 - *C. 以 Responses API 为超集*。否掉理由：Responses 有 `input` items 但**没有** TTS/ASR/Image 的一等公民位置，且它是单一厂商格式，更新不受我们控制。
@@ -45,6 +49,7 @@
 ### 决策 D2：canonical 是「超集 + 显式能力声明」，不是「万能容器」
 
 **决策**：canonical 字段是所有主流格式**表达能力的并集**，并显式区分：
+
 - `core`：canonical 自己定义、跨格式语义稳定的字段；
 - `native`：只在特定 provider 有意义的字段，用命名空间隔离（如 `native.openai.*` / `native.anthropic.*` / `native.gemini.*`）；
 - `raw`：完全未建模的字段，见 §7。
@@ -184,7 +189,7 @@ type FormatId =
   | "openai.chat"           // POST /v1/chat/completions
   | "openai.responses"      // POST /v1/responses
   | "anthropic.messages"    // POST /v1/messages
-  | "gemini.generateContent"; // POST /v1beta/models/{m}:generateContent
+  | "gemini.generateContent"  // POST /v1beta/models/{m}:generateContent
   // 多模态端点（15-modalities.md §端点形态）
   | "openai.audio.speech" | "openai.audio.transcription"
   | "openai.images.generations" | "openai.images.edits"
@@ -202,7 +207,7 @@ type FormatId =
 ```typescript
 type ModalityKind =
   | "chat"        // [v1] 最丰富
-  | "decision"    // [v1.5] 第五模态：判断模型，见 15-modalities.md §6
+  | "decision"    // [v1.5] 2026-11 新增的第 9 个模态（勿称"第五模态"），见 15-modalities.md §6
   | "embedding"   // [v1]
   | "tts"         // [v1.5]
   | "asr"         // [v1.5]
@@ -639,9 +644,10 @@ interface DecisionAnswer {
 
 **设计说明（D8）**：`probability`（校准概率）与 `confidence`（置信度分数）**分开建模，不合并**。上游对二者定义不一（有的是模型自评确定性，有的是归一化边际），合并会丢失"这次判断有多可信"与"这个选项有多可能"的区分——而前者正是 compact/escalate/stop 决策要用的信号。
 
-**设计说明（D8b）**：`DecisionQuestion.type` 用五种 canonical 稳定类型（`binary` / `choice` / `scale` / `rubric`），上游专有类型名（如 Gemini 的专有枚举）进 `native`。理由同 `BuiltinTool.name`（[50-builtin-search.md](./50-builtin-search.md) §2.2）：避免"同一能力在不同格式里有 5 个名字"导致配置与统计分裂。
+**设计说明（D8b）**：`DecisionQuestion.type` 用**四种** canonical 稳定类型（`binary` / `choice` / `scale` / `rubric`），上游专有类型名（如 Gemini 的专有枚举）进 `native`。理由同 `BuiltinTool.name`（[50-builtin-search.md](./50-builtin-search.md) §2.2）：避免"同一能力在不同格式里有多个名字"导致配置与统计分裂。
 
 **设计说明（D8c，三个映射陷阱，adaptor 硬约束）**：这三条已由三家官方 API reference 实测确认，是 decision adaptor 最容易写错的地方：
+
 1. **`answers` 容器形态不一**：Gemini/Jev 是按问题 key 的 **map**，OpenAI 是**按 questions 顺序的 array**。canonical 统一为 array + `question_id`，因此 OpenAI adaptor 必须**按位置对齐** `questions[]` 与 `answers[]`（错位即全盘皆错），且必须有"打乱 questions 顺序后答案仍对得上"的 round-trip 测试。
 2. **`probabilities` 形态不一**：Gemini/Jev 是 `{key: p}` map，OpenAI 是 `[{value, probability}]` 数组。
 3. **`confidence` / `probability` / `option_probabilities` 的有无不一致**（见 `DecisionAnswer` 的 ⚠️ 注释）——所以这三个字段在 canonical 里**都是可选的**，缺省省略而非填 0。
@@ -706,7 +712,7 @@ interface AssetMedia extends MediaBase {
 
 ### 5.2 内容寻址去重
 
-`sha256` 在 S1 解码时对 inline 媒体计算（对大 base64 有成本，默认只对 ≤ 8MB 的媒体算，超出则留空并 warning）。去重键 = `sha256`，与消息前缀压缩（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §7）同源——都是"共享前缀/共享内容的增量存储"思路，只是粒度不同（delta 链按消息，媒体按二进制对象）。
+`sha256` 在 S1 解码时对 inline 媒体计算（对大 base64 有成本，默认只对 ≤ 8MB 的媒体算，超出则留空并 warning）。去重键 = `sha256`，与消息前缀压缩（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §6.4）同源——都是"共享前缀/共享内容的增量存储"思路，只是粒度不同（delta 链按消息，媒体按二进制对象）。
 
 ---
 
@@ -816,6 +822,7 @@ interface RawEnvelope {
 ### 7.3 畸形 tool 参数的保护
 
 `ToolUsePart.input` 解析失败时：
+
 - `input` 置 `{}`；
 - `raw_arguments` 存原始字符串；
 - 回写时若目标格式要字符串，**优先用 `raw_arguments`**，不要 `JSON.stringify(input)`。
@@ -825,6 +832,7 @@ interface RawEnvelope {
 ### 7.4 保真度自检
 
 导出 `reconstructionQuality(canonical, targetFormat): number`（0–100）：
+
 - 100 = 可整体还原；
 - 80–99 = 按 `_raw` 覆盖率加权（消息数、part 数、tool 数、顶层键数各占一份）；
 - < 80 = 有未建模且未保留的部分。
@@ -837,7 +845,7 @@ interface RawEnvelope {
 
 JSON Schema 与本文 TS 类型**一对一**，由代码生成（不让手写两份导致漂移）。文件布局：
 
-```
+```text
 schema/ag-ir-1/
   envelope.schema.json      # 共享信封
   chat.schema.json          # ChatPayload / ChatResponsePayload
@@ -853,6 +861,7 @@ schema/ag-ir-1/
 ```
 
 约束：
+
 - `additionalProperties: false` 在**所有** schema 上开启——这是为了逼着未建模字段显式进 `raw.unmapped`，而不是悄悄躺平。前向兼容靠 `UnknownPart` 与 `raw`，不靠放宽校验。
 - 每个 schema 的 `$id` 带版本：`https://agentgateway.local/schema/ag-ir-1/chat.schema.json`。
 - round-trip 测试夹具（4 格式 × 每模态）按 schema 校验，进 CI。
@@ -954,19 +963,20 @@ schema/ag-ir-1/
 
 ## 10. Open Questions
 
-> 编号 Q1–Q12 与 [00-overview.md](./00-overview.md) §8、[12-coverage-survey.md](./12-coverage-survey.md) §5 对齐。
+> 编号为**全局 Q 编号**，与 [00-overview.md](./00-overview.md) §8 的登记表一致。Q11/Q12 是本文新增的编号（00 §8 的 Q6/Q7 另有所指，分别是 Argon2id 耗时与 acp-kernel API 差异，勿混）。
+> Q18 原写"待 40-provider-adaptors.md §6 回填"，**40 §6.2 已按三家官方 API reference 回填完毕，本条已关闭**。
 
-1. **Q1**（最高优先级）：OpenAI `prompt_tokens` 是否已含 `cached_tokens`。Gemini 侧已确认"含"（`promptTokenCount` 含缓存部分）、Anthropic 侧已确认"不含"（`input + cache_creation + cache_read` 才等于总输入）；OpenAI 侧文档未明说，需实测。
+1. **Q1（最高优先级，仍开放）**：OpenAI `prompt_tokens` 是否已含 `cached_tokens`。Gemini 侧已确认"含"（`promptTokenCount` 含缓存部分）、Anthropic 侧已确认"不含"（`input + cache_creation + cache_read` 才等于总输入）；OpenAI 侧文档未明说，需实测。
 2. **Q2**：OpenAI Responses 的 `reasoning` item 多轮回传规则——已知"必须随 tool 输出一起回传且含 `encrypted_content`"，但 `store:false`（ZDR）场景下是否仍必须回传、能否只回摘要，待验证。
 3. **Q3（已部分解答）**：Gemini `functionCall` 新版**有** `id`；待验证的是旧版 API 是否仍无 id，以及 `functionResponse` 按 `id` 匹配还是按 `name` + 序匹配。
 4. **Q8**：`additionalProperties: false` 是否会因 provider 加字段而频繁报错。2026 年三家都有大量新增字段（Anthropic 一年内多个 tool 版本、OpenAI Responses 30+ item 类型），需要"严格/宽松"开关，默认值待定。
-5. **Q6**：`UnknownPart` 的泛滥风险——若某 provider 大量使用不认识的 block，canonical 会退化成 raw 搬运。需要指标监控占比。
-6. **Q7**：多模态 `n` 参数：chat 的 `n`（候选数）与 image 的 `n`（张数）同名不同义，是否改名。
+5. **Q11**：`UnknownPart` 的泛滥风险——若某 provider 大量使用不认识的 block，canonical 会退化成 raw 搬运。需要指标监控占比。
+6. **Q12**：多模态 `n` 参数：chat 的 `n`（候选数）与 image 的 `n`（张数）同名不同义，是否改名。
 7. **Q13**：Anthropic `output_config.effort` 与 `thinking` 的组合限制（如 Haiku 5.5 在 thinking 关闭时高 effort 报 400）来自指南文字，未在 API reference 逐条列出——需要 per-model 能力表。
 8. **Q14**：Gemini `functionResponse` 的 `Content.role`：Tool 文档仍写可用 `"function"`，但官方 function-calling 指南示例一律用 `"user"`——建议按 `"user"` 实现（已在指南交叉验证）。
 9. **Q15**：`googleSearchRetrieval` 是否已正式废弃（API reference 仍列出，未见显式弃用声明）。
 10. **Q16**：`VideoPayload` 占位：v1 只留空 schema，是否要在能力矩阵里显式标 `unsupported`。
-11. **Q18（decision）**：三家 decision API 的确切字段名（问题类型枚举、选项集表示、概率/置信度结构、usage 形状）——待 40-provider-adaptors.md §6 的调研补齐后回填。
+11. ~~**Q18（decision）**~~ **已关闭**：三家 decision API 的确切字段名（问题类型枚举、选项集表示、概率/置信度结构、usage 形状）——**40-provider-adaptors.md §6.2 已按三家官方 API reference 回填完毕**。
 12. **Q19（decision）**：`probability` 与 `confidence` 在上游各自的定义（是否一个是模型自评确定性、一个是归一化边际）——决定 D8 的分建模是否需再加一层原值透传。
 13. **Q20（decision）**：decision 模型的多模态输入上限（Gemini 报道 256K tokens）与批量上限（报道 1000 题）在不同上游是否一致。
 14. **Q17**：模型 ID 清单随时间变动（OpenAI `gpt-6-*`、Anthropic `claude-*-5-*`、Gemini `gemini-4-*`），网关应动态拉取模型列表而非硬编码——拉取频率与缓存策略待定。

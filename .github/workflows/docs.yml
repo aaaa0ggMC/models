@@ -1,0 +1,122 @@
+# 文档 CI（review #7）
+#
+# 背景：仓库此前没有任何 CI，于是出现了 #1（一个多余的 ``` 把半篇文档吞进代码块）、
+# § 引用失效、跨文档类型定义漂移（#3）这类"人眼必然漏掉"的问题。
+# 本工作流把它们变成提交时就能发现的报错。
+#
+# 分四个 job：
+#   1. markdown  — markdownlint-cli2（关 MD013/MD060，保留 MD032/MD040/MD036）
+#   2. links     — lychee 外链检查（带排除与限流，schedule 触发，避免每次 push 都打外部站点）
+#   3. structure — scripts/check-docs.mjs：围栏奇偶 + §N 引用目标存在 + 同文件节号不重复不跳号 + 术语禁用同义词
+#   4. types     — tsc / ajv（**待类型抽取后启用**，见下）
+#
+# 不引入站点生成器：纯 Markdown + GitHub 渲染对单人私有设计仓库够用（issue #7 的结论）。
+#
+# 关于 GitHub Pages 私有仓库的限制（如果以后想部署文档站）：
+#   Pages 只有 Pro / Team / Enterprise 账号才能用于私有仓库，且 Pages 站点**默认公开**，
+#   与"私有"定位冲突。来源：https://docs.github.com/en/pages/getting-started-with-github-pages/what-is-github-pages
+#   另外：Material for MkDocs 已进入维护期、2027-05-05 EOL；继任者 Zensical 能直接读 mkdocs.yml。
+#   VitePress 与预期的 TS/Node 栈一致且可 include schema/*.ts；Docusaurus 对本仓库偏重
+#   （MDX 对 `<`、`{` 敏感，正文大量 `<access_path>` 需转义）。
+#   → 这些只作为"以后"的备选记录，本工作流不部署任何站点。
+
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "**.md"
+      - ".markdownlint-cli2.jsonc"
+      - ".lychee.toml"
+      - "scripts/check-docs.mjs"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "**.md"
+      - ".markdownlint-cli2.jsonc"
+      - ".lychee.toml"
+      - "scripts/check-docs.mjs"
+      - ".github/workflows/docs.yml"
+  # 外链会变（#4 就是外链悄悄 404），所以定期全量跑一次，不依赖代码改动
+  schedule:
+    - cron: "0 3 * * 1" # 每周一 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  markdown:
+    name: markdownlint（MD013/MD060 关闭）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: markdownlint-cli2
+        run: npx --yes markdownlint-cli2@0.18.1 "docs/**/*.md" "*.md"
+
+  links:
+    name: lychee 外链检查
+    runs-on: ubuntu-latest
+    # PR 上也跑，但只在 schedule / 手动触发时允许失败——
+    # 外部站点临时抖动不该阻塞文档 PR（issue #4 里 sqlcipher.org 就连不上，无法判断真假失效）
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lychee 外链检查
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # 只查 Markdown；配置见 .lychee.toml（排除示例端点/占位符 + 限流）
+          args: >-
+            --config .lychee.toml
+            --no-progress
+            --verbose
+            "docs/**/*.md"
+            "*.md"
+
+  structure:
+    name: 围栏 / §引用 / 节号 / 术语
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: check-docs.mjs
+        run: node scripts/check-docs.mjs
+
+  types:
+    name: tsc / ajv（待类型抽取后启用）
+    runs-on: ubuntu-latest
+    # 类型目前只写在 Markdown 代码块里，跨文档已有重复定义与冲突（review #3 用 tsc 实测：
+    # ModalityKind 定义两次、BuiltinTool.name 两份、单篇 22 处 Cannot find name）。
+    # 在把类型抽成 ir/ 下的真实 .ts 文件（10-canonical-schema.md 页眉的提案）之前，
+    # 这里没有可编译的输入，因此默认跳过、只打印说明。
+    # 启用步骤（作者拍板后）：
+    #   1. 建 ir/*.ts 作为类型唯一事实来源，JSON Schema 由 TS 生成；
+    #   2. 去掉下面的 if，改成：
+    #        run: |
+    #          npm ci
+    #          npx tsc --noEmit --strict
+    #          node scripts/validate-fixtures.mjs   # ajv 校验 fixtures
+    #   3. 在 package.json 里加 devDependencies: typescript / ajv。
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: 说明
+        run: |
+          echo "::notice::tsc/ajv 检查暂未启用——类型抽取成 ir/*.ts 后再开（review #3 / 70-roadmap.md Phase 0 验收标准）。"
+          echo "::notice::提案见 docs/design/10-canonical-schema.md 页眉「长期方案」。"
+          test -d ir || echo "ir/ 目录尚不存在（预期内），跳过。"

@@ -1,0 +1,40 @@
+{
+  // lychee 外链检查配置（review #7）
+  //
+  // 目标：把"文档里的链接挂了"变成 CI 报错，而不是等到有人点开才发现 404。
+  // 这正是 issue #4 的根因——4 个失效链接（OpenAI api reference 404、Filen.io/age 404、
+  // nick33810/napi-rs-keyring 404、sqlcipher.org 连不上）在文档里躺了很久没人发现。
+  //
+  // 排除项分三类：
+  //   1. 示例端点 / 占位符：agentgateway.local、api.openai.com/v1/*、<path>、{ACCOUNT_ID} 等
+  //      —— 这些本来就不是可访问的真实地址。
+  //   2. 已知会被限流/反爬的站点：npmjs.com 对 curl 返回 403（包本身存在），
+  //      raw.githubusercontent.com 对大并发限流。用 exclude 而不是 fail，避免假阳性。
+  //   3. 本地/相对链接：lychee 默认会校验相对路径，docs/design/*.md 指向 ../sources.md 是合法的，
+  //      但指向目录（docs/design/）或仓库内文件（LICENSE）在 --strict 下会失败，
+  //      因此这里显式允许并单独用 scripts/check-docs.mjs 校验文档间引用。
+  //
+  // 限流：max_concurrency 20 + retry，避免把对方站点或自己账号打爆。
+  "max_concurrency": 20,
+  "timeout": 20,
+  "retry_wait_time": 2,
+  "max_retries": 3,
+  "accept": ["200", "403", "429", "999"],
+  "exclude": [
+    "^https?://agentgateway\\.local",
+    "^https?://api\\.openai\\.com/v1/",
+    "^https?://gateway\\.ai\\.cloudflare\\.com",
+    "<path>",
+    "\\{ACCOUNT_ID\\}",
+    "\\{account_id\\}",
+    "\\{model\\}",
+    "\\{res\\}",
+    "^https?://www\\.npmjs\\.com/",
+    "^https?://npmjs\\.com/",
+    "^https?://registry\\.npmjs\\.org/",
+    "^https?://localhost",
+    "^https?://127\\.0\\.0\\.1"
+  ],
+  "exclude_loopback": false,
+  "include_verbatim": true
+}
