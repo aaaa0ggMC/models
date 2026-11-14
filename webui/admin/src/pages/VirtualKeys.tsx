@@ -32,6 +32,7 @@ import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtInt, fmtTs } from '../format';
 import { helpHref } from '../router';
+import { EmptyState, PageHeader, StatusTag } from '../components/ui';
 import type {
   AuthModeResponse,
   VirtualKeyCreateResponse,
@@ -39,9 +40,9 @@ import type {
   VirtualKeyUsage,
 } from '../api/types';
 
-const SOURCE_LABEL: Record<string, { label: string; color: 'grey' | 'green' | 'red' }> = {
-  active: { label: '启用', color: 'green' },
-  revoked: { label: '已撤销', color: 'red' },
+const SOURCE_LABEL: Record<string, { label: string; tone: 'success' | 'danger' }> = {
+  active: { label: '启用', tone: 'success' },
+  revoked: { label: '已撤销', tone: 'danger' },
 };
 
 /** 把「2026-01-01T00:00」这种 datetime-local 值转成 epoch ms。 */
@@ -239,7 +240,7 @@ export function VirtualKeys(): JSX.Element {
       dataIndex: 'status',
       render: (_: unknown, k: VirtualKeyDto) => {
         const s = SOURCE_LABEL[k.status] ?? SOURCE_LABEL.active!;
-        return <Tag color={s.color}>{s.label}</Tag>;
+        return <StatusTag tone={s.tone}>{s.label}</StatusTag>;
       },
     },
     {
@@ -302,29 +303,44 @@ export function VirtualKeys(): JSX.Element {
         />
       ) : null}
 
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, gap: 12 }}>
-        <Button theme="solid" type="primary" icon={<IconPlus />} onClick={() => setCreating(true)}>
-          新建密钥
-        </Button>
-        <div style={{ flex: 1 }} />
-        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
-          列表只显示掩码；完整密钥只在新建时出现一次。
-        </Typography.Text>
-        <a href={helpHref('clientKey')}>了解更多</a>
-      </div>
+      <PageHeader
+        title="客户端密钥"
+        desc="数据面 virtual key：客户端用它调 /v1/*，网关据此归属用量、套用限额与预算。列表只显示掩码；完整密钥只在新建时出现一次。"
+        actions={
+          <Button theme="solid" type="primary" icon={<IconPlus />} onClick={() => setCreating(true)}>
+            新建密钥
+          </Button>
+        }
+        meta={
+          <div className="ag-row" style={{ fontSize: 12, color: 'var(--ag-text-3)' }}>
+            <span>共 {items.length} 把</span>
+            <a href={helpHref('clientKey')}>三种带 key 方式</a>
+          </div>
+        }
+      />
 
-      {error ? (
-        <div style={{ color: 'var(--semi-color-danger)', marginBottom: 12 }}>{error}</div>
+      {error !== null ? (
+        <div className="ag-banner ag-banner-danger" role="alert">
+          {error}
+        </div>
       ) : null}
 
-      <Table
-        columns={columns}
-        dataSource={items}
-        rowKey="key_id"
-        loading={loading}
-        pagination={false}
-        empty="还没有建任何客户端密钥。"
-      />
+      <div className="ag-card">
+        <Table
+          className="ag-table"
+          columns={columns}
+          dataSource={items}
+          rowKey="key_id"
+          loading={loading}
+          pagination={false}
+          empty={
+            <EmptyState
+              title="还没有建任何客户端密钥"
+              hint="建一把 key 就会自动从「极简模式」切到「虚拟 key 模式」——那之后 AG_ACCESS_TOKEN 会被忽略，并在界面上明确告知。"
+            />
+          }
+        />
+      </div>
 
       {/* ---- 新建 ---- */}
       <Modal

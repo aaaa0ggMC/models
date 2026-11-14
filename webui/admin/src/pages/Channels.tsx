@@ -1,29 +1,21 @@
 /**
  * src/pages/Channels.tsx —— 渠道页（Provider 管理，主场，对标 NewAPI 渠道列表）。
  *
- * 顶部操作栏（新建渠道 + 搜索）+ 主体表格（名称 / Provider / 状态 / 模型数 / 操作）。
- * 不放说明段落。Provider 列按 base_url 反查预设显示友好名，查不到回退 dialect。
+ * 页头（标题 + 一句说明 + 右侧「搜索 / 新建」）+ 主体表格
+ * （名称 / Provider / 状态 / 模型数 / 操作）。解释性内容去「帮助 / 文档」。
+ * Provider 列按 base_url 反查预设显示友好名，查不到回退 dialect。
  * 「测试」= 找到该渠道名下的凭据，按其 access_path 打一次上游探测。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  Button,
-  Input,
-  Popconfirm,
-  Space,
-  Table,
-  Tag,
-  Toast,
-  Tooltip,
-  Typography,
-} from '@douyinfe/semi-ui';
+import { Button, Input, Popconfirm, Space, Table, Toast, Tooltip } from '@douyinfe/semi-ui';
 import { IconPlus } from '@douyinfe/semi-icons';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { modelSourceSummary } from '../format';
 import { helpHref } from '../router';
 import { ChannelFormModal } from '../components/ChannelFormModal';
+import { EmptyState, PageHeader, ProviderBadge, StatusTag } from '../components/ui';
 import type { MaskedCredential, ProviderConfig, ProviderPreset } from '../api/types';
 
 export function Channels(): JSX.Element {
@@ -163,7 +155,7 @@ export function Channels(): JSX.Element {
         </Tooltip>
       ),
       dataIndex: 'dialect',
-      render: (_: unknown, p: ProviderConfig) => providerName(p),
+      render: (_: unknown, p: ProviderConfig) => <ProviderBadge name={providerName(p)} />,
     },
     {
       title: (
@@ -173,7 +165,7 @@ export function Channels(): JSX.Element {
       ),
       dataIndex: 'enabled',
       render: (_: unknown, p: ProviderConfig) => (
-        <Tag color={p.enabled ? 'green' : 'grey'}>{p.enabled ? '启用' : '停用'}</Tag>
+        <StatusTag tone={p.enabled ? 'success' : 'neutral'}>{p.enabled ? '启用' : '停用'}</StatusTag>
       ),
     },
     {
@@ -216,41 +208,60 @@ export function Channels(): JSX.Element {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, gap: 12 }}>
-        <Button
-          theme="solid"
-          type="primary"
-          icon={<IconPlus />}
-          onClick={() => setModal({ visible: true, mode: 'create', editing: null })}
-        >
-          新建渠道
-        </Button>
-        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
-          渠道决定请求打到哪个上游，保存后即生效。
-        </Typography.Text>
-        <a href={helpHref('catalog')}>了解更多</a>
-        <div style={{ flex: 1 }} />
-        <Input
-          placeholder="搜索名称 / provider / base_url"
-          value={keyword}
-          onChange={setKeyword}
-          style={{ width: 280 }}
-          showClear
-        />
-      </div>
+      <PageHeader
+        title="渠道"
+        desc="渠道决定请求打到哪个上游，保存后即生效。每个渠道配一条或多条凭据，测试时按 access_path 打一次上游探测。"
+        actions={
+          <>
+            <Input
+              placeholder="搜索名称 / provider / base_url"
+              value={keyword}
+              onChange={setKeyword}
+              style={{ width: 260 }}
+              showClear
+            />
+            <Button
+              theme="solid"
+              type="primary"
+              icon={<IconPlus />}
+              onClick={() => setModal({ visible: true, mode: 'create', editing: null })}
+            >
+              新建渠道
+            </Button>
+          </>
+        }
+        meta={
+          <div className="ag-row" style={{ fontSize: 12, color: 'var(--ag-text-3)' }}>
+            <span>
+              共 {providers.length} 条，启用 {providers.filter((p) => p.enabled).length} 条
+            </span>
+            <a href={helpHref('catalog')}>三层模型来源说明</a>
+          </div>
+        }
+      />
 
-      {error ? (
-        <div style={{ color: 'var(--semi-color-danger)', marginBottom: 12 }}>{error}</div>
+      {error !== null ? (
+        <div className="ag-banner ag-banner-danger" role="alert">
+          {error}
+        </div>
       ) : null}
 
-      <Table
-        columns={columns}
-        dataSource={filtered}
-        rowKey="id"
-        loading={loading}
-        pagination={false}
-        empty="还没有配置任何渠道。点左上角「新建渠道」开始。"
-      />
+      <div className="ag-card">
+        <Table
+          className="ag-table"
+          columns={columns}
+          dataSource={filtered}
+          rowKey="id"
+          loading={loading}
+          pagination={false}
+          empty={
+            <EmptyState
+              title="还没有配置任何渠道"
+              hint="渠道是「请求打到哪个上游」的唯一配置点。点右上角「新建渠道」，从预设里选一个 provider 最快。"
+            />
+          }
+        />
+      </div>
 
       <ChannelFormModal
         visible={modal.visible}
