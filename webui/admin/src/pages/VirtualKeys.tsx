@@ -24,12 +24,14 @@ import {
   Table,
   Tag,
   Toast,
+  Tooltip,
   Typography,
 } from '@douyinfe/semi-ui';
 import { IconPlus } from '@douyinfe/semi-icons';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtInt, fmtTs } from '../format';
+import { helpHref } from '../router';
 import type {
   AuthModeResponse,
   VirtualKeyCreateResponse,
@@ -169,21 +171,33 @@ export function VirtualKeys(): JSX.Element {
   const columns = [
     { title: '名称', dataIndex: 'name' },
     {
-      title: '掩码',
+      title: (
+        <Tooltip content="只显示掩码与前 8 位；完整密钥没有任何查询入口。">
+          <span>掩码</span>
+        </Tooltip>
+      ),
       dataIndex: 'masked',
       render: (_: unknown, k: VirtualKeyDto) => (
         <span style={{ fontFamily: 'monospace' }}>{k.masked}</span>
       ),
     },
     {
-      title: 'key_id',
+      title: (
+        <Tooltip content="入库的稳定 id，不含明文；撤销 / 删除 / 查用量都用它。">
+          <span>key_id</span>
+        </Tooltip>
+      ),
       dataIndex: 'key_id',
       render: (_: unknown, k: VirtualKeyDto) => (
         <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{k.key_id}</span>
       ),
     },
     {
-      title: '模型限制',
+      title: (
+        <Tooltip content="留空 = 全部模型；支持逗号分隔与 deepseek-* 形式的通配。">
+          <span>模型限制</span>
+        </Tooltip>
+      ),
       dataIndex: 'models',
       render: (_: unknown, k: VirtualKeyDto) =>
         k.models === undefined || k.models.length === 0 ? (
@@ -193,7 +207,11 @@ export function VirtualKeys(): JSX.Element {
         ),
     },
     {
-      title: 'provider 限制',
+      title: (
+        <Tooltip content="留空 = 全部 provider（渠道）。">
+          <span>provider 限制</span>
+        </Tooltip>
+      ),
       dataIndex: 'providers',
       render: (_: unknown, k: VirtualKeyDto) =>
         k.providers === undefined || k.providers.length === 0 ? (
@@ -203,7 +221,11 @@ export function VirtualKeys(): JSX.Element {
         ),
     },
     {
-      title: '过期',
+      title: (
+        <Tooltip content="过期后该 key 的请求直接 401；撤销同理，且立即生效。">
+          <span>过期</span>
+        </Tooltip>
+      ),
       dataIndex: 'expires_at',
       render: (_: unknown, k: VirtualKeyDto) =>
         k.expires_at === undefined ? (
@@ -288,6 +310,7 @@ export function VirtualKeys(): JSX.Element {
         <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
           列表只显示掩码；完整密钥只在新建时出现一次。
         </Typography.Text>
+        <a href={helpHref('clientKey')}>了解更多</a>
       </div>
 
       {error ? (
@@ -394,8 +417,8 @@ export function VirtualKeys(): JSX.Element {
               <div style={{ marginTop: 6, fontFamily: 'monospace' }}>{issued.key.masked}</div>
             </div>
             <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
-              客户端三种带法任选：Authorization: Bearer &lt;key&gt;、x-api-key: &lt;key&gt;、
-              ?key=&lt;key&gt;。
+              客户端三种带 key 方式（Authorization / x-api-key / ?key=）见
+              <a href={helpHref('clientKey')}>帮助 / 文档</a>。
             </Typography.Text>
           </div>
         )}

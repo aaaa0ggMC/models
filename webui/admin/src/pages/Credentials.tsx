@@ -17,12 +17,14 @@ import {
   Table,
   Tag,
   Toast,
+  Tooltip,
   Typography,
 } from '@douyinfe/semi-ui';
 import { IconPlus } from '@douyinfe/semi-icons';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtTs } from '../format';
+import { helpHref } from '../router';
 import type { MaskedCredential, ProviderConfig } from '../api/types';
 
 const HEALTH: Record<string, { label: string; color: 'grey' | 'green' | 'red' }> = {
@@ -135,10 +137,28 @@ export function Credentials(): JSX.Element {
   };
 
   const columns = [
-    { title: 'provider', dataIndex: 'provider' },
-    { title: 'access_path', dataIndex: 'access_path' },
     {
-      title: '掩码',
+      title: (
+        <Tooltip content="渠道 id（见「渠道」页）；探测时按它找 base_url。">
+          <span>provider</span>
+        </Tooltip>
+      ),
+      dataIndex: 'provider',
+    },
+    {
+      title: (
+        <Tooltip content="provider.access_path 形式的唯一标识，也是探测接口的路径参数。">
+          <span>access_path</span>
+        </Tooltip>
+      ),
+      dataIndex: 'access_path',
+    },
+    {
+      title: (
+        <Tooltip content="服务端只回掩码，任何接口都拿不到完整 key；录入表单里那一次也不例外。">
+          <span>掩码</span>
+        </Tooltip>
+      ),
       dataIndex: 'masked',
       render: (_: unknown, c: MaskedCredential) => (
         <span style={{ fontFamily: 'monospace' }}>{c.masked}</span>
@@ -146,12 +166,20 @@ export function Credentials(): JSX.Element {
     },
     { title: '长度', dataIndex: 'length', render: (_: unknown, c: MaskedCredential) => c.length },
     {
-      title: '存储',
+      title: (
+        <Tooltip content="环境变量引用 / keyring / 加密存储：前两种值永远留在进程环境或 OS 凭据里，界面只登记引用。">
+          <span>存储</span>
+        </Tooltip>
+      ),
       dataIndex: 'storage',
       render: (_: unknown, c: MaskedCredential) => storageText(c.storage),
     },
     {
-      title: '健康',
+      title: (
+        <Tooltip content="上一次探测的结果；未知 = 还没探测过。">
+          <span>健康</span>
+        </Tooltip>
+      ),
       dataIndex: 'health',
       render: (_: unknown, c: MaskedCredential) => {
         const h = HEALTH[c.health] ?? HEALTH.unknown!;
@@ -194,6 +222,7 @@ export function Credentials(): JSX.Element {
         <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
           列表只显示掩码；完整 key 从不离开加密存储。
         </Typography.Text>
+        <a href={helpHref('keystore')}>了解更多</a>
       </div>
 
       {error ? (

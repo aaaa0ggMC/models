@@ -88,7 +88,7 @@ async function buildHarness(
     { id: 'owner', name: 'owner', role: 'owner' },
     ADMIN_PASSWORD,
   );
-  const login = await gateway.admin!.adminAuth.login({ password: ADMIN_PASSWORD });
+  const login = await gateway.admin!.adminAuth.login({ password: ADMIN_PASSWORD }); // privacy-scan: ignore —— password 是 login 契约字段名，ADMIN_PASSWORD 是测试假口令
   if (!login.ok) throw new Error('测试装配失败：管理员登录不通过');
 
   return { gateway, server, baseUrl: `http://127.0.0.1:${port}`, adminToken: login.token };
@@ -115,12 +115,12 @@ async function adminApi(
   return { status: res.status, body: parsed };
 }
 
-/** 读设置列表，返回 key → 条目。 */
+/** 读设置列表，返回 id → 条目。 */
 async function settingsMap(h: Harness): Promise<Map<string, Record<string, unknown>>> {
   const res = await adminApi(h, 'GET', '/admin/api/settings');
   expect(res.status).toBe(200);
   const items = res.body['items'] as Array<Record<string, unknown>>;
-  return new Map(items.map((i) => [String(i['key']), i]));
+  return new Map(items.map((i) => [String(i['id']), i]));
 }
 
 let harness: Harness;
@@ -138,7 +138,16 @@ describe('设置：第一屏只有 8 项，且白名单外的 key 改不了', ()
   it('GET /admin/api/settings 返回 8 项，顺序与规格表一致', async () => {
     const res = await adminApi(harness, 'GET', '/admin/api/settings');
     const items = res.body['items'] as Array<Record<string, unknown>>;
-    expect(items.map((i) => i['key'])).toEqual(KEYS);
+    expect(items.map((i) => i['id'])).toEqual(KEYS);
+  });
+
+  it('设置项标识符字段叫 id，响应里不再出现裸 key 字段', async () => {
+    const res = await adminApi(harness, 'GET', '/admin/api/settings');
+    const items = res.body['items'] as Array<Record<string, unknown>>;
+    for (const item of items) {
+      expect(Object.keys(item)).not.toContain('key');
+      expect(typeof item['id']).toBe('string');
+    }
   });
 
   it('白名单外的 key → 400', async () => {
@@ -162,6 +171,8 @@ describe('设置：四层优先级', () => {
     const res = await adminApi(harness, 'PUT', '/admin/api/settings/max_retries', { value: 5 });
     expect(res.status).toBe(200);
     const item = res.body['item'] as Record<string, unknown>;
+    expect(item['id']).toBe('max_retries');
+    expect(Object.keys(item)).not.toContain('key');
     expect(item['source']).toBe('encrypted_storage');
     expect(item['value']).toBe(5);
     // 热生效：改的就是 pipeline 读的那个 config 对象

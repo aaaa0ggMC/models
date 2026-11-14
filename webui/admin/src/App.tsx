@@ -3,12 +3,15 @@
  *
  * 信息架构对标 NewAPI（one-api 一系，React + Semi）：左侧一列导航，右侧是各功能页，
  * 每页自带的顶栏放「新建 + 搜索/过滤」，主体是表格——不放说明段落，信息密度优先。
+ * 解释性内容集中在「帮助 / 文档」页（`#/help`，支持 `?section=` 小节深链），各页只留
+ * 一句话 + 「了解更多」入口。
  * 会话令牌只在内存（auth.tsx），未登录一律渲染登录页。
  */
 
 import { Layout, Nav, Toast, Typography } from '@douyinfe/semi-ui';
 import {
   IconCloud,
+  IconHelpCircle,
   IconHistogram,
   IconKey,
   IconLink,
@@ -28,6 +31,7 @@ import { Usage } from './pages/Usage';
 import { System } from './pages/System';
 import { VirtualKeys } from './pages/VirtualKeys';
 import { Settings } from './pages/Settings';
+import { Help } from './pages/Help';
 
 const NAV_ITEMS: Array<{ itemKey: string; text: string; icon: React.ReactNode }> = [
   { itemKey: ROUTES.channels, text: '渠道', icon: <IconCloud /> },
@@ -38,6 +42,7 @@ const NAV_ITEMS: Array<{ itemKey: string; text: string; icon: React.ReactNode }>
   { itemKey: ROUTES.usage, text: '用量看板', icon: <IconHistogram /> },
   { itemKey: ROUTES.settings, text: '系统设置', icon: <IconSetting /> },
   { itemKey: ROUTES.system, text: '安全与密钥', icon: <IconLock /> },
+  { itemKey: ROUTES.help, text: '帮助 / 文档', icon: <IconHelpCircle /> },
 ];
 
 export function App(): JSX.Element {
@@ -63,6 +68,8 @@ export function App(): JSX.Element {
         return <Settings />;
       case ROUTES.system:
         return <System />;
+      case ROUTES.help:
+        return <Help />;
       case ROUTES.virtualKeys:
         return <VirtualKeys />;
       case ROUTES.channels:

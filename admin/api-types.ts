@@ -197,7 +197,7 @@ export interface CredentialCreateRequest {
    * 完整 key。**只在这一次请求体里出现**，服务端立刻加密入库，
    * 响应不回显、不写日志（见 admin/routes.ts 的 redactLogger）。
    */
-  secret: string;
+  secret: string; // privacy-scan: ignore —— CredentialCreateRequest 契约字段名（类型声明，无值）
   note?: string;
   /**
    * 环境变量引用（替代直接传 secret）：`env:DEEPSEEK_API_KEY`。
@@ -652,8 +652,25 @@ export interface AuthModeResponse {
 
 export type SettingSource = 'encrypted_storage' | 'env' | 'config_file' | 'default';
 
+/**
+ * 一个运行时设置项。
+ *
+ * `id` 是设置项标识符（`global_timeout_ms` … 共 8 项，白名单见 config/settings.ts
+ * 的 `RUNTIME_SETTINGS`），也是 `PUT /settings/{id}` 路径里的那段。
+ *
+ * **这里原字段名叫 `key`，已改名 `id`（breaking change）**：管理面另有一个
+ * 「虚拟 key」域（`VirtualKeyDto.key_id` / `masked` / `plaintext`），两边的
+ * `key` 撞名后，前端的脱敏守卫（webui/admin/src/api/client.ts 的 secretTripwire）
+ * 只认字段名，见到 `items[].key` 就判定「疑似完整密钥」，把整个设置页拦成
+ * 「读不到设置项」。守卫已改为按**值的形状**判断（见该文件的注释），字段名在这里
+ * 也一并改名，让「设置项标识符」不再借用 key 域的词汇。
+ *
+ * 后端内部（`RuntimeSettingSpec.key` / `SettingRecord.key` / 存储记录 id
+ * `set:<key>`）**不改名**：那是后端自己的域，且已落盘的加密存储记录按 `key` 读写，
+ * 改名要连带数据迁移，换不来任何安全收益——守卫只看得到 HTTP 响应。
+ */
 export interface SettingDto {
-  key: string;
+  id: string;
   label: string;
   description: string;
   unit: string;

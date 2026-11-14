@@ -7,11 +7,22 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Input, Popconfirm, Space, Table, Tag, Toast } from '@douyinfe/semi-ui';
+import {
+  Button,
+  Input,
+  Popconfirm,
+  Space,
+  Table,
+  Tag,
+  Toast,
+  Tooltip,
+  Typography,
+} from '@douyinfe/semi-ui';
 import { IconPlus } from '@douyinfe/semi-icons';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { modelSourceSummary } from '../format';
+import { helpHref } from '../router';
 import { ChannelFormModal } from '../components/ChannelFormModal';
 import type { MaskedCredential, ProviderConfig, ProviderPreset } from '../api/types';
 
@@ -146,19 +157,31 @@ export function Channels(): JSX.Element {
       ),
     },
     {
-      title: 'Provider',
+      title: (
+        <Tooltip content="按 base_url 反查 Provider 预设显示友好名，查不到回退 dialect（自定义 base 带子路径时按前缀匹配）。">
+          <span>Provider</span>
+        </Tooltip>
+      ),
       dataIndex: 'dialect',
       render: (_: unknown, p: ProviderConfig) => providerName(p),
     },
     {
-      title: '状态',
+      title: (
+        <Tooltip content="停用后该渠道不参与路由；已建立的凭据仍然保留。">
+          <span>状态</span>
+        </Tooltip>
+      ),
       dataIndex: 'enabled',
       render: (_: unknown, p: ProviderConfig) => (
         <Tag color={p.enabled ? 'green' : 'grey'}>{p.enabled ? '启用' : '停用'}</Tag>
       ),
     },
     {
-      title: '模型数',
+      title: (
+        <Tooltip content="该渠道的模型清单来源：静态清单 / 上游发现 / 离线目录（三层来源见帮助页）。">
+          <span>模型数</span>
+        </Tooltip>
+      ),
       dataIndex: 'model_source',
       render: (_: unknown, p: ProviderConfig) => modelSourceSummary(p.model_source),
     },
@@ -202,6 +225,10 @@ export function Channels(): JSX.Element {
         >
           新建渠道
         </Button>
+        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
+          渠道决定请求打到哪个上游，保存后即生效。
+        </Typography.Text>
+        <a href={helpHref('catalog')}>了解更多</a>
         <div style={{ flex: 1 }} />
         <Input
           placeholder="搜索名称 / provider / base_url"
