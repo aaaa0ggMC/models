@@ -94,11 +94,7 @@ describe('解锁已有库', () => {
     const file = serializeKeystoreFile(first.unlocked().serialize());
     const before = file.deks[0]!.wrapped_hex;
 
-    const second = new Keystore(
-      new PassphraseKekSource(),
-      deserializeKeystoreFile(file),
-      NOW,
-    );
+    const second = new Keystore(new PassphraseKekSource(), deserializeKeystoreFile(file), NOW);
     await second.unlock(PASS);
     expect(serializeKeystoreFile(second.unlocked().serialize()).deks[0]!.wrapped_hex).toBe(before);
   });
@@ -246,9 +242,9 @@ describe('DEK 轮换', () => {
     const ks = await unlockNew();
     const u = ks.unlocked();
     const box = u.encrypt('credential', 'x', Buffer.from('v', 'utf8'));
-    expect(() =>
-      u.decrypt('credential', 'x', { ...box, dek_id: 'dek_does_not_exist' }),
-    ).toThrow(/密钥表里没有 DEK/);
+    expect(() => u.decrypt('credential', 'x', { ...box, dek_id: 'dek_does_not_exist' })).toThrow(
+      /密钥表里没有 DEK/,
+    );
   });
 
   it('encryptionCount 累计；阈值即 ROTATE_AFTER_ENCRYPTIONS', async () => {
@@ -296,7 +292,11 @@ describe('Argon2 参数升级', () => {
     expect(u.serialize().argon2!.params.memoryKiB).toBe(65_536);
     // 升级后旧口令解不开新库（盐也换了），但新库用同一口令能重开
     const upgraded = serializeKeystoreFile(u.serialize());
-    const reopened = new Keystore(new PassphraseKekSource(), deserializeKeystoreFile(upgraded), NOW);
+    const reopened = new Keystore(
+      new PassphraseKekSource(),
+      deserializeKeystoreFile(upgraded),
+      NOW,
+    );
     await reopened.unlock(PASS);
     expect(reopened.locked).toBe(false);
   });
@@ -306,9 +306,9 @@ describe('Argon2 参数升级', () => {
     await keyFile.write(randomBytes(32));
     const ks = new Keystore(new KeyFileKekSource(keyFile), undefined, NOW);
     await ks.unlock();
-    await expect(ks.rehashArgon2(PASS, { memoryKiB: 65_536, timeCost: 2, parallelism: 1 }, NOW)).rejects.toThrow(
-      /只有 passphrase 模式/,
-    );
+    await expect(
+      ks.rehashArgon2(PASS, { memoryKiB: 65_536, timeCost: 2, parallelism: 1 }, NOW),
+    ).rejects.toThrow(/只有 passphrase 模式/);
   });
 });
 
@@ -328,7 +328,12 @@ describe('密钥不明文落盘（本次实现期间真实修掉的缺陷的回�
 
     // argon2 段只有 salt + params，**没有任何 hash 字段**
     expect(serialized.argon2).toBeDefined();
-    expect(Object.keys(serialized.argon2!).sort()).toEqual(['algo', 'params', 'salt_hex', 'version']);
+    expect(Object.keys(serialized.argon2!).sort()).toEqual([
+      'algo',
+      'params',
+      'salt_hex',
+      'version',
+    ]);
 
     // KEK 本体不以 hex / base64 形式出现在任何地方
     const kek = deriveKekFromMeta(PASS, {

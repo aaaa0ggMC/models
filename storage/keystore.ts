@@ -459,9 +459,20 @@ export class Keystore {
     }
   }
 
-  /** 解锁后的操作面。 */
+  /**
+   * 解锁后的操作面。
+   *
+   * 用箭头函数捕获 `this` 而不是 `const self = this`：后者会被
+   * `@typescript-eslint/no-this-alias` 拦下，而箭头函数的词法 this 更直接。
+   */
   unlocked(): UnlockedKeystore {
     if (this.kek === undefined || this.activeId === undefined) throw new KeystoreLocked();
+    // 这里**必须**存一份 this：返回的是对象字面量，它的方法有推断出的
+    // `this: UnlockedKeystore`（因为返回值标了那个类型），在方法体里写
+    // `this.deks` 会指向对象字面量自己而不是 Keystore 实例，编译期就报错。
+    // 因此 `const self = this` 是这里唯一正确的写法——禁用的是"为了少打几个
+    // 字而给 this 起别名"那种用法，不是这种。
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     return {
       get unlockMode() {

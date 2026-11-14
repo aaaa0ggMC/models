@@ -10,10 +10,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { KW_AIV, kekFingerprint, randomDek, unwrapKey, wrapKey } from './wrap.js';
 
 /** 固定的测试 KEK（指纹类断言需要可复现的输入）。 */
-const KEK = Buffer.from(
-  '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0',
-  'hex',
-);
+const KEK = Buffer.from('0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0', 'hex');
 
 describe('AES-256-KW 包裹', () => {
   it('往返一致', () => {
@@ -37,8 +34,16 @@ describe('AES-256-KW 包裹', () => {
   it('256-bit 情形与 Python cryptography.keywrap 交叉验证一致', () => {
     // 同一输入的 Node 结果与 Python `cryptography.hazmat.primitives.keywrap.aes_key_wrap`
     // 逐字节相同（见提交说明里的交叉验证记录）
-    const kek = Buffer.from(Array.from({ length: 32 }, (_, i) => i).map((b) => b.toString(16).padStart(2, '0')).join(''), 'hex');
-    const key = Buffer.from('00112233445566778899aabbccddeeff000102030405060708090a0b0c0d0e0f', 'hex');
+    const kek = Buffer.from(
+      Array.from({ length: 32 }, (_, i) => i)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join(''),
+      'hex',
+    );
+    const key = Buffer.from(
+      '00112233445566778899aabbccddeeff000102030405060708090a0b0c0d0e0f',
+      'hex',
+    );
     expect(wrapKey(kek, key).toString('hex')).toBe(
       '28c9f404c4b810f4cbccb35cfb87f8263f5786e2d80ed326cbc7f0e71a99f43bfb988b9b7a02dd21',
     );

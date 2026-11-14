@@ -246,7 +246,9 @@ export interface EncryptedRecordStore {
    */
   listDecrypted<T>(
     kind: AadRecordKind,
-  ): Promise<Array<{ id: string; value: T; created_at: number; updated_at: number; dek_id: string }>>;
+  ): Promise<
+    Array<{ id: string; value: T; created_at: number; updated_at: number; dek_id: string }>
+  >;
   delete(kind: AadRecordKind, id: string): Promise<boolean>;
   /** 全量导出（密文形态，可安全外传；65 §7 的备份立场）。 */
   exportCiphertext(): Promise<StoredRecord[]>;

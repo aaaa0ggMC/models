@@ -205,10 +205,7 @@ export function verifyArgon2Record(passphrase: string, record: Argon2Record): bo
  *
  * 对 `Argon2Meta` 与 `Argon2Record` 都适用（两者都有 `params`）。
  */
-export function needsRehash(
-  record: { params: Argon2IdParams },
-  target: Argon2IdParams,
-): boolean {
+export function needsRehash(record: { params: Argon2IdParams }, target: Argon2IdParams): boolean {
   return (
     record.params.memoryKiB < target.memoryKiB ||
     record.params.timeCost < target.timeCost ||
@@ -265,9 +262,7 @@ export interface SerializedArgon2PasswordRecord {
   hash_hex: string;
 }
 
-export function serializeArgon2PasswordRecord(
-  r: Argon2Record,
-): SerializedArgon2PasswordRecord {
+export function serializeArgon2PasswordRecord(r: Argon2Record): SerializedArgon2PasswordRecord {
   return {
     algo: r.algo,
     version: r.version,
@@ -277,9 +272,7 @@ export function serializeArgon2PasswordRecord(
   };
 }
 
-export function deserializeArgon2PasswordRecord(
-  s: SerializedArgon2PasswordRecord,
-): Argon2Record {
+export function deserializeArgon2PasswordRecord(s: SerializedArgon2PasswordRecord): Argon2Record {
   if (s.algo !== 'argon2id') throw new Error(`不支持的 KDF 算法: ${String(s.algo)}`);
   return {
     algo: 'argon2id',

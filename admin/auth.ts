@@ -88,8 +88,7 @@ interface AccountRecord {
 
 /** 认证结果。 */
 export type AuthResult =
-  | { ok: true; token: string; expires_at: number; user: AdminUser }
-  | { ok: false; error: string };
+  { ok: true; token: string; expires_at: number; user: AdminUser } | { ok: false; error: string };
 
 export interface AdminAuth {
   /** 是否已初始化（有账号或配了 access token）。 */
@@ -322,7 +321,9 @@ export class InMemoryAdminAuth implements AdminAuth {
       this.options.accessToken !== undefined &&
       safeEqualString(input.access_token, this.options.accessToken)
         ? { id: 'token', name: 'access-token', role: 'owner' as const }
-        : input.password !== undefined && this.password !== undefined && safeEqualString(input.password, this.password)
+        : input.password !== undefined &&
+            this.password !== undefined &&
+            safeEqualString(input.password, this.password)
           ? this.accountRec!
           : undefined;
     if (user === undefined) {

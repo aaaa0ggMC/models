@@ -24,6 +24,35 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 import type { ServerResponse } from 'node:http';
 
+/**
+ * 静态资源用的最小文件系统端口（DI 注入）。
+ *
+ * 为什么注入而不是直接 `node:fs`：测试要能造「路径穿越打到一个不存在的
+ * /etc/passwd」而不真去读它；也让部署时可以换成只读虚拟 FS 或内存 FS。
+ */
+export interface StaticFileSystem {
+  /** 文件是否存在。 */
+  exists(path: string): boolean;
+  /** 是否是目录。 */
+  isDirectory(path: string): boolean;
+  /** 打开一个可读流（不存在时由调用方先 exists 过）。 */
+  /** 打开一个可读流（调用方已先 exists 过）。用 ReadStream 以便 destroy。 */
+  createReadStream(path: string): import('node:fs').ReadStream;
+}
+
+/** 生产实现：直接走 node:fs。 */
+export const nodeStaticFileSystem: StaticFileSystem = {
+  exists: (p) => existsSync(p),
+  isDirectory: (p) => {
+    try {
+      return statSync(p).isDirectory();
+    } catch {
+      return false;
+    }
+  },
+  createReadStream: (p) => createReadStream(p) as import('node:fs').ReadStream,
+};
+
 /** 允许服务的扩展名 → content-type。 */
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -44,6 +73,8 @@ export interface StaticAssetsOptions {
   urlPrefix?: string;
   /** 索引文件名，缺省 `index.html`。 */
   indexFile?: string;
+  /** 文件系统（测试注入假 FS；缺省 node:fs）。 */
+  fs?: StaticFileSystem;
 }
 
 /** 创建一个静态资源 handler：true = 已处理。 */
@@ -53,6 +84,7 @@ export function createStaticAssetsHandler(
   const prefix = options.urlPrefix ?? '/admin';
   const indexFile = options.indexFile ?? 'index.html';
   const root = resolve(options.rootDir);
+  const fs = options.fs ?? nodeStaticFileSystem;
 
   return async (pathname, res) => {
     if (!pathname.startsWith(prefix)) return false;
@@ -74,14 +106,14 @@ export function createStaticAssetsHandler(
 
     // ---- 2. 目录 → index.html ----
     let target = abs;
-    if (existsSync(target) && statSync(target).isDirectory()) {
+    if (fs.exists(target) && fs.isDirectory(target)) {
       target = join(target, indexFile);
     }
 
     // ---- 3. SPA fallback：未知路径回 index.html ----
-    if (!existsSync(target)) {
+    if (!fs.exists(target)) {
       target = join(root, indexFile);
-      if (!existsSync(target)) {
+      if (!fs.exists(target)) {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
         res.end(
           `管理界面未构建：${root} 下没有 ${indexFile}。` +
@@ -108,7 +140,7 @@ export function createStaticAssetsHandler(
       'x-content-type-options': 'nosniff',
     };
     res.writeHead(200, headers);
-    const stream = createReadStream(target);
+    const stream = fs.createReadStream(target);
     stream.pipe(res);
     // 客户端断开时关掉文件句柄（否则长连接会攒 fd）
     res.on('close', () => stream.destroy());

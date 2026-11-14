@@ -32,6 +32,9 @@ import type {
   BootstrapResponse,
   CredentialCreateRequest,
   CredentialProbeResponse,
+  KeystoreRotateDekResponse,
+  KeystoreRotateKekRequest,
+  KeystoreRotateKekResponse,
   KeystoreStatusResponse,
   LoginRequest,
   LoginResponse,
@@ -53,6 +56,14 @@ export interface AdminRouterDeps {
   service: AdminService;
   /** 密钥状态（由 composition-root 从 keystore 组装后注入）。 */
   keystoreStatus(): KeystoreStatusResponse;
+  /**
+   * KEK 轮换端口（可选）。不注入 = 明确回 501，不假装成功。
+   *
+   * 轮换是破坏性操作：旧密钥表作废，未备份的数据永久解不开。
+   */
+  rotateKek?(input: { new_passphrase?: string }): Promise<KeystoreRotateKekResponse>;
+  /** DEK 轮换端口（可选）。 */
+  rotateDek?(): Promise<KeystoreRotateDekResponse>;
   /** 静态资源服务（webui/admin/）。 */
   serveStatic?(pathname: string, res: ServerResponse): Promise<boolean>;
   /** 日志（可选；不传则静默）。 */
@@ -162,7 +173,9 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
           ok: result.ok,
           credential_id: decodeURIComponent(credProbeMatch[1]!),
           status: result.status,
-          ...(result.upstream_status === undefined ? {} : { upstream_status: result.upstream_status }),
+          ...(result.upstream_status === undefined
+            ? {}
+            : { upstream_status: result.upstream_status }),
           ...(result.message === undefined ? {} : { message: result.message }),
           checked_at: result.checked_at,
         };
@@ -181,7 +194,9 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
         if (body === undefined) return true;
         const result = await service.upsertAlias(actor, body);
         if (!result.ok) {
-          sendJson(res, 400, { error: { code: 'invalid_alias', message: result.errors.join('；') } });
+          sendJson(res, 400, {
+            error: { code: 'invalid_alias', message: result.errors.join('；') },
+          });
           return true;
         }
         sendJson(res, 200, { ok: true, rule: result.rule });
@@ -265,6 +280,47 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
         return true;
       }
 
+      // ---- 密钥轮换 ----
+      // 两个端点在 api-types.ts 里都有契约；实现走注入的端口，routes 只做翻译。
+      // KEK 轮换是**破坏性**操作（旧密钥表作废），因此要求显式 confirm，
+      // 且未注入端口时明确回 501 而不是假装成功。
+      if (route === 'keystore/rotate-kek' && method === 'POST') {
+        const body = await readJson<KeystoreRotateKekRequest>(req, res);
+        if (body === undefined) return true;
+        if (body.confirm !== true) {
+          sendJson(res, 400, {
+            error: {
+              code: 'confirmation_required',
+              message: '轮换 KEK 会让旧密钥表作废，请显式传 confirm: true',
+            },
+          });
+          return true;
+        }
+        if (deps.rotateKek === undefined) {
+          sendJson(res, 501, {
+            error: { code: 'not_implemented', message: '未注入 KEK 轮换端口' },
+          });
+          return true;
+        }
+        const result = await deps.rotateKek({
+          ...(body.new_passphrase === undefined ? {} : { new_passphrase: body.new_passphrase }),
+        });
+        sendJson(res, result.ok ? 200 : 400, result);
+        return true;
+      }
+
+      if (route === 'keystore/rotate-dek' && method === 'POST') {
+        if (deps.rotateDek === undefined) {
+          sendJson(res, 501, {
+            error: { code: 'not_implemented', message: '未注入 DEK 轮换端口' },
+          });
+          return true;
+        }
+        const result = await deps.rotateDek();
+        sendJson(res, result.ok ? 200 : 400, result);
+        return true;
+      }
+
       // ---- 审计日志 ----
       if (route === 'audit' && method === 'GET') {
         const limit = parseIntOrUndefined(url.searchParams.get('limit')) ?? 100;
@@ -276,7 +332,7 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
 
       sendJson(res, 404, { error: { code: 'not_found', message: `未知管理端点: ${route}` } });
       return true;
-    } catch (err) {
+    } catch {
       // **不把 err.message 写进响应**：它可能夹带内部路径或（极端情况下）
       // 配置内容。只给一个通用文案 + 路由信息，细节进服务端日志。
       deps.log?.(`admin route error: ${method} ${route}`);
@@ -394,13 +450,19 @@ async function readJson<T>(req: IncomingMessage, res: ServerResponse): Promise<T
   } catch {
     // 只回前缀片段，不回整个 body——body 里可能有 secret
     sendJson(res, 400, {
-      error: { code: 'invalid_json', message: `请求体不是合法 JSON（前 80 字符: ${text.slice(0, 80)}）` },
+      error: {
+        code: 'invalid_json',
+        message: `请求体不是合法 JSON（前 80 字符: ${text.slice(0, 80)}）`,
+      },
     });
     return undefined;
   }
 }
 
-function pageOf<T>(items: T[], url: URL): { items: T[]; total: number; limit: number; offset: number } {
+function pageOf<T>(
+  items: T[],
+  url: URL,
+): { items: T[]; total: number; limit: number; offset: number } {
   const q: PageQuery = {
     limit: parseIntOrUndefined(url.searchParams.get('limit')),
     offset: parseIntOrUndefined(url.searchParams.get('offset')),

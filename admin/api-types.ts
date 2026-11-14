@@ -28,10 +28,10 @@ export interface ApiError {
 }
 
 /** 分页（简单 limit/offset；控制面量小，不做游标）。 */
-export interface PageQuery {
+export type PageQuery = {
   limit?: number;
   offset?: number;
-}
+};
 
 export interface Page<T> {
   items: T[];
@@ -123,7 +123,7 @@ export interface ProviderConfig {
   note?: string;
 }
 
-export interface ProviderListResponse extends Page<ProviderConfig> {}
+export type ProviderListResponse = Page<ProviderConfig>;
 
 export interface ProviderUpsertRequest {
   id?: string;
@@ -184,7 +184,7 @@ export interface MaskedCredential {
   note?: string;
 }
 
-export interface CredentialListResponse extends Page<MaskedCredential> {}
+export type CredentialListResponse = Page<MaskedCredential>;
 
 export interface CredentialCreateRequest {
   provider: string;
@@ -325,6 +325,22 @@ export interface CapabilityMatrixResponse {
   total: number;
 }
 
+/**
+ * access path 条目（`GET /admin/api/access-paths`）。
+ *
+ * UI 用它填 access_path 下拉；拉不到时前端退化成自由文本（见 webui/admin）。
+ */
+export interface AccessPathDto {
+  id: string;
+  label: string;
+  /** 该 access path 是否需要凭据（mock / local 不需要）。 */
+  requires_credential: boolean;
+}
+
+export interface AccessPathListResponse {
+  items: AccessPathDto[];
+}
+
 // ---------------------------------------------------------------------------
 // 同步触发
 // ---------------------------------------------------------------------------
@@ -440,6 +456,11 @@ export interface BalanceProbeResponse {
 // 密钥管理（解锁 / 轮换）
 // ---------------------------------------------------------------------------
 
+/**
+ * 密钥库状态。
+ *
+ * `tradeoff_note` 是 65 §3.2b 要求**原样展示**的代价说明，前端不得改写。
+ */
 export interface KeystoreStatusResponse {
   mode: 'passphrase' | 'key_file';
   tradeoff_note: string;
@@ -456,6 +477,11 @@ export interface KeystoreStatusResponse {
 export interface KeystoreRotateKekRequest {
   /** 新 KEK 来源。passphrase 模式 = 新口令；key_file 模式忽略。 */
   new_passphrase?: string;
+  /**
+   * 破坏性操作确认。**必须显式传 true**——轮换 KEK 会让旧密钥表作废，
+   * 没备份的数据永久解不开。UI 要弹二次确认，不能让用户一键触发。
+   */
+  confirm?: boolean;
 }
 
 export interface KeystoreRotateKekResponse {
@@ -488,4 +514,4 @@ export interface AuditLogEntry {
   detail?: string;
 }
 
-export interface AuditLogResponse extends Page<AuditLogEntry> {}
+export type AuditLogResponse = Page<AuditLogEntry>;

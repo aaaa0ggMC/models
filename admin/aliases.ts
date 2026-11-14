@@ -162,9 +162,7 @@ export class DefaultAliasResolver implements AliasResolver {
     }
 
     // ---- 3. passthrough：原样 model id，但要求能力矩阵里真有这个 model ----
-    const hit = this.capabilities
-      .list(modality)
-      .find((e) => e.model === model);
+    const hit = this.capabilities.list(modality).find((e) => e.model === model);
     if (hit === undefined) return undefined;
     return {
       source: 'passthrough',
@@ -227,7 +225,8 @@ export function validateAliasRule(rule: AliasRule): AliasRuleValidation {
   const errors: string[] = [];
   if (rule.id.length === 0) errors.push('id 不能为空');
   if (rule.pattern.length === 0) errors.push('pattern 不能为空');
-  if (rule.pattern.startsWith('/')) errors.push('pattern 不能以 / 开头（命名空间前缀不带前导斜杠）');
+  if (rule.pattern.startsWith('/'))
+    errors.push('pattern 不能以 / 开头（命名空间前缀不带前导斜杠）');
 
   if (rule.kind === 'exact') {
     if (rule.pattern.includes('/')) {

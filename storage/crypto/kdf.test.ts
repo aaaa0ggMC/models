@@ -96,7 +96,10 @@ describe('Argon2Record', () => {
       deserializeArgon2PasswordRecord({ ...s, algo: 'argon2d' as unknown as 'argon2id' }),
     ).toThrow(/不支持的 KDF 算法/);
     expect(() =>
-      deserializeArgon2Meta({ ...serializeArgon2Meta(createArgon2Meta()), algo: 'argon2d' as unknown as 'argon2id' }),
+      deserializeArgon2Meta({
+        ...serializeArgon2Meta(createArgon2Meta()),
+        algo: 'argon2d' as unknown as 'argon2id',
+      }),
     ).toThrow(/不支持的 KDF 算法/);
   });
 });
@@ -175,7 +178,9 @@ describe('needsRehash', () => {
     expect(needsRehash(rec, { ...DEFAULT_PARAMS, memoryKiB: DEFAULT_PARAMS.memoryKiB * 2 })).toBe(
       true,
     );
-    expect(needsRehash(rec, { ...DEFAULT_PARAMS, timeCost: DEFAULT_PARAMS.timeCost + 1 })).toBe(true);
+    expect(needsRehash(rec, { ...DEFAULT_PARAMS, timeCost: DEFAULT_PARAMS.timeCost + 1 })).toBe(
+      true,
+    );
   });
 
   it('目标参数更低 → 不需要（不做降级）', () => {
@@ -183,8 +188,8 @@ describe('needsRehash', () => {
   });
 
   it('并行度不同 → 需要重算（p 影响输出）', () => {
-    expect(needsRehash(rec, { ...DEFAULT_PARAMS, parallelism: DEFAULT_PARAMS.parallelism + 1 })).toBe(
-      true,
-    );
+    expect(
+      needsRehash(rec, { ...DEFAULT_PARAMS, parallelism: DEFAULT_PARAMS.parallelism + 1 }),
+    ).toBe(true);
   });
 });

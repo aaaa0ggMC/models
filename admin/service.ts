@@ -72,7 +72,10 @@ export interface UsageRecordSource {
    * 而不是 `UsageUnits`——后者是有名字段的接口，没有索引签名，宽类型在这里
    * 反而让注入方（MemoryUsageSink）塞不进来。
    */
-  list(fromTs: number, toTs: number): Array<{
+  list(
+    fromTs: number,
+    toTs: number,
+  ): Array<{
     request_id: string;
     ts: number;
     provider: string;
@@ -88,18 +91,20 @@ export interface UsageRecordSource {
 
 /** 对账记录源。 */
 export interface ReconciliationSource {
-  latest(): {
-    from_ts: number;
-    to_ts: number;
-    currency: string;
-    estimated_cash: number;
-    actual_topped_up_delta: number;
-    actual_granted_delta: number;
-    deviation_ratio: number | null;
-    request_count: number;
-    alert: boolean;
-    alert_threshold: number;
-  } | undefined;
+  latest():
+    | {
+        from_ts: number;
+        to_ts: number;
+        currency: string;
+        estimated_cash: number;
+        actual_topped_up_delta: number;
+        actual_granted_delta: number;
+        deviation_ratio: number | null;
+        request_count: number;
+        alert: boolean;
+        alert_threshold: number;
+      }
+    | undefined;
 }
 
 export interface AdminServiceDeps {
@@ -198,7 +203,12 @@ export class AdminService {
       updated_at: now,
     };
     await this.deps.store.put(PROVIDER_KIND, input.id, provider);
-    await this.audit(actor, prev === undefined ? 'provider.create' : 'provider.update', `provider/${input.id}`, 'ok');
+    await this.audit(
+      actor,
+      prev === undefined ? 'provider.create' : 'provider.update',
+      `provider/${input.id}`,
+      'ok',
+    );
     return { ok: true, provider };
   }
 
@@ -317,7 +327,9 @@ export class AdminService {
       `credential/${id}`,
       'ok',
       `provider=${input.provider} access_path=${input.access_path}` +
-        (maskedInfo === undefined ? ' source=env' : ` masked=${maskedInfo.masked} length=${maskedInfo.length}`),
+        (maskedInfo === undefined
+          ? ' source=env'
+          : ` masked=${maskedInfo.masked} length=${maskedInfo.length}`),
     );
 
     const list = await this.listCredentials(input.provider);
@@ -341,8 +353,7 @@ export class AdminService {
     return all
       .map((r) => ({ rule: r.value, created_at: r.created_at, updated_at: r.updated_at }))
       .sort(
-        (a, b) =>
-          a.rule.priority - b.rule.priority || a.rule.pattern.localeCompare(b.rule.pattern),
+        (a, b) => a.rule.priority - b.rule.priority || a.rule.pattern.localeCompare(b.rule.pattern),
       )
       .map((r) => ({
         ...r.rule,
@@ -439,11 +450,13 @@ export class AdminService {
   }
 
   /** 试解析（UI 预览用，不落库）。 */
-  resolveAlias(model: string): {
-    source: 'exact' | 'prefix' | 'passthrough';
-    rule_id?: string;
-    target: { provider: string; access_path: string; model: string };
-  } | undefined {
+  resolveAlias(model: string):
+    | {
+        source: 'exact' | 'prefix' | 'passthrough';
+        rule_id?: string;
+        target: { provider: string; access_path: string; model: string };
+      }
+    | undefined {
     const res = this.deps.aliasResolver.resolve(model, 'chat');
     if (res === undefined) return undefined;
     return {
@@ -500,10 +513,17 @@ export class AdminService {
       // 离线目录刷新 = 重新读仓库内静态定价/模型表，不联网。
       // Phase 1 的静态表是编译期内置的，没有"重新加载"动作；这里明确告知
       // 而不是假装做了一次同步。
-      await this.audit(actor, 'sync.offline_catalog', 'catalog', 'ok', '静态表编译期内置，无需刷新');
+      await this.audit(
+        actor,
+        'sync.offline_catalog',
+        'catalog',
+        'ok',
+        '静态表编译期内置，无需刷新',
+      );
       return {
         ok: false,
-        error: '离线目录在 Phase 1 是编译期内置的（providers/deepseek/pricing.json 等），没有运行时刷新动作；请改用上游发现。',
+        error:
+          '离线目录在 Phase 1 是编译期内置的（providers/deepseek/pricing.json 等），没有运行时刷新动作；请改用上游发现。',
       };
     }
     if (this.deps.metadataSync === undefined) {
@@ -653,7 +673,10 @@ export class AdminService {
     const checked_at = this.deps.clock.now();
     const ctx = systemProbeContext(this.deps.clock, accessPath);
     try {
-      const headers: ResolvedHeaders = await this.deps.credentialResolver.headersFor(accessPath, ctx);
+      const headers: ResolvedHeaders = await this.deps.credentialResolver.headersFor(
+        accessPath,
+        ctx,
+      );
       if (Object.keys(headers.headers).length === 0) {
         // 该 access path 不需要凭据（mock / local）
         return { ok: true, status: 'ok', checked_at, message: '该 access path 无需凭据' };
@@ -705,7 +728,10 @@ export class AdminService {
 // ---------------------------------------------------------------------------
 
 /** 系统探针用的最小 RequestContext（同 composition-root.ts 的 systemProbeCtx）。 */
-function systemProbeContext(clock: Clock, accessPath: string): Parameters<CredentialResolver['headersFor']>[1] {
+function systemProbeContext(
+  clock: Clock,
+  accessPath: string,
+): Parameters<CredentialResolver['headersFor']>[1] {
   const now = clock.now();
   return {
     request_id: 'req_admin_probe',

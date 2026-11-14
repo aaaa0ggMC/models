@@ -49,25 +49,78 @@ let gateway: ReturnType<typeof createGateway>;
 let recordStore: DefaultEncryptedRecordStore;
 let aliasResolver: AliasResolver;
 
+/**
+ * 管理面响应的宽松形状。
+ *
+ * 为什么不用 `any`：仓库的 eslint 把 `no-explicit-any` 设成 warn，而测试里
+ * 到处 any 会让「这里真的没类型」和「这里只是 JSON」混在一起分不出来。
+ * 为什么不用裸 `Record<string, unknown>`：那样每读一个字段都要窄化一次，
+ * 测试会被窄化代码淹没。这里把**测试会读的字段**显式列出来（自带类型），
+ * 其余走索引签名——既安全又可读。
+ *
+ * 与 admin/api-types.ts 的关系：那边是**契约**（编译期强制），这边是测试的
+ * 宽松视图（字段名与那边一致，但类型放宽）。两边不同步时测试会红，
+ * 那正是想要的效果。
+ */
+interface AdminApiBody {
+  ok?: boolean;
+  deleted?: boolean;
+  token?: string;
+  expires_at?: number;
+  error?: { code?: string; message?: string };
+  errors?: string[];
+  items?: AdminApiBody[];
+  total?: number;
+  limit?: number;
+  offset?: number;
+  provider?: AdminApiBody;
+  credential?: AdminApiBody & { storage?: AdminApiBody };
+  rule?: AdminApiBody;
+  resolution?: AdminApiBody & { target?: AdminApiBody };
+  result?: { discovered?: string[]; updated?: string[]; added?: string[] };
+  summary?: AdminApiBody;
+  recent?: AdminApiBody[];
+  reconciliation?: AdminApiBody;
+  balances?: AdminApiBody[];
+  mode?: string;
+  tradeoff_note?: string;
+  unlocked?: boolean;
+  api_version?: string;
+  authenticated?: boolean;
+  storage_unlocked?: boolean;
+  keystore?: AdminApiBody;
+  user?: AdminApiBody;
+  status?: string;
+  upstream_status?: number;
+  message?: string;
+  checked_at?: number;
+  new_dek_id?: string;
+  reencrypted?: number;
+  kek_fingerprint?: string;
+  [key: string]: unknown;
+}
+
 /** 打管理面 API。 */
 async function api(
   method: string,
   path: string,
   body?: unknown,
   opts: { auth?: boolean } = { auth: true },
-): Promise<{ status: number; body: any }> {
+): Promise<{ status: number; body: AdminApiBody }> {
   const res = await fetch(`${baseUrl}${path}`, {
     method,
     headers: {
       'content-type': 'application/json',
-      ...(opts.auth === false || adminToken === '' ? {} : { authorization: `Bearer ${adminToken}` }),
+      ...(opts.auth === false || adminToken === ''
+        ? {}
+        : { authorization: `Bearer ${adminToken}` }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   const text = await res.text();
-  let parsed: any;
+  let parsed: AdminApiBody;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(text) as AdminApiBody;
   } catch {
     parsed = { raw: text };
   }
@@ -89,7 +142,9 @@ beforeAll(async () => {
         object: 'chat.completion',
         created: 1_760_000_000,
         model: 'deepseek-flash',
-        choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        choices: [
+          { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' },
+        ],
         usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
       }),
     },
@@ -142,7 +197,12 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${port}`;
 
   // 登录
-  const login = await api('POST', '/admin/api/login', { password: ADMIN_PASSWORD }, { auth: false });
+  const login = await api(
+    'POST',
+    '/admin/api/login',
+    { password: ADMIN_PASSWORD },
+    { auth: false },
+  );
   adminToken = login.body.token ?? '';
 });
 
@@ -167,9 +227,9 @@ describe('管理面：未鉴权被挡住', () => {
   it('bootstrap 免鉴权', async () => {
     const res = await fetch(`${baseUrl}/admin/api/bootstrap`);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as any;
+    const body = (await res.json()) as AdminApiBody;
     expect(body.authenticated).toBe(false);
-    expect(body.keystore.tradeoff_note).toContain('启动口令解锁');
+    expect(body.keystore?.tradeoff_note).toContain('启动口令解锁');
   });
 });
 
@@ -181,8 +241,13 @@ describe('管理面：登录 / 登出', () => {
   });
 
   it('登出后令牌失效', async () => {
-    const login = await api('POST', '/admin/api/login', { password: ADMIN_PASSWORD }, { auth: false });
-    const token: string = login.body.token;
+    const login = await api(
+      'POST',
+      '/admin/api/login',
+      { password: ADMIN_PASSWORD },
+      { auth: false },
+    );
+    const token: string = login.body.token!;
     const before = await fetch(`${baseUrl}/admin/api/providers`, {
       headers: { authorization: `Bearer ${token}` },
     });
@@ -210,13 +275,13 @@ describe('完成标准 1：添加一个 provider', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.provider.id).toBe('deepseek');
-    expect(res.body.provider.enabled).toBe(true);
+    expect(res.body.provider!.id).toBe('deepseek');
+    expect(res.body.provider!.enabled).toBe(true);
   });
 
   it('GET 列表里能看到', async () => {
     const res = await api('GET', '/admin/api/providers');
-    expect(res.body.items.map((p: any) => p.id)).toContain('deepseek');
+    expect((res.body.items ?? []).map((p) => p['id'])).toContain('deepseek');
   });
 
   it('坏 base_url 被拒（400 而不是 500）', async () => {
@@ -228,14 +293,14 @@ describe('完成标准 1：添加一个 provider', () => {
       model_source: { kind: 'static', models: [] },
     });
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toContain('base_url');
+    expect(res.body.error!.message).toContain('base_url');
   });
 
   it('DELETE 删掉', async () => {
     const del = await api('DELETE', '/admin/api/providers/deepseek');
     expect(del.body.deleted).toBe(true);
     const list = await api('GET', '/admin/api/providers');
-    expect(list.body.items.map((p: any) => p.id)).not.toContain('deepseek');
+    expect((list.body.items ?? []).map((p) => p['id'])).not.toContain('deepseek');
   });
 });
 
@@ -249,11 +314,11 @@ describe('完成标准 2：录入凭据（掩码）', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    const cred = res.body.credential;
+    const cred = res.body.credential!;
     expect(cred.masked).toBe(maskSecret(FAKE_UPSTREAM_KEY));
     // **完整 key 不出现在响应里**
     expect(JSON.stringify(res.body)).not.toContain(FAKE_UPSTREAM_KEY);
-    expect(cred.storage.location).toBe('encrypted');
+    expect(cred.storage?.location).toBe('encrypted');
     expect(cred.length).toBe(FAKE_UPSTREAM_KEY.length);
   });
 
@@ -262,8 +327,8 @@ describe('完成标准 2：录入凭据（掩码）', () => {
     expect(res.status).toBe(200);
     const json = JSON.stringify(res.body);
     expect(json).not.toContain(FAKE_UPSTREAM_KEY);
-    expect(res.body.items.length).toBeGreaterThan(0);
-    expect(res.body.items[0].masked).toBe(maskSecret(FAKE_UPSTREAM_KEY));
+    expect(res.body.items!.length).toBeGreaterThan(0);
+    expect(res.body.items![0]!.masked).toBe(maskSecret(FAKE_UPSTREAM_KEY));
   });
 
   it('secret 与 env_ref 互斥', async () => {
@@ -286,7 +351,7 @@ describe('完成标准 2：录入凭据（掩码）', () => {
 
   it('DELETE 删掉', async () => {
     const list = await api('GET', '/admin/api/credentials');
-    const id = list.body.items[0].id;
+    const id = String(list.body.items![0]!['id'] ?? '');
     const del = await api('DELETE', `/admin/api/credentials/${id}`);
     expect(del.body.deleted).toBe(true);
   });
@@ -306,7 +371,7 @@ describe('完成标准 3：建一条别名映射', () => {
     });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    expect(res.body.rule.pattern).toBe('my-fast');
+    expect(res.body.rule!.pattern).toBe('my-fast');
 
     // 路由引擎立刻能解析（不需要重启网关）
     const resolved = aliasResolver.resolve('my-fast', 'chat');
@@ -321,7 +386,7 @@ describe('完成标准 3：建一条别名映射', () => {
       target: { provider: 'p', access_path: 'ap', model: 'm' },
     });
     expect(res.status).toBe(400);
-    expect(res.body.error.message).toContain('/');
+    expect(res.body.error!.message).toContain('/');
     // 没进路由
     expect(aliasResolver.resolve('bad/rule', 'chat')).toBeUndefined();
   });
@@ -329,13 +394,14 @@ describe('完成标准 3：建一条别名映射', () => {
   it('试解析端点能预览', async () => {
     const res = await api('POST', '/admin/api/aliases/resolve', { model: 'my-fast' });
     expect(res.body.ok).toBe(true);
-    expect(res.body.resolution.source).toBe('exact');
-    expect(res.body.resolution.target.model).toBe('deepseek-flash');
+    expect(res.body.resolution!.source).toBe('exact');
+    expect(res.body.resolution!.target?.model).toBe('deepseek-flash');
   });
 
   it('DELETE 后路由立刻失效', async () => {
     const list = await api('GET', '/admin/api/aliases');
-    const id = list.body.items.find((r: any) => r.pattern === 'my-fast').id;
+    const found = (list.body.items ?? []).find((r) => r['pattern'] === 'my-fast');
+    const id = String(found?.['id'] ?? '');
     const del = await api('DELETE', `/admin/api/aliases/${id}`);
     expect(del.body.deleted).toBe(true);
     expect(aliasResolver.resolve('my-fast', 'chat')).toBeUndefined();
@@ -360,7 +426,7 @@ describe('完成标准 5：看到用量看板', () => {
   it('空看板也能返回（全零，不是报错）', async () => {
     const res = await api('GET', '/admin/api/usage');
     expect(res.status).toBe(200);
-    expect(res.body.summary.request_count).toBe(0);
+    expect(res.body.summary!.request_count).toBe(0);
     expect(Array.isArray(res.body.recent)).toBe(true);
   });
 
@@ -402,8 +468,8 @@ describe('完成标准 5：看到用量看板', () => {
     // 而本测试的时钟是**冻结**的（FIXED_NOW），请求的 ts 恰好等于 now，
     // 落在右边界上会被排除。生产环境时钟在走，不存在这个问题。
     const res = await api('GET', `/admin/api/usage?to_ts=${FIXED_NOW + 60_000}`);
-    expect(res.body.summary.request_count).toBeGreaterThan(0);
-    expect(res.body.recent.some((r: any) => r.model_alias === 'e2e-model')).toBe(true);
+    expect(res.body.summary!.request_count).toBeGreaterThan(0);
+    expect((res.body.recent ?? []).some((r) => r['model_alias'] === 'e2e-model')).toBe(true);
   });
 });
 
@@ -411,12 +477,13 @@ describe('完成标准 6：能力矩阵只读视图（与 ir/capability.ts 同�
   it('列出的条目与 CapabilityRegistry 一致（不是另写一份）', async () => {
     const res = await api('GET', '/admin/api/capabilities');
     expect(res.status).toBe(200);
-    const registry = gateway.container
-      .resolve<import('../credentials/capability-registry.js').CapabilityRegistry>(
-        (await import('../di/index.js')).TOKENS.CapabilityRegistry,
-      );
+    const registry = gateway.container.resolve<
+      import('../credentials/capability-registry.js').CapabilityRegistry
+    >((await import('../di/index.js')).TOKENS.CapabilityRegistry);
     const expected = registry.list().map((e) => `${e.access_path}/${e.model}/${e.modality}`);
-    const got = res.body.items.map((e: any) => `${e.access_path}/${e.model}/${e.modality}`);
+    const got = (res.body.items ?? []).map(
+      (e) => `${String(e['access_path'])}/${String(e['model'])}/${String(e['modality'])}`,
+    );
     expect(got.sort()).toEqual(expected.sort());
     // DeepSeek 的 4 条在里头
     expect(got).toContain('deepseek.openai-chat/deepseek-flash/chat');
@@ -446,7 +513,9 @@ describe('完成标准 7：别名在真实请求链路里解析成功（端到�
           object: 'chat.completion',
           created: 1_760_000_000,
           model: 'gpt-test-1',
-          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          choices: [
+            { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' },
+          ],
           usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
         }),
       },
@@ -512,7 +581,9 @@ describe('完成标准 7：别名在真实请求链路里解析成功（端到�
           object: 'chat.completion',
           created: 1_760_000_000,
           model: 'gpt-test-1',
-          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          choices: [
+            { index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' },
+          ],
           usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
         }),
       },
@@ -591,11 +662,11 @@ describe('审计日志', () => {
     });
     const res = await api('GET', '/admin/api/audit');
     expect(res.status).toBe(200);
-    expect(res.body.items.length).toBeGreaterThan(0);
+    expect(res.body.items!.length).toBeGreaterThan(0);
     const json = JSON.stringify(res.body);
     // 审计里没有完整 key（本测试从未录入过，但要证明这条通道不泄）
     expect(json).not.toContain(FAKE_UPSTREAM_KEY);
-    expect(res.body.items.some((e: any) => e.action === 'provider.create')).toBe(true);
+    expect((res.body.items ?? []).some((e) => e['action'] === 'provider.create')).toBe(true);
   });
 });
 
@@ -605,5 +676,37 @@ describe('密钥状态', () => {
     expect(res.body.mode).toBe('passphrase');
     expect(res.body.tradeoff_note).toContain('启动口令解锁');
     expect(res.body.unlocked).toBe(true);
+  });
+});
+
+describe('密钥轮换（契约里有、按端口可用性分级响应）', () => {
+  it('未注入轮换端口 → 501 而不是假装成功', async () => {
+    const kek = await api('POST', '/admin/api/keystore/rotate-kek', { confirm: true });
+    expect(kek.status).toBe(501);
+    expect(kek.body.error?.code).toBe('not_implemented');
+
+    const dek = await api('POST', '/admin/api/keystore/rotate-dek');
+    expect(dek.status).toBe(501);
+    expect(dek.body.error?.code).toBe('not_implemented');
+  });
+
+  it('缺 confirm → 400（破坏性操作不能一键触发）', async () => {
+    const res = await api('POST', '/admin/api/keystore/rotate-kek', { new_passphrase: 'x' });
+    expect(res.status).toBe(400);
+    expect(res.body.error?.code).toBe('confirmation_required');
+  });
+});
+
+describe('access-paths（UI 下拉数据源）', () => {
+  it('列出的 access path 来自能力矩阵（不另写一份）', async () => {
+    const res = await api('GET', '/admin/api/access-paths');
+    expect(res.status).toBe(200);
+    const ids = (res.body.items ?? []).map((p) => String(p['id']));
+    expect(ids).toContain('mock');
+    expect(ids).toContain('deepseek.openai-chat');
+    // 每条都有 requires_credential 布尔位
+    for (const p of res.body.items ?? []) {
+      expect(typeof p['requires_credential']).toBe('boolean');
+    }
   });
 });

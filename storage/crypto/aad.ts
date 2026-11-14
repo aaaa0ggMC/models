@@ -33,13 +33,7 @@ const FIELD_SEP = '\u001f';
  * 绑定 kind 让「把审计条目复制成凭据条目」也过不了认证（即使 id 恰好相同）。
  */
 export type AadRecordKind =
-  | 'credential'
-  | 'alias'
-  | 'provider'
-  | 'audit'
-  | 'virtual_key'
-  | 'admin_session'
-  | 'meta';
+  'credential' | 'alias' | 'provider' | 'audit' | 'virtual_key' | 'admin_session' | 'meta';
 
 /** AAD 输入。`version` 是记录自身的 schema 版本（与 ir_version 同地位）。 */
 export interface AadInput {

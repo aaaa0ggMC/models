@@ -40,8 +40,18 @@ describe('优先级 1：显式别名（exact）最高', () => {
   it('exact 命中时忽略所有 prefix 规则', () => {
     const r = new DefaultAliasResolver(
       [
-        rule({ id: 'ns', kind: 'prefix', pattern: 'fast/', target: { provider: 'ns', access_path: 'ns-ap', model: 'ns-m' } }),
-        rule({ id: 'exact', kind: 'exact', pattern: 'fast/model', target: { provider: 'ex', access_path: 'ex-ap', model: 'ex-m' } }),
+        rule({
+          id: 'ns',
+          kind: 'prefix',
+          pattern: 'fast/',
+          target: { provider: 'ns', access_path: 'ns-ap', model: 'ns-m' },
+        }),
+        rule({
+          id: 'exact',
+          kind: 'exact',
+          pattern: 'fast/model',
+          target: { provider: 'ex', access_path: 'ex-ap', model: 'ex-m' },
+        }),
       ],
       CAPS,
     );
@@ -54,8 +64,20 @@ describe('优先级 1：显式别名（exact）最高', () => {
   it('两条同名 exact 时按 priority 升序取第一个', () => {
     const r = new DefaultAliasResolver(
       [
-        rule({ id: 'low', kind: 'exact', pattern: 'x', priority: 200, target: { provider: 'b', access_path: 'b-ap', model: 'b-m' } }),
-        rule({ id: 'high', kind: 'exact', pattern: 'x', priority: 10, target: { provider: 'a', access_path: 'a-ap', model: 'a-m' } }),
+        rule({
+          id: 'low',
+          kind: 'exact',
+          pattern: 'x',
+          priority: 200,
+          target: { provider: 'b', access_path: 'b-ap', model: 'b-m' },
+        }),
+        rule({
+          id: 'high',
+          kind: 'exact',
+          pattern: 'x',
+          priority: 10,
+          target: { provider: 'a', access_path: 'a-ap', model: 'a-m' },
+        }),
       ],
       CAPS,
     );
@@ -85,8 +107,18 @@ describe('优先级 2：前缀规则（prefix）', () => {
   it('**最长前缀优先**（短规则先命中会把子路径错误归类）', () => {
     const r = new DefaultAliasResolver(
       [
-        rule({ id: 'short', kind: 'prefix', pattern: 'deepseek/', target: { provider: 'short', access_path: 'short-ap', model: 'short-m' } }),
-        rule({ id: 'long', kind: 'prefix', pattern: 'deepseek/v4/', target: { provider: 'long', access_path: 'long-ap', model: 'long-m' } }),
+        rule({
+          id: 'short',
+          kind: 'prefix',
+          pattern: 'deepseek/',
+          target: { provider: 'short', access_path: 'short-ap', model: 'short-m' },
+        }),
+        rule({
+          id: 'long',
+          kind: 'prefix',
+          pattern: 'deepseek/v4/',
+          target: { provider: 'long', access_path: 'long-ap', model: 'long-m' },
+        }),
       ],
       CAPS,
     );
@@ -98,8 +130,20 @@ describe('优先级 2：前缀规则（prefix）', () => {
   it('同长度前缀按 priority 升序', () => {
     const r = new DefaultAliasResolver(
       [
-        rule({ id: 'p200', kind: 'prefix', pattern: 'a/', priority: 200, target: { provider: 'b', access_path: 'b-ap', model: 'b-m' } }),
-        rule({ id: 'p10', kind: 'prefix', pattern: 'a/', priority: 10, target: { provider: 'a', access_path: 'a-ap', model: 'a-m' } }),
+        rule({
+          id: 'p200',
+          kind: 'prefix',
+          pattern: 'a/',
+          priority: 200,
+          target: { provider: 'b', access_path: 'b-ap', model: 'b-m' },
+        }),
+        rule({
+          id: 'p10',
+          kind: 'prefix',
+          pattern: 'a/',
+          priority: 10,
+          target: { provider: 'a', access_path: 'a-ap', model: 'a-m' },
+        }),
       ],
       CAPS,
     );
@@ -109,8 +153,18 @@ describe('优先级 2：前缀规则（prefix）', () => {
   it('priority 相同时仍按长度降序（确定性）', () => {
     const r = new DefaultAliasResolver(
       [
-        rule({ id: 'short', kind: 'prefix', pattern: 'a/', target: { provider: 'short', access_path: 's-ap', model: 's-m' } }),
-        rule({ id: 'long', kind: 'prefix', pattern: 'a/b/', target: { provider: 'long', access_path: 'l-ap', model: 'l-m' } }),
+        rule({
+          id: 'short',
+          kind: 'prefix',
+          pattern: 'a/',
+          target: { provider: 'short', access_path: 's-ap', model: 's-m' },
+        }),
+        rule({
+          id: 'long',
+          kind: 'prefix',
+          pattern: 'a/b/',
+          target: { provider: 'long', access_path: 'l-ap', model: 'l-m' },
+        }),
       ],
       CAPS,
     );
@@ -168,14 +222,23 @@ describe('三条优先级合在一起的真实场景', () => {
       id: 'exact-fast',
       kind: 'exact',
       pattern: 'fast',
-      target: { provider: 'deepseek', access_path: 'deepseek.openai-chat', model: 'deepseek-flash', max_context_tokens: 128_000 },
+      target: {
+        provider: 'deepseek',
+        access_path: 'deepseek.openai-chat',
+        model: 'deepseek-flash',
+        max_context_tokens: 128_000,
+      },
     }),
     // 命名空间兜底
     rule({
       id: 'ns-deepseek',
       kind: 'prefix',
       pattern: 'deepseek/',
-      target: { provider: 'deepseek', access_path: 'deepseek.openai-chat', model: 'deepseek-flash' },
+      target: {
+        provider: 'deepseek',
+        access_path: 'deepseek.openai-chat',
+        model: 'deepseek-flash',
+      },
     }),
   ];
   const r = new DefaultAliasResolver(rules, CAPS);
@@ -263,7 +326,9 @@ describe('规则校验', () => {
 
   it('target 三要素缺一不可（缺了错误会发生在请求路径而不是配置时）', () => {
     expect(validateAliasRule({ ...good, target: { ...good.target, model: '' } }).ok).toBe(false);
-    expect(validateAliasRule({ ...good, target: { ...good.target, access_path: '' } }).ok).toBe(false);
+    expect(validateAliasRule({ ...good, target: { ...good.target, access_path: '' } }).ok).toBe(
+      false,
+    );
     expect(validateAliasRule({ ...good, target: { ...good.target, provider: '' } }).ok).toBe(false);
   });
 
@@ -281,7 +346,12 @@ describe('规则校验', () => {
 
   it('规则表：同 pattern 不同 target 被拒（解析结果不能取决于不可见的排序）', () => {
     const a = rule({ id: 'a', kind: 'prefix', pattern: 'x/' });
-    const b = rule({ id: 'b', kind: 'prefix', pattern: 'x/', target: { provider: 'q', access_path: 'q-ap', model: 'q-m' } });
+    const b = rule({
+      id: 'b',
+      kind: 'prefix',
+      pattern: 'x/',
+      target: { provider: 'q', access_path: 'q-ap', model: 'q-m' },
+    });
     const v = validateAliasRuleSet([a, b]);
     expect(v.ok).toBe(false);
     expect(v.errors.join()).toContain('target 不同');
@@ -295,7 +365,13 @@ describe('规则校验', () => {
 
   it('规则表：disabled 的重复不参与冲突判定', () => {
     const a = rule({ id: 'a', kind: 'prefix', pattern: 'x/' });
-    const b = rule({ id: 'b', kind: 'prefix', pattern: 'x/', enabled: false, target: { provider: 'q', access_path: 'q-ap', model: 'q-m' } });
+    const b = rule({
+      id: 'b',
+      kind: 'prefix',
+      pattern: 'x/',
+      enabled: false,
+      target: { provider: 'q', access_path: 'q-ap', model: 'q-m' },
+    });
     expect(validateAliasRuleSet([a, b]).ok).toBe(true);
   });
 });

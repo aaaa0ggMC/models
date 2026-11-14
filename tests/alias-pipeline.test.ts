@@ -80,7 +80,11 @@ async function gatewayWithAlias(
     recordStore,
     aliasResolver: resolver,
     ...(extra.deepseekKey === true
-      ? { credentialResolver: new EnvCredentialResolver(undefined, undefined, { DEEPSEEK_API_KEY: 'sk-fake-test' }) }
+      ? {
+          credentialResolver: new EnvCredentialResolver(undefined, undefined, {
+            DEEPSEEK_API_KEY: 'sk-fake-test',
+          }),
+        }
       : {}),
     providerProfiles: (() => {
       const r = new InMemoryProviderProfileRegistry();
@@ -96,7 +100,10 @@ async function runModel(gw: Awaited<ReturnType<typeof createGateway>>, model: st
   const outcome = await gw.runner.run(
     {
       client_format: 'openai.chat',
-      raw_body: Buffer.from(JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }] }), 'utf8'),
+      raw_body: Buffer.from(
+        JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }] }),
+        'utf8',
+      ),
       headers: { 'content-type': 'application/json' },
       path: '/v1/chat/completions',
       query: {},
@@ -289,7 +296,11 @@ describe('Bug 2 回归：openai-chat codec 必须认 resolved_model', () => {
     );
     const aRaw: unknown = withResolved.body;
     const aText =
-      typeof aRaw === 'string' ? aRaw : Buffer.isBuffer(aRaw) ? aRaw.toString('utf8') : JSON.stringify(aRaw);
+      typeof aRaw === 'string'
+        ? aRaw
+        : Buffer.isBuffer(aRaw)
+          ? aRaw.toString('utf8')
+          : JSON.stringify(aRaw);
     const anthropicBody = JSON.parse(aText) as { model: string };
     expect(anthropicBody.model).toBe('upstream-real-model');
 
@@ -307,7 +318,9 @@ describe('没有别名解析器时行为完全不变', () => {
       clock,
       routeTable: {
         aliases: {
-          'gpt-test-1': { targets: [{ access_path: 'mock', provider: 'mock', model: 'gpt-test-1' }] },
+          'gpt-test-1': {
+            targets: [{ access_path: 'mock', provider: 'mock', model: 'gpt-test-1' }],
+          },
         },
       },
     });
