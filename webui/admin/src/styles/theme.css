@@ -1,0 +1,1166 @@
+/**
+ * src/styles/theme.css —— 管理面的**视觉基座**（设计令牌 + 应用外壳样式）。
+ *
+ * ## 为什么要有这一层
+ *
+ * Semi Design 默认长成「一屏纯白 + 边框表格」：`--semi-color-bg-0` 到 `bg-4`
+ * 在亮色模式下**全是纯白**（semi.min.css 里六个值都是 `rgba(var(--semi-white), 1)`），
+ * 页面、卡片、表格、侧栏没有任何明度分层，于是整站读起来就是"上世纪的表单系统"。
+ * 这一层只做四件事，**不重画任何 Semi 组件**：
+ *
+ *   1. **补一层画布**：页面底色走中性灰，卡片走纯白并压一道发丝边 + 一层极淡的
+ *      投影。明度分层一出来，"现代感"就近一大半——本次改版性价比最高的一笔。
+ *   2. **换强调色与圆角**：Semi 默认 primary 是字节蓝 `#0064FA`（new-api 同款，
+ *      因为它俩都吃 Semi 默认主题）。换成 indigo 一档，圆角 3/6px → 6/10/14px。
+ *   3. **定义图表与状态语义**（`--ag-*`）：Semi 没有任何图表组件，图表色板另立。
+ *   4. **给应用外壳定型**：页面容器、滚动条、焦点环、减少动效。
+ *
+ * ## 暗色模式为什么只写 CSS
+ *
+ * Semi 的暗色**只靠 `body[theme-mode="dark"]` 上的 CSS 变量翻转**（semi.min.css
+ * 里 `theme-mode=dark` 只出现一次，就是那一大块变量重定义），没有任何 React 侧
+ * 主题 API——`ConfigProvider` 在 2.105 里只有 locale / timeZone / direction /
+ * getPopupContainer 四个 prop，**没有 `theme`**。所以这里同样只写 CSS：
+ * 把 `--ag-*` 与少数 `--semi-*` 在 `body[theme-mode='dark']` 下重定义一遍，
+ * JS 只负责给 body 挂/摘那个属性（见 src/theme.tsx）。
+ *
+ * ## 令牌命名
+ *
+ * `--ag-` = 本应用自有（给自封装的业务组件与图表用）；`--semi-` = Semi 的，
+ * **只覆盖、不发明**。两套并存的好处：将来换组件库只动 `--ag-*` 的消费方，
+ * 对 Semi 的覆盖可以整段删掉。
+ */
+
+/* ---------------------------------------------------------------------------
+ * 1. 覆盖 Semi 的语义令牌（亮色）
+ *
+ * 只覆盖"默认值明显过时"的几项，不整体换皮——Semi 组件太多，全量覆盖等于自己
+ * 维护一份设计系统，违背仓库"不自建组件库"的约定。
+ * ------------------------------------------------------------------------- */
+
+:root {
+  /* 强调色：indigo 一档（Tailwind indigo-600/700/800 + indigo-50/100）。 */
+  --semi-color-primary: #4f46e5;
+  --semi-color-primary-hover: #4338ca;
+  --semi-color-primary-active: #3730a3;
+  --semi-color-primary-disabled: #c7d2fe;
+  --semi-color-primary-light-default: #eef2ff;
+  --semi-color-primary-light-hover: #e0e7fe;
+  --semi-color-primary-light-active: #c7d2fe;
+
+  /* 圆角：控件 6px、卡片 10px、浮层 14px。圆角差一档，"年代感"就差一截。 */
+  --semi-border-radius-extra-small: 4px;
+  --semi-border-radius-small: 6px;
+  --semi-border-radius-medium: 10px;
+  --semi-border-radius-large: 14px;
+
+  /* 投影：Semi 默认 `0 0 1px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.1)`，
+     那条 1px 黑边在暗色下很脏。换成中性低透明度多层投影。 */
+  --semi-shadow-elevated: 0 1px 2px rgba(16, 18, 27, 0.04), 0 8px 24px rgba(16, 18, 27, 0.1);
+
+  /* 发丝边：默认 rgba(grey-9, .08) 在白底上几乎看不见，卡片只能被"框"出来。 */
+  --semi-color-border: rgba(16, 18, 27, 0.1);
+  --semi-color-fill-0: rgba(16, 18, 27, 0.04);
+  --semi-color-fill-1: rgba(16, 18, 27, 0.06);
+  --semi-color-fill-2: rgba(16, 18, 27, 0.1);
+
+  /* 焦点环：键盘可达性不因为"好看"被砍掉。 */
+  --semi-color-focus-border: #4f46e5;
+}
+
+/* ---------------------------------------------------------------------------
+ * 2. 应用自有令牌（亮色）
+ * ------------------------------------------------------------------------- */
+
+:root {
+  /* 画布 / 表面 / 边 */
+  --ag-canvas: #f6f7f9;
+  --ag-surface: #ffffff;
+  --ag-surface-2: #fbfbfc;
+  --ag-surface-hover: #f3f4f6;
+  --ag-border: #e6e8ec;
+  --ag-border-strong: #d3d7de;
+
+  /* 文字三级 */
+  --ag-text-1: #14161c;
+  --ag-text-2: #555c6b;
+  --ag-text-3: #858b99;
+
+  /* 强调 */
+  --ag-accent: #4f46e5;
+  --ag-accent-hover: #4338ca;
+  --ag-accent-soft: #eef2ff;
+  --ag-on-accent: #ffffff;
+
+  /* 状态语义。档位命名沿用 IBM Carbon 的告色语义：
+     danger（危险）/ warning（警告）/ success（正常）/ info（提示）/ neutral（中性）。 */
+  --ag-success: #15803d;
+  --ag-success-soft: #eaf6ee;
+  --ag-warning: #b45309;
+  --ag-warning-soft: #fdf3e3;
+  --ag-danger: #dc2626;
+  --ag-danger-soft: #fdecec;
+  --ag-info: #1d4ed8;
+  --ag-info-soft: #eaf0fe;
+  --ag-neutral: #6b7280;
+  --ag-neutral-soft: #f1f2f4;
+
+  /* 图表分类色。前两档与强调色同族（indigo / sky），保证"主系列"和 UI 强调色一致；
+     整体按**亮度差**排过序——色盲安全的第一原则是亮度要拉得开
+     （Datawrapper《colorblind check》：make sure the colors vary enough in brightness）。
+     同时给每个色配一个深一档的描边色，柱子/圆点用描边而不是只用填充。 */
+  --ag-chart-1: #4f46e5;
+  --ag-chart-2: #0ea5e9;
+  --ag-chart-3: #f59e0b;
+  --ag-chart-4: #10b981;
+  --ag-chart-5: #ec4899;
+  --ag-chart-6: #8b5cf6;
+  --ag-chart-grid: rgba(16, 18, 27, 0.07);
+  --ag-chart-axis: rgba(16, 18, 27, 0.45);
+
+  /* 排版。等宽数字让并排的统计卡位数变化时不抖。 */
+  --ag-font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Segoe UI", Helvetica, Arial, sans-serif;
+  --ag-font-mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+
+  /* 卡片与浮层 */
+  --ag-radius-card: 14px;
+  --ag-radius-control: 8px;
+  --ag-shadow-card: 0 1px 2px rgba(16, 18, 27, 0.04);
+  --ag-shadow-popover: 0 1px 2px rgba(16, 18, 27, 0.06), 0 12px 32px rgba(16, 18, 27, 0.12);
+
+  /* 布局节奏 */
+  --ag-gap: 16px;
+  --ag-pad-card: 18px;
+  --ag-maxw: 1440px;
+
+  color-scheme: light;
+}
+
+/* ---------------------------------------------------------------------------
+ * 3. 应用自有令牌（暗色）
+ *
+ * 暗色**不是**把亮色值取反：底色取近黑（纯黑上发丝边会闪），表面比画布亮一档，
+ * 状态色整体提亮（暗底上同色值对比度会掉）。
+ * ------------------------------------------------------------------------- */
+
+body[theme-mode="dark"] {
+  --ag-canvas: #0e0e11;
+  --ag-surface: #17171c;
+  --ag-surface-2: #1d1d23;
+  --ag-surface-hover: #23232b;
+  --ag-border: #2a2a33;
+  --ag-border-strong: #3a3a45;
+
+  --ag-text-1: #f2f3f5;
+  --ag-text-2: #a8adba;
+  --ag-text-3: #7c8290;
+
+  --ag-accent: #8b85f0;
+  --ag-accent-hover: #a5a0f5;
+  --ag-accent-soft: #221f3a;
+  --ag-on-accent: #14121f;
+
+  --ag-success: #4ade80;
+  --ag-success-soft: #12291d;
+  --ag-warning: #fbbf24;
+  --ag-warning-soft: #2b2109;
+  --ag-danger: #f87171;
+  --ag-danger-soft: #2e1414;
+  --ag-info: #93b4fc;
+  --ag-info-soft: #14203a;
+  --ag-neutral: #9aa0ae;
+  --ag-neutral-soft: #22232a;
+
+  --ag-chart-1: #8b85f0;
+  --ag-chart-2: #38bdf8;
+  --ag-chart-3: #fbbf24;
+  --ag-chart-4: #34d399;
+  --ag-chart-5: #f472b6;
+  --ag-chart-6: #a78bfa;
+  --ag-chart-grid: rgba(255, 255, 255, 0.08);
+  --ag-chart-axis: rgba(255, 255, 255, 0.5);
+
+  --ag-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --ag-shadow-popover: 0 1px 2px rgba(0, 0, 0, 0.5), 0 12px 32px rgba(0, 0, 0, 0.55);
+
+  color-scheme: dark;
+}
+
+/* Semi 的语义令牌在暗色下也换一遍（否则按钮、链接还是亮色那套）。 */
+body[theme-mode="dark"] {
+  --semi-color-primary: #8b85f0;
+  --semi-color-primary-hover: #a5a0f5;
+  --semi-color-primary-active: #c0bcf8;
+  --semi-color-primary-disabled: #3b3760;
+  --semi-color-primary-light-default: #221f3a;
+  --semi-color-primary-light-hover: #2c2850;
+  --semi-color-primary-light-active: #3b3760;
+
+  --semi-color-border: rgba(255, 255, 255, 0.12);
+  --semi-color-fill-0: rgba(255, 255, 255, 0.05);
+  --semi-color-fill-1: rgba(255, 255, 255, 0.08);
+  --semi-color-fill-2: rgba(255, 255, 255, 0.12);
+
+  --semi-color-focus-border: #8b85f0;
+  --semi-shadow-elevated: 0 1px 2px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------------------------------------------------------------------------
+ * 4. 应用外壳与自有组件类
+ *
+ * `.ag-*` 全部是**自己写的业务组件**的类名（StatCard / ChartCard / 表格等），
+ * 不碰 Semi 内部结构——除下面两处半例外，理由都写在注释里。
+ * ------------------------------------------------------------------------- */
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--ag-canvas);
+  color: var(--ag-text-1);
+  font-family: var(--ag-font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+}
+
+#root {
+  height: 100%;
+}
+
+/* 页面容器：所有功能页挂在这里，宽度封顶 + 居中，窄屏自适应。 */
+.ag-page {
+  max-width: var(--ag-maxw);
+  margin: 0 auto;
+  padding: 20px 24px 48px;
+}
+
+/* ---- 卡片（.ag-card）：自有组件，不依赖 Semi Card 的内部结构 ---- */
+
+.ag-card {
+  background: var(--ag-surface);
+  border: 1px solid var(--ag-border);
+  border-radius: var(--ag-radius-card);
+  box-shadow: var(--ag-shadow-card);
+  overflow: hidden;
+}
+
+.ag-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px var(--ag-pad-card);
+  border-bottom: 1px solid var(--ag-border);
+}
+
+.ag-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ag-text-1);
+  margin: 0;
+}
+
+.ag-card-sub {
+  font-size: 12px;
+  color: var(--ag-text-3);
+  margin: 2px 0 0;
+}
+
+.ag-card-body {
+  padding: var(--ag-pad-card);
+}
+
+.ag-card-foot {
+  padding: 10px var(--ag-pad-card);
+  border-top: 1px solid var(--ag-border);
+  background: var(--ag-surface-2);
+}
+
+/* ---- 统计卡 ---- */
+
+.ag-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--ag-pad-card);
+}
+
+.ag-stat-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ag-text-2);
+}
+
+.ag-stat-value {
+  font-size: 26px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: var(--ag-text-1);
+}
+
+.ag-stat-unit {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ag-text-3);
+  margin-left: 4px;
+}
+
+.ag-stat-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ag-text-3);
+  min-height: 18px;
+}
+
+/* 环比：▲/▼ 箭头**自带方向**，颜色只表达"这个方向好不好"——
+   同一个箭头在成本卡上是坏事、在请求量卡上是好事，所以颜色按指标定，不按方向定。 */
+.ag-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ag-delta-up {
+  color: var(--ag-danger);
+}
+
+.ag-delta-down {
+  color: var(--ag-success);
+}
+
+.ag-delta-flat {
+  color: var(--ag-text-3);
+}
+
+/* ---- 图表卡片 ---- */
+
+.ag-chart-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.ag-chart-frame {
+  position: relative;
+  width: 100%;
+}
+
+/* SVG 图表：默认块级，避免行内元素那条基线缝隙。 */
+.ag-chart {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+
+.ag-sparkline {
+  display: block;
+  overflow: visible;
+  flex: none;
+}
+
+/* ---- 排行条形图 ---- */
+
+.ag-ranked {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ag-ranked-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 30%) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  padding: 2px 4px;
+  margin: 0 -4px;
+}
+
+.ag-ranked-row:hover {
+  background: var(--ag-surface-hover);
+}
+
+.ag-ranked-label {
+  color: var(--ag-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ag-ranked-track {
+  height: 8px;
+  background: var(--ag-surface-hover);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.ag-ranked-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  /* 条长变化时给一点过渡：读者能看出"刚才多长"。 */
+  transition: width 220ms ease;
+}
+
+.ag-ranked-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ag-text-1);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ag-ranked-value em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--ag-text-3);
+}
+
+.ag-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--ag-text-2);
+}
+
+.ag-chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
+}
+
+.ag-chart-legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  flex: none;
+}
+
+/* 图表 tooltip：浮在卡片之上，带边框与投影（半透明底 + 模糊在暗色下发虚，不用）。 */
+.ag-tooltip {
+  position: fixed;
+  z-index: 2000;
+  min-width: 132px;
+  padding: 8px 10px;
+  background: var(--ag-surface);
+  border: 1px solid var(--ag-border);
+  border-radius: 10px;
+  box-shadow: var(--ag-shadow-popover);
+  font-size: 12px;
+  color: var(--ag-text-1);
+  pointer-events: none;
+}
+
+.ag-tooltip-title {
+  color: var(--ag-text-3);
+  margin-bottom: 6px;
+}
+
+.ag-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  line-height: 1.7;
+}
+
+.ag-tooltip-row b {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 空状态 / 加载态 ---- */
+
+.ag-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--ag-text-2);
+}
+
+.ag-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ag-text-1);
+}
+
+.ag-empty-hint {
+  font-size: 12px;
+  color: var(--ag-text-3);
+  max-width: 52ch;
+  line-height: 1.6;
+}
+
+/* 骨架屏 shimmer。尊重 prefers-reduced-motion（见文件末尾）。 */
+.ag-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--ag-surface-hover);
+  border-radius: 6px;
+}
+
+.ag-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  animation: ag-shimmer 1.4s infinite;
+}
+
+body[theme-mode="dark"] .ag-skeleton::after {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.07), transparent);
+}
+
+@keyframes ag-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* ---- 页面标题区 ---- */
+
+.ag-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.ag-page-title {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+  color: var(--ag-text-1);
+}
+
+.ag-page-desc {
+  font-size: 13px;
+  color: var(--ag-text-2);
+  margin: 4px 0 0;
+  max-width: 76ch;
+  line-height: 1.6;
+}
+
+/* 操作区（页面右上角那一组按钮 / 搜索 / 范围切换）。 */
+.ag-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 时间范围切换（分段控件）。 */
+.ag-range {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  background: var(--ag-surface-hover);
+  border: 1px solid var(--ag-border);
+  border-radius: 999px;
+}
+
+.ag-range-item {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--ag-text-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.ag-range-item:hover {
+  color: var(--ag-text-1);
+}
+
+.ag-range-item.is-active {
+  background: var(--ag-surface);
+  color: var(--ag-text-1);
+  font-weight: 600;
+  box-shadow: var(--ag-shadow-card);
+}
+
+/* ---- 标签 / 徽标（状态与 Provider）---- */
+
+.ag-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+/* 左侧小圆点：状态除了颜色还有一个形状线索（不靠颜色单独承载信息）。 */
+.ag-tag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+  background: currentColor;
+}
+
+.ag-tag-success {
+  color: var(--ag-success);
+  background: var(--ag-success-soft);
+  border-color: color-mix(in srgb, var(--ag-success) 22%, transparent);
+}
+
+.ag-tag-warning {
+  color: var(--ag-warning);
+  background: var(--ag-warning-soft);
+  border-color: color-mix(in srgb, var(--ag-warning) 22%, transparent);
+}
+
+.ag-tag-danger {
+  color: var(--ag-danger);
+  background: var(--ag-danger-soft);
+  border-color: color-mix(in srgb, var(--ag-danger) 22%, transparent);
+}
+
+.ag-tag-info {
+  color: var(--ag-info);
+  background: var(--ag-info-soft);
+  border-color: color-mix(in srgb, var(--ag-info) 22%, transparent);
+}
+
+.ag-tag-neutral {
+  color: var(--ag-neutral);
+  background: var(--ag-neutral-soft);
+  border-color: color-mix(in srgb, var(--ag-neutral) 22%, transparent);
+}
+
+.ag-mono {
+  font-family: var(--ag-font-mono);
+  font-size: 0.92em;
+}
+
+/* ---- 表格（.ag-table 由业务组件 Table 容器加上；Semi Table 的 className 传入）---- */
+
+.ag-table .semi-table-thead .semi-table-row-head {
+  background: var(--ag-surface-2);
+  color: var(--ag-text-2);
+  font-weight: 500;
+  font-size: 12px;
+  border-bottom: 1px solid var(--ag-border);
+}
+
+.ag-table .semi-table-tbody .semi-table-row {
+  border-bottom: 1px solid var(--ag-border);
+}
+
+.ag-table .semi-table-tbody .semi-table-row:hover {
+  background: var(--ag-surface-hover);
+}
+
+/* Semi 的侧栏导航：圆角与选中态。选中态用强调色浅底而不是默认的实心底，
+   和卡片语言一致。这是本文件唯一一处改 Semi 内部结构的地方——
+   Nav 不暴露选中态的样式 prop，而它又是每页都看得见的门面。 */
+.semi-navigation-item {
+  border-radius: var(--ag-radius-control);
+  margin: 2px 8px;
+}
+
+.semi-navigation-item:hover:not(.semi-navigation-item-disabled) {
+  background: var(--ag-surface-hover);
+}
+
+.semi-navigation-item-selected {
+  background: var(--ag-accent-soft);
+  color: var(--ag-accent);
+  font-weight: 600;
+}
+
+/* 导航分组的小标题（导航分组化之后才有）。 */
+.ag-nav-group-label {
+  padding: 14px 16px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--ag-text-3);
+}
+
+/* ---------------------------------------------------------------------------
+ * 5. 应用外壳（侧栏 / 顶栏 / 内容区）
+ * ------------------------------------------------------------------------- */
+
+.ag-shell,
+.ag-main {
+  background: var(--ag-canvas);
+}
+
+/* 侧栏：比内容区暗半档，让"内容"成为视觉主角（Carbon：最重要的数据
+   占据最大面积、对比最高）。Semi 的 Sider 默认是 bg-2，这里显式压一档。 */
+.ag-sider {
+  background: var(--ag-surface) !important;
+  border-right: 1px solid var(--ag-border);
+}
+
+.ag-sider .semi-layout-sider-children {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* 品牌区 */
+.ag-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 16px 10px;
+}
+
+.ag-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 9px;
+  background: var(--ag-accent);
+  color: var(--ag-on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.ag-brand-text {
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ag-text-1);
+  line-height: 1.25;
+  min-width: 0;
+}
+
+.ag-brand-text small {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ag-text-3);
+}
+
+/* 侧栏底部：用户 + 版本 + 退出 */
+.ag-nav-foot {
+  margin-top: auto;
+  padding: 12px 8px 8px;
+  border-top: 1px solid var(--ag-border);
+}
+
+.ag-nav-user {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 8px 8px;
+}
+
+.ag-nav-avatar {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ag-accent-soft);
+  color: var(--ag-accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ag-nav-user-name {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ag-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-nav-user-role {
+  display: block;
+  font-size: 11px;
+  color: var(--ag-text-3);
+}
+
+.ag-nav-version {
+  display: block;
+  padding: 0 8px 6px;
+  font-size: 11px;
+}
+
+/* 顶栏：面包屑 + 主题切换。高度 48px，不抢内容区的注意力。 */
+.ag-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 48px;
+  padding: 0 20px;
+  background: color-mix(in srgb, var(--ag-canvas) 82%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--ag-border);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.ag-crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.ag-crumb-group {
+  color: var(--ag-text-3);
+}
+
+.ag-crumb-sep {
+  color: var(--ag-border-strong);
+}
+
+.ag-crumb-page {
+  color: var(--ag-text-1);
+  font-weight: 600;
+}
+
+.ag-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 图标按钮：顶栏那一排小按钮（主题 / 帮助）。 */
+.ag-iconbtn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--ag-radius-control);
+  background: transparent;
+  color: var(--ag-text-2);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+}
+
+.ag-iconbtn:hover {
+  background: var(--ag-surface);
+  border-color: var(--ag-border);
+  color: var(--ag-text-1);
+}
+
+/* 内容区：可滚动，左右留白由 .ag-page 负责。 */
+.ag-content {
+  overflow: auto;
+  height: 100%;
+  background: var(--ag-canvas);
+}
+
+/* ---------------------------------------------------------------------------
+ * 6. 网格（统计卡 / 图表卡的排布）
+ *
+ * 用 CSS Grid 而不是 Semi 的 Row/Col：卡片要的是**同一行等高 + 间距统一**，
+ * Row/Col 的 24 栅格在小屏下不好做"4→2→1"的平滑退化。这里按断点手动分档：
+ * ≥1200px 四列、≥760px 两列、以下一列。
+ * ------------------------------------------------------------------------- */
+
+.ag-grid {
+  display: grid;
+  gap: var(--ag-gap);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.ag-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.ag-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* 主图占 2/3，侧图占 1/3（概览页第二行）。 */
+.ag-grid-mixed {
+  grid-template-columns: 2fr 1fr;
+}
+
+@media (max-width: 1180px) {
+  .ag-grid,
+  .ag-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ag-grid-mixed {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .ag-grid,
+  .ag-grid-2,
+  .ag-grid-3,
+  .ag-grid-mixed {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ag-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ag-gap);
+}
+
+.ag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---- 键值小块（余额 / 状态行）---- */
+
+.ag-kv {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--ag-surface-2);
+  border: 1px solid var(--ag-border);
+  border-radius: var(--ag-radius-control);
+  min-width: 0;
+}
+
+.ag-kv-k {
+  font-size: 12px;
+  color: var(--ag-text-2);
+}
+
+.ag-kv-v {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--ag-text-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.ag-kv-sub {
+  font-size: 11px;
+  color: var(--ag-text-3);
+}
+
+/* ---- 顶部提示条（错误 / 警告）---- */
+
+.ag-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: var(--ag-radius-control);
+  font-size: 13px;
+  border: 1px solid transparent;
+}
+
+.ag-banner-danger {
+  color: var(--ag-danger);
+  background: var(--ag-danger-soft);
+  border-color: color-mix(in srgb, var(--ag-danger) 24%, transparent);
+}
+
+/* ---- 「还差什么」说明卡 ---- */
+
+.ag-pending-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ag-text-1);
+  margin-bottom: 4px;
+}
+
+.ag-pending-body {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--ag-text-2);
+  margin: 0;
+}
+
+.ag-pending-body code {
+  font-family: var(--ag-font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--ag-surface-hover);
+  color: var(--ag-text-1);
+}
+
+/* ---------------------------------------------------------------------------
+ * 7. 登录页
+ * ------------------------------------------------------------------------- */
+
+.ag-login {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(900px 420px at 50% -10%, var(--ag-accent-soft), transparent 70%),
+    var(--ag-canvas);
+}
+
+.ag-login-card {
+  width: 100%;
+  max-width: 400px;
+  padding: 26px 24px 22px;
+}
+
+.ag-login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.ag-login-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--ag-text-1);
+}
+
+.ag-login-sub {
+  font-size: 12px;
+  color: var(--ag-text-2);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+
+.ag-login-note {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--ag-border);
+  font-size: 12px;
+  color: var(--ag-text-3);
+  line-height: 1.6;
+}
+
+/* ---------------------------------------------------------------------------
+ * 8. 帮助 / 文档页
+ * ------------------------------------------------------------------------- */
+
+.ag-help {
+  display: flex;
+  gap: 28px;
+  align-items: flex-start;
+}
+
+.ag-help-nav {
+  width: 208px;
+  flex: none;
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ag-help-nav .semi-button {
+  justify-content: flex-start;
+  text-align: left;
+  border-radius: var(--ag-radius-control);
+  font-size: 13px;
+  color: var(--ag-text-2);
+}
+
+.ag-help-nav .semi-button-content {
+  white-space: normal;
+  line-height: 1.45;
+}
+
+.ag-help-body {
+  flex: 1;
+  min-width: 0;
+  max-width: 860px;
+}
+
+@media (max-width: 900px) {
+  .ag-help {
+    display: block;
+  }
+
+  .ag-help-nav {
+    position: static;
+    width: 100%;
+    margin-bottom: 20px;
+  }
+}
+
+/* 滚动条：默认那条灰白粗条在暗色下非常突兀。 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ag-border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--ag-border-strong);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* 焦点环统一（键盘用户）。 */
+:focus-visible {
+  outline: 2px solid var(--ag-accent);
+  outline-offset: 2px;
+}
+
+/* 尊重"减少动态效果"的系统设置（NN/g：动画要么有目的，要么能关掉）。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
