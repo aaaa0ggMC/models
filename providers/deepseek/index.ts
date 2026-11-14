@@ -163,3 +163,17 @@ export {
 
 // ---- 法定节假日日历（峰谷计费的节假日维度；按年维护，来源见 holidays.json）----
 export { loadDeepSeekHolidayCalendars, type HolidayRefreshHint } from './holidays.js';
+
+// ---- 模型目录元数据（/v1/models 的离线静态层 + 上游实时层）----
+export {
+  DEEPSEEK_CATALOG_SOURCE_ID,
+  DEEPSEEK_UPSTREAM_SOURCE_ID,
+  DEEPSEEK_RETIRED_MODELS,
+  DEEPSEEK_CONSTRAINT_SEMANTICS,
+  createDeepSeekCatalogSource,
+  createDeepSeekUpstreamSource,
+  deepseekCatalogMetadata,
+  deepseekPricingFor,
+  type DeepSeekCatalogSourceOptions,
+  type DeepSeekUpstreamSourceOptions,
+} from './catalog-metadata.js';

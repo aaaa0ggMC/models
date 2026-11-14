@@ -72,6 +72,17 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gateway
       debug: boolFromEnv('AG_DEBUG', DEFAULT_CONFIG.debug),
       port: intFromEnv('AG_PORT', DEFAULT_CONFIG.port),
       host: process.env['AG_HOST'] ?? DEFAULT_CONFIG.host,
+      // 模型目录同步（/v1/models 的元数据分层刷新）
+      modelSyncOnStart: boolFromEnv('AG_MODEL_SYNC_ON_START', DEFAULT_CONFIG.modelSyncOnStart),
+      modelSyncIntervalMs: intFromEnv(
+        'AG_MODEL_SYNC_INTERVAL_MS',
+        DEFAULT_CONFIG.modelSyncIntervalMs,
+      ),
+      modelUpstreamTtlMs: intFromEnv('AG_MODEL_UPSTREAM_TTL_MS', DEFAULT_CONFIG.modelUpstreamTtlMs),
+      // 管理员令牌：只读变量名对应的值，值不进日志、不落盘
+      ...(process.env['AG_ADMIN_TOKEN'] === undefined || process.env['AG_ADMIN_TOKEN'] === ''
+        ? {}
+        : { adminToken: process.env['AG_ADMIN_TOKEN'] }),
       // DeepSeek 上游 base URL 覆盖（可留空）。只读变量名对应的值，值不进日志。
       ...(process.env['DEEPSEEK_BASE_URL'] === undefined || process.env['DEEPSEEK_BASE_URL'] === ''
         ? {}

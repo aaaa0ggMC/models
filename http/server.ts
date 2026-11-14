@@ -60,6 +60,31 @@ const ROUTES: Array<{ pattern: RegExp; format: FormatId }> = [
   { pattern: /^\/v1beta\/models\/[^:]+:streamGenerateContent$/, format: 'gemini.generateContent' },
 ];
 
+/**
+ * 模型目录端点（元数据面，不进 pipeline）。
+ *
+ * 注入而不是写在 ROUTES 里：`/v1/models` 不跑 S0–S10 任何阶段（它回答的是"有哪些模型"，
+ * 不是"帮我调一次模型"），把它塞进推理路由表会让"POST-only + 客户端格式"的假设多出两个
+ * 例外。见 http/models-endpoint.ts。
+ */
+export interface ModelEndpointsPort {
+  listModels(query: URLSearchParams): Promise<{ status: number; body: unknown }>;
+  getModel(id: string): Promise<{ status: number; body: unknown }>;
+  adminModelsSync(request: {
+    method: 'GET' | 'POST';
+    authorization?: string;
+    adminTokenHeader?: string;
+  }): Promise<{ status: number; body: unknown }>;
+  /** 启动时同步（可关）；`startHttpServer` 在 listen 前 await 它。 */
+  start(): Promise<void>;
+}
+
+/** 模型目录相关路径（不含 `/{id}`，那部分单独匹配）。 */
+const MODELS_LIST_PATH = '/v1/models';
+const MODELS_DETAIL_PREFIX = '/v1/models/';
+/** 管理员触发同步（00 §4.3 的 `/ag/` dog-fooding 命名空间）。 */
+const ADMIN_SYNC_PATH = '/ag/models/sync';
+
 export interface HttpServerOptions {
   port: number;
   host: string;
@@ -73,6 +98,8 @@ export interface HttpServerOptions {
    * 完全不参与。不传 = 没有管理面，行为与本文件加这一行之前完全一致。
    */
   adminHandler?: AdminRouteHandler;
+  /** 模型目录端点（可选；不注入则 `/v1/models` 走 404）。 */
+  models?: ModelEndpointsPort;
 }
 
 /** Node http 的 ServerResponse → ClientSink 适配。 */
@@ -118,9 +145,10 @@ export function createHttpServer(options: HttpServerOptions): Server {
   const { port: _port, host: _host, runner } = options;
   const healthPath = options.healthPath ?? '/health';
   const adminHandler = options.adminHandler;
+  const models = options.models;
 
   return createServer((req, res) => {
-    void handleRequest(req, res, runner, healthPath, adminHandler);
+    void handleRequest(req, res, runner, healthPath, adminHandler, models);
   });
 }
 
@@ -130,6 +158,7 @@ async function handleRequest(
   runner: PipelineRunner,
   healthPath: string,
   adminHandler: AdminRouteHandler | undefined,
+  models: ModelEndpointsPort | undefined,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
@@ -145,6 +174,12 @@ async function handleRequest(
   if (req.method === 'GET' && path === healthPath) {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ status: 'ok' }));
+    return;
+  }
+
+  // ---- 元数据面：模型目录（GET /v1/models、GET /v1/models/{id}、/ag/models/sync）----
+  if (models !== undefined && isModelsPath(path)) {
+    await handleModelsRequest(req, res, url, models);
     return;
   }
 
@@ -200,10 +235,75 @@ async function handleRequest(
 /** 起服务（本地演示 / 部署用）。 */
 export async function startHttpServer(options: HttpServerOptions): Promise<Server> {
   const server = createHttpServer(options);
+  // 启动时同步（可关）在 listen 之前完成：这样第一个请求拿到的就是刷新过的元数据。
+  // 同步失败不抛（ModelsEndpoints.start 自己吞），起不来服务没有任何理由。
+  if (options.models !== undefined) {
+    await options.models.start();
+  }
   await new Promise<void>((resolve) => {
     server.listen(options.port, options.host, () => resolve());
   });
   return server;
+}
+
+// ---------------------------------------------------------------------------
+// 模型目录（元数据面）
+// ---------------------------------------------------------------------------
+
+function isModelsPath(path: string): boolean {
+  return (
+    path === MODELS_LIST_PATH || path.startsWith(MODELS_DETAIL_PREFIX) || path === ADMIN_SYNC_PATH
+  );
+}
+
+async function handleModelsRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+  models: ModelEndpointsPort,
+): Promise<void> {
+  const path = url.pathname;
+  let result: { status: number; body: unknown };
+
+  if (path === MODELS_LIST_PATH) {
+    if (req.method !== 'GET') {
+      result = { status: 405, body: methodNotAllowed() };
+    } else {
+      result = await models.listModels(url.searchParams);
+    }
+  } else if (path === ADMIN_SYNC_PATH) {
+    if (req.method !== 'GET' && req.method !== 'POST') {
+      result = { status: 405, body: methodNotAllowed() };
+    } else {
+      result = await models.adminModelsSync({
+        method: req.method,
+        authorization: headerValue(req.headers['authorization']),
+        adminTokenHeader: headerValue(req.headers['x-admin-token']),
+      });
+    }
+  } else {
+    // `/v1/models/{id}`：前缀之后的全部内容就是 id（允许带点号，如 `deepseek-v4.1`）；
+    // 空 id 由处理器判 400
+    const id = path.slice(MODELS_DETAIL_PREFIX.length);
+    if (req.method !== 'GET') {
+      result = { status: 405, body: methodNotAllowed() };
+    } else {
+      result = await models.getModel(id);
+    }
+  }
+
+  res.writeHead(result.status, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(result.body));
+}
+
+function methodNotAllowed(): { error: { message: string; type: string } } {
+  return { error: { message: '该方法不被支持', type: 'method_not_allowed' } };
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.join(', ');
+  return undefined;
 }
 
 export { FORMAT_HEADER, NodeResponseSink };

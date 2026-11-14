@@ -17,6 +17,7 @@
     "storage/**/*.ts",
     "admin/**/*.ts",
     "config/**/*.ts",
+    "catalog/**/*.ts",
     "capability/**/*.ts",
     "http/**/*.ts",
     "composition-root.ts"

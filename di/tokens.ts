@@ -68,6 +68,11 @@ export const TOKENS = {
     createToken<import('../admin/routes.js').AdminRouteHandler>('AdminRouteHandler'),
   /** 别名解析器（S2 路由的输入；gateway-core/router.ts 只依赖接口）。 */
   AliasResolver: createToken<import('../admin/aliases.js').AliasResolver>('AliasResolver'),
+  // ---- 模型目录（/v1/models 的分层元数据 + 同步服务）----
+  ModelCatalog: createToken<import('../catalog/registry.js').ModelCatalog>('ModelCatalog'),
+  ModelSyncService: createToken<import('../catalog/sync.js').ModelSyncService>('ModelSyncService'),
+  ModelMetadataSources:
+    createToken<import('../catalog/types.js').ModelMetadataSource[]>('ModelMetadataSources'),
 
   // ---- 路由 ----
   Router: createToken<import('../gateway-core/router.js').Router>('Router'),
