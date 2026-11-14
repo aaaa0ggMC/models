@@ -12,11 +12,10 @@
 import { describe, expect, it } from "vitest";
 import type {
   CanonicalRequestEnvelope,
-  CanonicalResponseEnvelope,
   CanonicalStreamEvent,
   Plugin,
-  RequestContext,
 } from "../ir/index.js";
+import { asChatPayload } from "../ir/index.js";
 import { DefaultPluginHost, PluginRegistrationError } from "../plugins/host.js";
 import {
   MemoryLogger,
@@ -38,7 +37,7 @@ function makeHost(timeoutMs = 1000) {
   );
 }
 
-function makeCtx(): RequestContext {
+function makeCtx(): MutableRequestContext {
   return new MutableRequestContext({
     request_id: "req_test",
     started_at: 0,
@@ -60,19 +59,6 @@ function chatReq(text = "hi"): CanonicalRequestEnvelope {
       system: [],
       messages: [{ role: "user", parts: [{ type: "text", text }] }],
     },
-  };
-}
-
-function chatRes(): CanonicalResponseEnvelope {
-  return {
-    ir_version: "ag-ir/1",
-    kind: "chat",
-    request_id: "req_test",
-    usage: { units: {}, source: "provider" },
-    finish_reason: "stop",
-    payload: { message: { role: "assistant", parts: [{ type: "text", text: "ok" }] } },
-    warnings: [],
-    raw: {},
   };
 }
 
@@ -114,9 +100,11 @@ describe("onRequest 链", () => {
       manifest: { name, version: "1.0.0", hooks: ["onRequest"], order },
       onRequest: (req) => {
         seen.push(name);
-        const msg = req.payload.messages[0]!;
-        const part = msg.parts[0]!;
-        if (part.type === "text") part.text = `${part.text}+${name}`;
+        const payload = asChatPayload(req);
+        const part = payload?.messages[0]?.parts[0];
+        if (part !== undefined && part.type === "text") {
+          part.text = `${part.text}+${name}`;
+        }
         return req;
       },
     });
@@ -126,10 +114,8 @@ describe("onRequest 链", () => {
 
     const out = await host.runOnRequest(chatReq("x"), makeCtx());
     expect(seen).toEqual(["first", "second", "third"]);
-    if (typeof out === "object" && "payload" in out) {
-      const part = out.payload.messages[0]!.parts[0]!;
-      expect(part.type === "text" && part.text).toBe("x+first+second+third");
-    }
+    const part = asChatPayload(out as CanonicalRequestEnvelope)?.messages[0]?.parts[0];
+    expect(part?.type === "text" && part.text).toBe("x+first+second+third");
   });
 
   it("返回 ShortCircuit 时后续 onRequest 不再执行", async () => {
@@ -188,7 +174,8 @@ describe("onRequest 链", () => {
     const host = makeHost(20);
     host.register({
       manifest: { name: "slow", version: "1.0.0", hooks: ["onRequest"], timeout_ms: 20 },
-      onRequest: async (req) => {
+      onRequest: async (req: CanonicalRequestEnvelope) => {
+        // 同步 + 异步双模（30 §1 约束 4）：Runner 对这个 Promise 做超时竞速
         await new Promise((r) => setTimeout(r, 200));
         return req;
       },

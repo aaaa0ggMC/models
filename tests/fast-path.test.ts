@@ -9,22 +9,16 @@
  */
 
 import { describe, expect, it } from "vitest";
-import type { Plugin, RequestContext } from "../ir/index.js";
+import type { Plugin } from "../ir/index.js";
 import { effectivePluginScope } from "../ir/index.js";
 import { DefaultPluginHost } from "../plugins/host.js";
 import { createFastPathAdmission, isFastPathEligible } from "../gateway-core/pipeline/fast-path.js";
 import { MemoryClientSink } from "../gateway-core/pipeline/sink.js";
-import {
-  MemoryLogger,
-  MemoryMetrics,
-  SequentialIdGenerator,
-  fixedClock,
-} from "../di/index.js";
+import { MemoryLogger, MemoryMetrics, fixedClock } from "../di/index.js";
 import { MutableRequestContext } from "../gateway-core/context.js";
 import type { ResolvedRoute } from "../ir/index.js";
 import { ROUTING_REQUIRED_FIELDS } from "../gateway-core/pipeline/lazy-decode.js";
 import { shallowDecode } from "../gateway-core/pipeline/lazy-decode.js";
-import { InMemoryAdaptorRegistry } from "../adaptors/registry.js";
 import type { Adaptor } from "../adaptors/types.js";
 
 function makePluginHost() {
@@ -230,7 +224,6 @@ describe("D-fastpath-1：S1 浅解析与惰性物化", () => {
   });
 
   it("浅解析不物化 messages / tools", () => {
-    const registry = new InMemoryAdaptorRegistry();
     const ctx = makeCtx();
     const body = JSON.stringify({
       model: "gpt-test-1",

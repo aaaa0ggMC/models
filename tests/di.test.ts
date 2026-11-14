@@ -65,11 +65,11 @@ describe("Container", () => {
 
   it("token 的类型参数参与编译期检查（不同 Token<T> 不兼容）", () => {
     const clockToken = createToken<Clock>("Clock");
-    const loggerToken = createToken<MemoryLogger>("Logger");
     const c = new Container();
     c.registerValue(clockToken, fixedClock(0));
-    // 下面这行若取消注释应报类型错误（Token<Clock> ≠ Token<MemoryLogger>）
-    // c.registerValue(loggerToken, c.resolve(clockToken));
+    // 类型参数参与编译期检查：Token<Clock> 与 Token<MemoryLogger> 不兼容，
+    // 因此 c.registerValue(createToken<MemoryLogger>("Clock"), c.resolve(clockToken))
+    // 这行若取消注释应报类型错误。
     expect(c.resolve(clockToken).now()).toBe(0);
   });
 });

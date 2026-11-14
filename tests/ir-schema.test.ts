@@ -14,7 +14,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import Ajv2020 from "ajv/dist/2020.js";
+import { Ajv2020 } from "ajv/dist/2020.js";
+import type { ValidateFunction } from "ajv";
 import ts from "typescript";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -37,7 +38,7 @@ function listFiles(dir: string, ext: string): string[] {
 }
 
 /** 编译全部 schema（互相 $ref，必须先全部 addSchema）。 */
-function compileRoot(): (data: unknown) => boolean {
+function compileRoot(): ValidateFunction {
   const ajv = new Ajv2020({ strict: false, allErrors: true, validateFormats: false });
   const rootId = "https://agentgateway.local/schema/ag-ir-1/root.schema.json";
   let rootSchema: Record<string, unknown> | undefined;

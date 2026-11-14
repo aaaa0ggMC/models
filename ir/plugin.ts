@@ -70,6 +70,13 @@ export type PluginResult<T> =
   | ShortCircuit // 直接给出应答，跳过后续上游调用
   | void; // 不改写
 
+/**
+ * 插件方法的返回值：同步或 Promise（30 §1 约束 4「同步 + 异步双模」）。
+ * 插件主体是同步函数（低延迟路径），但可返回 Promise；Runner 对同步插件不做 await
+ * 调度以降低开销——因此类型上必须同时容纳两者。
+ */
+export type MaybePromise<T> = T | Promise<T>;
+
 export interface ShortCircuit {
   short_circuit: true;
   reason: string;
@@ -130,16 +137,19 @@ export interface Plugin {
   onRequest?(
     req: CanonicalRequestEnvelope,
     ctx: RequestContext,
-  ): PluginResult<CanonicalRequestEnvelope>;
+  ): MaybePromise<PluginResult<CanonicalRequestEnvelope>>;
   /** 流式：逐事件处理，返回 null 表示丢弃。 */
-  onStreamChunk?(ev: CanonicalStreamEvent, ctx: RequestContext): CanonicalStreamEvent | CanonicalStreamEvent[] | null;
+  onStreamChunk?(
+    ev: CanonicalStreamEvent,
+    ctx: RequestContext,
+  ): MaybePromise<CanonicalStreamEvent | CanonicalStreamEvent[] | null>;
   /** 响应侧：非流式在编码前；流式在流关闭后（只能观测/副作用）。 */
   onResponse?(
     res: CanonicalResponseEnvelope,
     ctx: RequestContext,
-  ): PluginResult<CanonicalResponseEnvelope>;
+  ): MaybePromise<PluginResult<CanonicalResponseEnvelope>>;
   /** 工具执行（网关 agentic loop 内）。 */
-  onToolCall?(call: ToolUsePart, ctx: RequestContext): Promise<ToolResultPart> | ToolResultPart;
+  onToolCall?(call: ToolUsePart, ctx: RequestContext): MaybePromise<ToolResultPart>;
   /** 任意阶段抛错/返回错误时调用。**不改变控制流**（30 §3）。 */
   onError?(err: CanonicalError, ctx: RequestContext): void;
   dispose?(): void | Promise<void>;

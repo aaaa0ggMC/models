@@ -22,6 +22,7 @@ import type {
   CanonicalResponseEnvelope,
   CanonicalStreamEvent,
   GatewayServices,
+  MaybePromise,
   Plugin,
   PluginManifest,
   PluginResult,
@@ -177,7 +178,7 @@ export class DefaultPluginHost implements PluginHost {
   private async invoke<T>(
     plugin: Plugin,
     hook: string,
-    fn: () => T | Promise<T>,
+    fn: () => MaybePromise<T>,
     ctx: RequestContext,
   ): Promise<{ ok: true; value: T } | { ok: false }> {
     const timeout = plugin.manifest.timeout_ms ?? this.defaultTimeoutMs;
@@ -286,10 +287,11 @@ export class DefaultPluginHost implements PluginHost {
       if (plugin.onStreamChunk === undefined) continue;
       const single: CanonicalStreamEvent | null = Array.isArray(current) ? (current[0] ?? null) : current;
       if (single === null) return null;
-      const out = await this.invoke(
+      const out = await this.invoke<CanonicalStreamEvent | CanonicalStreamEvent[] | null>(
         plugin,
         "onStreamChunk",
-        (): CanonicalStreamEvent | CanonicalStreamEvent[] | null => plugin.onStreamChunk!(single, ctx),
+        (): MaybePromise<CanonicalStreamEvent | CanonicalStreamEvent[] | null> =>
+          plugin.onStreamChunk!(single, ctx),
         ctx,
       );
       if (!out.ok) continue; // 失败 → 透传原事件

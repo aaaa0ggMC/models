@@ -26,9 +26,11 @@ export interface TokenUsage {
   details?: Record<string, number>;
   /**
    * 各细分的计价状态，用于表达"输入计费、输出免费"这类厂商差异。
-   * 注意：**缺省视为 "billed"**，因此"未定价"必须显式写 "unpriced"。
+   * 注意：**缺省视为 "billed"**（10 §6.1 规则 5），因此"未定价"必须显式写 "unpriced"，
+   * "免费"必须显式写 "free"——三者不可互相冒充。用 Partial 是为了让"只声明 output=free"
+   * 这种常见形态不必把五个槽位全写一遍。
    */
-  pricing_state?: Record<PricingSlot, PricingState>;
+  pricing_state?: Partial<Record<PricingSlot, PricingState>>;
 }
 
 export interface UsageUnits {
@@ -104,7 +106,7 @@ export function mergeTokenUsage(a: TokenUsage, b: TokenUsage): TokenUsage {
   };
   if (a.pricing_state !== undefined || b.pricing_state !== undefined) {
     // pricing_state 是"属性"不是"数量"，后到者覆盖（b 优先）。
-    merged.pricing_state = { ...(a.pricing_state ?? {}), ...(b.pricing_state ?? {}) } as TokenUsage["pricing_state"];
+    merged.pricing_state = { ...(a.pricing_state ?? {}), ...(b.pricing_state ?? {}) };
   }
   return merged;
 }

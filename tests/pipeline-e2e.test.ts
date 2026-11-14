@@ -44,24 +44,6 @@ function openAiChatResponse(overrides: Record<string, unknown> = {}): Record<str
   };
 }
 
-function anthropicResponse(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    id: "msg_test0001",
-    type: "message",
-    role: "assistant",
-    model: "claude-test-1",
-    content: [{ type: "text", text: "端到端跑通了。" }],
-    stop_reason: "end_turn",
-    usage: {
-      input_tokens: 18,
-      output_tokens: 11,
-      cache_read_input_tokens: 0,
-      cache_creation_input_tokens: 0,
-    },
-    ...overrides,
-  };
-}
-
 function openAiSseStream(): string[] {
   const chunk = (delta: Record<string, unknown>, finish: string | null = null): string =>
     `data: ${JSON.stringify({
