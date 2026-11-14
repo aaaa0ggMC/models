@@ -208,7 +208,7 @@ beforeAll(async () => {
   const login = await api(
     'POST',
     '/admin/api/login',
-    { password: ADMIN_PASSWORD },
+    { password: ADMIN_PASSWORD }, // privacy-scan: ignore —— password 是 login 契约字段名，ADMIN_PASSWORD 是测试假口令
     { auth: false },
   );
   adminToken = login.body.token ?? '';
@@ -248,14 +248,31 @@ describe('管理面：登录 / 登出', () => {
     expect(res.body.ok).toBe(false);
   });
 
+  it('登录响应只带 ok / token / expires_at / user', async () => {
+    // 前端 secretTripwire 对登录响应的 `token` 字段显式放行（会话令牌是 43 位
+    // base64url 随机串，与一把没有固定前缀的 provider key 在值上无法区分）；
+    // **其他字段照样过守卫**，所以这里守住「登录响应里除会话令牌外不出现别的
+    // 东西」——谁哪天往登录响应里塞一把 key，前端会拦，这个测试也会红。
+    const login = await api(
+      'POST',
+      '/admin/api/login',
+      { password: ADMIN_PASSWORD }, // privacy-scan: ignore —— password 是 login 契约字段名，ADMIN_PASSWORD 是测试假口令
+      { auth: false },
+    );
+    expect(login.status).toBe(200);
+    expect(login.body.ok).toBe(true);
+    expect(String(login.body.token)).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(Object.keys(login.body).sort()).toEqual(['expires_at', 'ok', 'token', 'user']);
+  });
+
   it('登出后令牌失效', async () => {
     const login = await api(
       'POST',
       '/admin/api/login',
-      { password: ADMIN_PASSWORD },
+      { password: ADMIN_PASSWORD }, // privacy-scan: ignore —— password 是 login 契约字段名，ADMIN_PASSWORD 是测试假口令
       { auth: false },
     );
-    const token: string = login.body.token!;
+    const token: string = login.body.token!; // privacy-scan: ignore —— LoginResponse 契约字段名，右侧是登录响应里的会话令牌
     const before = await fetch(`${baseUrl}/admin/api/providers`, {
       headers: { authorization: `Bearer ${token}` },
     });
@@ -317,7 +334,7 @@ describe('完成标准 2：录入凭据（掩码）', () => {
     const res = await api('POST', '/admin/api/credentials', {
       provider: 'deepseek',
       access_path: 'deepseek.openai-chat',
-      secret: FAKE_UPSTREAM_KEY,
+      secret: FAKE_UPSTREAM_KEY, // privacy-scan: ignore —— FAKE_UPSTREAM_KEY 是本文件顶部的假 key 常量
       note: 'e2e 测试用假 key',
     });
     expect(res.status).toBe(200);
@@ -733,7 +750,7 @@ describe('密钥轮换 happy path（端口注入后真的能转，且数据不�
     await store.put(
       'credential',
       'cred:rotate-probe',
-      { provider: 'deepseek', access_path: 'deepseek.openai-chat', secret: 'sk-rotate-fake' },
+      { provider: 'deepseek', access_path: 'deepseek.openai-chat', secret: 'sk-rotate-fake' }, // privacy-scan: ignore —— 假数据：sk-rotate-fake 是本文件的测试夹具
       FIXED_NOW,
     );
 
@@ -786,7 +803,7 @@ describe('密钥轮换 happy path（端口注入后真的能转，且数据不�
     const login = await fetch(`${rotateBaseUrl}/admin/api/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ password: ADMIN_PASSWORD }),
+      body: JSON.stringify({ password: ADMIN_PASSWORD }), // privacy-scan: ignore —— password 是 login 契约字段名，ADMIN_PASSWORD 是测试假口令
     });
     rotateToken = ((await login.json()) as { token?: string }).token ?? '';
   });
@@ -809,7 +826,7 @@ describe('密钥轮换 happy path（端口注入后真的能转，且数据不�
 
   it('轮换 KEK 后，轮换前写的凭据仍能解密（数据密文一个字节都没动）', async () => {
     // 轮换前先确认读得到
-    const before = await store.get<{ secret: string }>('credential', 'cred:rotate-probe');
+    const before = await store.get<{ secret: string }>('credential', 'cred:rotate-probe'); // privacy-scan: ignore —— secret 是记录形状的字段名（类型标注，无值）
     expect(before?.secret).toBe('sk-rotate-fake');
 
     const res = await rotateApi('POST', '/admin/api/keystore/rotate-kek', {
@@ -822,8 +839,8 @@ describe('密钥轮换 happy path（端口注入后真的能转，且数据不�
     expect(typeof body.kek_fingerprint).toBe('string');
 
     // **核心断言**：同一把 DEK 还在，记录照样读得出
-    const after = await store.get<{ secret: string }>('credential', 'cred:rotate-probe');
-    expect(after?.secret).toBe('sk-rotate-fake');
+    const after = await store.get<{ secret: string }>('credential', 'cred:rotate-probe'); // privacy-scan: ignore —— secret 是记录形状的字段名（类型标注，无值）
+    expect(after?.secret).toBe('sk-rotate-fake'); // privacy-scan: ignore —— 假数据：sk-rotate-fake 是本文件的测试夹具
 
     // 旧口令已经解不开新库（盐也换了 → KEK 变了 → 解包 DEK 失败）
     const serialized = serializeKeystoreFile(ks.unlocked().serialize());
@@ -856,14 +873,14 @@ describe('密钥轮换 happy path（端口注入后真的能转，且数据不�
     expect(body.reencrypted).toBeGreaterThanOrEqual(1);
 
     // 旧记录仍读得出（重加密过）
-    const after = await store.get<{ secret: string }>('credential', 'cred:rotate-probe');
-    expect(after?.secret).toBe('sk-rotate-fake');
+    const after = await store.get<{ secret: string }>('credential', 'cred:rotate-probe'); // privacy-scan: ignore —— secret 是记录形状的字段名（类型标注，无值）
+    expect(after?.secret).toBe('sk-rotate-fake'); // privacy-scan: ignore —— 假数据：sk-rotate-fake 是本文件的测试夹具
 
     // 新记录用新 DEK
     await store.put(
       'credential',
       'cred:rotate-new',
-      { provider: 'deepseek', access_path: 'deepseek.openai-chat', secret: 'sk-rotate-new' },
+      { provider: 'deepseek', access_path: 'deepseek.openai-chat', secret: 'sk-rotate-new' }, // privacy-scan: ignore —— 假数据：sk-rotate-new 是本文件的测试夹具
       FIXED_NOW,
     );
     const metas = await store.listMeta('credential');
