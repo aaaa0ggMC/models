@@ -27,8 +27,17 @@ export class S3OnRequest implements Stage {
     const lazy = state.lazy;
     if (lazy === undefined) throw new Error('S3 需要 S1 的惰性请求句柄');
 
-    // D-fastpath-1：有请求侧插件 → 物化完整 canonical
-    let req = lazy.full();
+    // D-fastpath-1：**只有存在请求侧插件时**才物化完整 canonical。
+    // 没有插件时本阶段是纯 no-op——这是 fast path 不付完整解码代价的关键一环
+    // （长上下文大请求体在 fast path 下也不该为"一个空插件链"付出全量解码）。
+    const requestSidePlugins = deps.pluginHost.requestSide();
+    if (requestSidePlugins.length === 0) {
+      ctx.recordStage(this.id, deps.clock.now() - started, "no-request-side-plugin");
+      deps.metrics.increment("pipeline.stage", 1, { stage: this.id, result: "noop" });
+      return;
+    }
+
+    let req = state.canonical_override ?? lazy.full();
     state.canonical = req;
     state.materialized = true;
 

@@ -102,7 +102,7 @@ export class IncrementalUsageSniffer {
           this.anthropicRaw = u;
           const t = tokenFromAnthropic(u);
           this.anthropicMerged =
-            this.anthropicMerged === undefined ? t : mergeTokenUsage(this.anthropicMerged, t);
+            this.anthropicMerged === undefined ? t : overrideTokenUsage(this.anthropicMerged, t);
         }
         break;
       case 'gemini':
@@ -380,6 +380,40 @@ function extractGemini(sseText: string): CanonicalUsage {
     raw: found,
     source: 'provider',
   };
+}
+
+/**
+ * Anthropic 流式 usage 的合并规则：**后到者按键覆盖**，不相加。
+ *
+ * 真实协议里 `message_start.message.usage.output_tokens` 是**占位值**（通常 1），
+ * 最终累计值由 `message_delta.usage` 给出。若按 mergeTokenUsage 逐字段相加，
+ * output_tokens 会恒多 1（双算），违反 40 §2.2c I2 的防双算精神。
+ * 这与 adaptors/anthropic-messages/codec.ts 的 decodeStream 保持同一语义——
+ * fast path 旁路与慢路径对同一份 SSE 必须算出同一个数。
+ */
+function overrideTokenUsage(base: TokenUsage, next: TokenUsage): TokenUsage {
+  // 0 视为"这一次没报这个键"（占位/缺失），保留前值；非 0 才算真值
+  const pick = (b: number, n: number): number => (n === 0 ? b : n);
+  const details: Record<string, number> = { ...(base.details ?? {}) };
+  for (const [k, v] of Object.entries(next.details ?? {})) {
+    if (v !== 0) details[k] = v;
+  }
+  const merged: TokenUsage = {
+    input_tokens: pick(base.input_tokens, next.input_tokens),
+    output_tokens: pick(base.output_tokens, next.output_tokens),
+    total_tokens: 0,
+    cache_read_tokens: pick(base.cache_read_tokens, next.cache_read_tokens),
+    cache_write_tokens: pick(base.cache_write_tokens, next.cache_write_tokens),
+    reasoning_tokens: pick(base.reasoning_tokens, next.reasoning_tokens),
+    ...(Object.keys(details).length > 0 ? { details } : {}),
+  };
+  // 40 §2.2：Anthropic 总输入 = input + cache_creation + cache_read，总 token 再加 output
+  merged.total_tokens =
+    merged.input_tokens + merged.cache_write_tokens + merged.cache_read_tokens + merged.output_tokens;
+  if (base.pricing_state !== undefined || next.pricing_state !== undefined) {
+    merged.pricing_state = { ...(base.pricing_state ?? {}), ...(next.pricing_state ?? {}) };
+  }
+  return merged;
 }
 
 function tokenFromOpenAi(u: Record<string, unknown>): TokenUsage {

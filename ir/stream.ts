@@ -33,7 +33,15 @@ export interface StreamFrame<E extends StreamEventType = StreamEventType> {
 /** 兼容别名：10-canonical-schema.md §2 的旧名，形状与 StreamFrame 完全相同。 */
 export type CanonicalStreamFrame<E extends StreamEventType = StreamEventType> = StreamFrame<E>;
 
-export type FrameData = StartData | DeltaData | EndData | ErrorData | UsageData | MetaData;
+export type FrameData =
+  | StartData
+  | DeltaData
+  | PartBeginData
+  | PartEndData
+  | EndData
+  | ErrorData
+  | UsageData
+  | MetaData;
 
 export interface StartData {
   /** 会话/轮次标识；ASR 下为 utterance_id 的容器。 */
@@ -48,16 +56,50 @@ export interface StartData {
 
 /** delta 的 payload 由 kind 决定。 */
 export type DeltaData =
-  | { kind: 'chat'; text?: string; thinking?: string; tool_input_json?: string; refusal?: string }
+  | {
+      kind: 'chat';
+      /** 所属 part 的序号（part.begin 时分配）。缺省 0。 */
+      index?: number;
+      text?: string;
+      thinking?: string;
+      tool_input_json?: string;
+      refusal?: string;
+    }
   | { kind: 'tts'; audio: MediaChunk }
   | { kind: 'asr'; transcript: InterimTranscript }
   | { kind: 'image'; progress?: number; partial?: MediaRef; index: number }
   | { kind: 'embedding'; vector_chunk?: number[]; index: number }
   | { kind: 'moderation'; scores: Record<string, number>; index: number };
 
+/**
+ * part 开始帧（20 §S6 的 `part.begin`）。
+ *
+ * 为什么需要它：Anthropic 的 `content_block_start{type:"tool_use"}` 带 id 与 name，
+ * 是整个 tool_use 的"开户"事件；丢掉它，客户端侧重写出的 SSE 就没有
+ * `content_block_start`，tool_call 会变成悬空的参数增量。
+ */
+export interface PartBeginData {
+  kind: 'chat';
+  index: number;
+  part: StreamPart;
+}
+
+/** part 结束帧（20 §S6 的 `part.end`）——完整 part 在此成型（流式 tool_use 靠它保证 JSON 完整）。 */
+export interface PartEndData {
+  kind: 'chat';
+  index: number;
+  part: StreamPart;
+}
+
 export interface EndData {
   /** 归一化 finish_reason；ASR 下为 "final"。 */
   finish_reason: FinishReason;
+  /**
+   * 流尾 usage（20 §S6 的 finish 事件带 usage；OpenAI Chat 的 usage 只在最后一个 chunk，
+   * 且需 `stream_options.include_usage`——网关在 S4 自动补上，40 §2.3）。
+   * 与独立的 `usage` 帧并存：后者可能多次到达，取最后一次非空（25 §8.3 规则 5）。
+   */
+  usage?: CanonicalUsage;
   /** 完整载荷的摘要（可选）。 */
   output?: unknown;
 }

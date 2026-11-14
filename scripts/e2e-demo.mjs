@@ -148,7 +148,9 @@ async function demoRunnerAnthropicToOpenAi() {
     routeTable: {
       aliases: {
         'mock-claude': {
-          targets: [{ access_path: 'openai', provider: 'openai', model: 'gpt-test-1' }],
+          // 客户端 anthropic.messages + 上游 openai.chat → 必然慢路径 + 跨格式互转；
+          // access_path 用 mock（requires_credential: false），不需要环境变量里的 key。
+          targets: [{ access_path: 'mock', provider: 'mock', model: 'gpt-test-1' }],
         },
       },
     },

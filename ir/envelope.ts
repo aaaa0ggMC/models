@@ -25,6 +25,14 @@ export interface RawEnvelope {
   nodes?: Record<string, unknown>;
   /** 来源 provider（回写时判断能否整体还原）。 */
   source_provider?: string;
+  /**
+   * 上游原始 finish_reason / stop_reason 字符串（10 §9.3 注意 3）。
+   *
+   * 注意 3 要求 finish_reason「双向可逆」：归一值用于 canonical，**原文**用于回写与对账。
+   * 此前该原文在各 codec 里被塞进 unmapped 或 nodes（两套约定），现在收成顶层一等字段。
+   * 映射表未命中时还必须落 `other` + warning（注意 2），两者缺一不可。
+   */
+  finish_reason_provider?: string;
 }
 
 export interface CanonicalRequestEnvelope {

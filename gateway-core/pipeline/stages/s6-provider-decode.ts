@@ -17,6 +17,7 @@ import type {
   CanonicalStreamEvent,
   CanonicalUsage,
   FinishReason,
+  StreamPart,
 } from '../../../ir/index.js';
 import { createCanonicalError, emptyUsage } from '../../../ir/index.js';
 import { IncrementalUsageSniffer, type UsageSnifferOptions } from '../usage-sniffer.js';
@@ -142,6 +143,14 @@ async function collectEvents(
   return frames.map(frameToEvent);
 }
 
+/**
+ * 把 codec 产出的 `StreamFrame` 折叠成 `CanonicalStreamEvent`（20 §S6 的折叠表）。
+ *
+ * `event: "delta"` 一律映射到 `part.delta`；part 边界（`meta` 帧带 phase/part/index）
+ * 还原成 `part.begin` / `part.end`——part 边界是 tool_use 的"开户/销户"，
+ * 丢掉它客户端侧就只剩悬空的参数增量（Anthropic 的 content_block_start 带 id/name）。
+ * 帧与事件不总是 1:1（一个 `end` 帧可能同时携带 finish 与 usage），因此返回单个事件。
+ */
 function frameToEvent(frame: unknown): CanonicalStreamEvent {
   const f = frame as { event: string; data: Record<string, unknown> };
   switch (f.event) {
@@ -153,25 +162,36 @@ function frameToEvent(frame: unknown): CanonicalStreamEvent {
     case 'delta': {
       const d = f.data as {
         kind?: string;
+        index?: number;
         text?: string;
         thinking?: string;
         tool_input_json?: string;
         refusal?: string;
       };
+      const index = typeof d.index === 'number' ? d.index : 0;
       if (d.tool_input_json !== undefined) {
         return {
           type: 'part.delta',
-          index: 0,
+          index,
           delta: { type: 'tool_input_json', partial_json: d.tool_input_json },
         };
       }
       if (d.thinking !== undefined) {
-        return { type: 'part.delta', index: 0, delta: { type: 'thinking', thinking: d.thinking } };
+        return { type: 'part.delta', index, delta: { type: 'thinking', thinking: d.thinking } };
       }
       if (d.refusal !== undefined) {
-        return { type: 'part.delta', index: 0, delta: { type: 'refusal', refusal: d.refusal } };
+        return { type: 'part.delta', index, delta: { type: 'refusal', refusal: d.refusal } };
       }
-      return { type: 'part.delta', index: 0, delta: { type: 'text', text: d.text ?? '' } };
+      return { type: 'part.delta', index, delta: { type: 'text', text: d.text ?? '' } };
+    }
+    case 'meta': {
+      const note = partNoteFrom(f.data);
+      if (note !== undefined) {
+        return note.phase === 'begin'
+          ? { type: 'part.begin', index: note.index, part: note.part }
+          : { type: 'part.end', index: note.index, part: note.part };
+      }
+      return { type: 'part.delta', index: 0, delta: { type: 'text', text: '' } };
     }
     case 'end':
       return {
@@ -194,4 +214,40 @@ function frameToEvent(frame: unknown): CanonicalStreamEvent {
     default:
       return { type: 'part.delta', index: 0, delta: { type: 'text', text: '' } };
   }
+}
+
+/**
+ * 从 meta 帧里取 part 边界信息。
+ *
+ * 兼容两种载体，直到 codec 全部切到 `ir/stream.ts` 新加的 `PartBeginData` /
+ * `PartEndData`（`event: "delta"` + `data: {kind:"chat", index, part}`）：
+ *   A. 顶层 `{phase, index, part}`（类型化载体）；
+ *   B. `notes` 里任意键挂的 `{phase, index, part}`（codec 此前的逃生舱，
+ *      键名各 codec 不同：openai.chat.part / anthropic.part）。
+ * 之所以不按 key 名匹配：键名是 codec 私有约定，管道不该知道。
+ */
+function partNoteFrom(
+  data: Record<string, unknown>,
+): { phase: 'begin' | 'end'; index: number; part: StreamPart } | undefined {
+  const candidates: unknown[] = [data];
+  const notes = data['notes'];
+  if (typeof notes === 'object' && notes !== null) {
+    candidates.push(...Object.values(notes as Record<string, unknown>));
+  }
+  for (const c of candidates) {
+    if (typeof c !== 'object' || c === null) continue;
+    const rec = c as Record<string, unknown>;
+    const phase = rec['phase'];
+    if (phase !== 'begin' && phase !== 'end') continue;
+    const part = rec['part'];
+    if (!isStreamPart(part)) continue;
+    const idx = rec['index'];
+    return { phase, index: typeof idx === 'number' ? idx : 0, part };
+  }
+  return undefined;
+}
+
+/** part 边界帧的结构守卫。 */
+function isStreamPart(v: unknown): v is StreamPart {
+  return typeof v === 'object' && v !== null && typeof (v as { type?: unknown }).type === 'string';
 }

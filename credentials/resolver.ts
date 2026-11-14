@@ -98,6 +98,33 @@ export class EnvCredentialResolver implements CredentialResolver {
     private readonly env: Record<string, string | undefined> = process.env,
   ) {
     for (const p of accessPaths) this.paths.set(p.id, p);
+    this.registerEnvCredentials();
+  }
+
+  /**
+   * 把环境变量里已设置的 key 自动登记成凭据。
+   *
+   * 这是 45-credentials.md §5.3「Phase 1 凭据只能来自环境变量或 OS keyring」的落地：
+   * 部署时只要 export 了 AG_OPENAI_API_KEY，无需再写任何配置就能用。
+   * **只登记变量名，值仍留在进程环境里**，不进任何配置对象/日志/trace。
+   */
+  private registerEnvCredentials(): void {
+    for (const [accessPath, envVar] of Object.entries(KEY_ENV_BY_ACCESS_PATH)) {
+      const secret = this.env[envVar];
+      if (secret === undefined || secret === "") continue;
+      this.registerCredential({
+        id: `env:${accessPath}`,
+        name: `${accessPath} (env ${envVar})`,
+        type: "api_key",
+        access_path: accessPath,
+        model_namespace: accessPath,
+        storage: { location: "env", ref: envVar, encrypted: false },
+        health: { status: "unknown", last_checked: 0 },
+        priority: 100,
+        enabled: true,
+        refresh: { kind: "static", on_refresh_failure: "alert_only" },
+      });
+    }
   }
 
   registerCredential(cred: UpstreamCredential): void {

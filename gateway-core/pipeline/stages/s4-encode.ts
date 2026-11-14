@@ -60,7 +60,7 @@ export class S4Encode implements Stage {
     }
 
     // 慢路径：物化完整 canonical 后编码（D-fastpath-1 的第二个物化触发点）
-    const req = lazy.full();
+    const req = state.canonical_override ?? lazy.full();
     state.canonical = req;
     state.materialized = true;
 

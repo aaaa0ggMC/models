@@ -89,6 +89,14 @@ export interface PipelineState {
 
   /** S3 之后：完整 canonical（可能仍未物化） */
   canonical?: CanonicalRequestEnvelope;
+  /**
+   * 显式提供的 canonical（工具循环的每一轮由 Runner 设置）。
+   *
+   * 为什么需要它：`LazyRequest.full()` 返回的是**首次物化时 memoize 的原始请求**，
+   * 而工具循环的 APPEND_TURN 会往 messages 里追加 assistant/tool 回合——
+   * 若不显式覆盖，每一轮都会把原始请求重新发给上游，循环永远不前进（20 §5.2）。
+   */
+  canonical_override?: CanonicalRequestEnvelope;
   /** 插件短路（S3） */
   short_circuit_response?: CanonicalResponseEnvelope;
   short_circuit_error?: import('../../ir/index.js').CanonicalError;

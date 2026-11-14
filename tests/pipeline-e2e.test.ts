@@ -85,9 +85,10 @@ function runOnce(
     string,
     { targets: Array<{ access_path: string; provider: string; model: string }> }
   > = {
-    'gpt-test-1': { targets: [{ access_path: 'openai', provider: 'openai', model: 'gpt-test-1' }] },
+    // 走 mock access path（requires_credential: false），因此不需要环境变量里的 key
+    'gpt-test-1': { targets: [{ access_path: 'mock', provider: 'mock', model: 'gpt-test-1' }] },
     'claude-test-1': {
-      targets: [{ access_path: 'anthropic', provider: 'anthropic', model: 'claude-test-1' }],
+      targets: [{ access_path: 'mock-anthropic', provider: 'mock', model: 'claude-test-1' }],
     },
   },
 ) {
@@ -194,8 +195,16 @@ describe('端到端：Anthropic Messages 客户端 → OpenAI Chat 上游（慢�
     expect(body.role).toBe('assistant');
     expect(body.content[0].type).toBe('text');
     expect(body.stop_reason).toBe('end_turn');
-    // usage 按 Anthropic 口径归一：total = input + cache_creation + cache_read + output（40 §2.2）
-    expect(body.usage.total_tokens).toBe(18 + 0 + 0 + 11);
+    // Anthropic wire 格式没有 total_tokens 字段（40 §2.1「需自算」），因此断言 canonical 侧
+    // 的归一值：total = input + cache_creation + cache_read + output（40 §2.2 官方口径）
+    expect(out.usage?.units.tokens).toMatchObject({
+      input_tokens: 18,
+      output_tokens: 11,
+      cache_read_tokens: 4,
+      total_tokens: 18 + 0 + 0 + 11,
+    });
+    // wire 侧是 Anthropic 原生 usage 形态
+    expect(body.usage).toMatchObject({ input_tokens: 18, output_tokens: 11, cache_read_input_tokens: 4 });
 
     // 上游收到的是 OpenAI Chat 格式
     expect(transport.requests).toHaveLength(1);

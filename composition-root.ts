@@ -86,16 +86,23 @@ export interface Gateway {
   shutdown(): Promise<void>;
 }
 
-/** 默认路由表：两条 mock access path，便于本地不起真实 API 跑通端到端。 */
+/**
+ * 默认路由表。
+ *
+ * `mock-*` 两个别名指向 **mock access path**（`requires_credential: false`），
+ * 因此 `npm run demo` 不起真实 API、不设任何 key 也能端到端跑通。
+ * `gpt-4o` / `claude-sonnet-4-5` 指向真实 access path，配好 AG_OPENAI_API_KEY /
+ * AG_ANTHROPIC_API_KEY 后即可用（EnvCredentialResolver 会自动登记）。
+ */
 export function defaultRouteTable(): RouteTable {
   return {
     aliases: {
       'mock-gpt': {
-        targets: [{ access_path: 'openai', provider: 'openai', model: 'gpt-test-1' }],
+        targets: [{ access_path: 'mock', provider: 'mock', model: 'gpt-test-1' }],
         max_context_tokens: 128_000,
       },
       'mock-claude': {
-        targets: [{ access_path: 'anthropic', provider: 'anthropic', model: 'claude-test-1' }],
+        targets: [{ access_path: 'mock-anthropic', provider: 'mock', model: 'claude-test-1' }],
         max_context_tokens: 200_000,
       },
       'gpt-4o': {
@@ -111,14 +118,43 @@ export function defaultRouteTable(): RouteTable {
 }
 
 /** 默认能力矩阵（Phase 1：两个已实现的 chat adaptor）。 */
+/** 默认能力矩阵（Phase 1：两个已实现的 chat adaptor × mock/真实两条路径）。 */
 export function defaultCapabilities(): CapabilityEntry[] {
+  const chatSse = {
+    mode: 'sse' as const,
+    usage_in_stream: true,
+    cancellable: true,
+    framing: 'json-sse' as const,
+  };
   return [
     {
-      access_path: 'openai',
+      access_path: 'mock',
       model: 'gpt-test-1',
       modality: 'chat',
       format: 'openai.chat',
-      streaming: { mode: 'sse', usage_in_stream: true, cancellable: true, framing: 'json-sse' },
+      streaming: chatSse,
+      usage_source: 'provider',
+      usage_units: ['tokens'],
+      contract_tested: true,
+      status: 'implemented',
+    },
+    {
+      access_path: 'mock-anthropic',
+      model: 'claude-test-1',
+      modality: 'chat',
+      format: 'anthropic.messages',
+      streaming: chatSse,
+      usage_source: 'provider',
+      usage_units: ['tokens'],
+      contract_tested: true,
+      status: 'implemented',
+    },
+    {
+      access_path: 'openai',
+      model: 'gpt-4o',
+      modality: 'chat',
+      format: 'openai.chat',
+      streaming: chatSse,
       usage_source: 'provider',
       usage_units: ['tokens'],
       contract_tested: true,
@@ -126,10 +162,10 @@ export function defaultCapabilities(): CapabilityEntry[] {
     },
     {
       access_path: 'anthropic',
-      model: 'claude-test-1',
+      model: 'claude-sonnet-4-5',
       modality: 'chat',
       format: 'anthropic.messages',
-      streaming: { mode: 'sse', usage_in_stream: true, cancellable: true, framing: 'json-sse' },
+      streaming: chatSse,
       usage_source: 'provider',
       usage_units: ['tokens'],
       contract_tested: true,

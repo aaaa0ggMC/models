@@ -161,10 +161,19 @@ export async function runToolLoop(
  * 判断本次请求是否走网关循环（20 §5.1 的触发条件）。
  *
  * Phase 1 只实现 `ag_agentic_loop: true` 这一条显式开关；Responses 入站 + tools +
- * provider 无原生工具执行这一条要等能力矩阵补全 streaming/executor 声明后再接。
+ * provider 无原生工具执行这一条要等能力矩阵补全 executor 声明后再接。
+ *
+ * 开关的两处来源：
+ *   A. `req.gateway.agentic_loop`——canonical 正规位置（客户端格式 codec 应把扩展字段
+ *      映射到这里）；
+ *   B. `req.raw.unmapped.ag_agentic_loop`——**Phase 1 桥接**：`ag_agentic_loop` 是客户端
+ *      侧的网关扩展字段，而 codec 按 20 §S1 的硬性要求把所有未建模顶层键收进
+ *      `raw.unmapped`（不丢字段），所以这里也认它。等 codec 补上 A 的映射后，
+ *      B 可以退化成一条 warning 而不是判定依据。
  */
 export function shouldUseGatewayLoop(req: CanonicalRequestEnvelope): boolean {
-  return req.gateway?.agentic_loop === true;
+  if (req.gateway?.agentic_loop === true) return true;
+  return req.raw.unmapped?.["ag_agentic_loop"] === true;
 }
 
 /** 从 ctx.state.tool_id_map 维护 provider 侧 id ↔ canonical id 的映射（20 §5.2）。 */

@@ -10,7 +10,7 @@
  */
 
 import type { PipelineDeps, PipelineState, Stage } from '../types.js';
-import type { CanonicalStreamEvent, StreamFrame } from '../../../ir/index.js';
+import type { CanonicalStreamEvent, FrameData, StreamFrame } from '../../../ir/index.js';
 import { AG_FRAME_EVENT_NAME, emptyUsage } from '../../../ir/index.js';
 
 export class S8ClientEncode implements Stage {
@@ -125,26 +125,31 @@ async function* singleFrameStream(
   };
 }
 
-function eventToFrameData(
-  ev: import('../../../ir/index.js').CanonicalStreamEvent,
-): import('../../../ir/index.js').FrameData {
+/**
+ * `CanonicalStreamEvent` → `FrameData`（20 §S8 反向执行 10 §9 的映射表）。
+ *
+ * part 边界**必须**保留：`part.begin` 带 tool_use 的 id/name（Anthropic 的
+ * `content_block_start`），`part.end` 带完整 part（流式 tool_use 靠它保证 JSON 完整，
+ * 20 §S6）。此前把两者折叠成 `{kind:"chat", text:""}` 会产出多余的空 text delta
+ * 并丢掉 tool_use 的开户信息——那是慢路径流式 round-trip 的实质损坏。
+ */
+function eventToFrameData(ev: CanonicalStreamEvent): FrameData {
   switch (ev.type) {
     case 'start':
-      return {
-        model: ev.message.model,
-        client_format: 'openai.chat',
-        provider_format: 'openai.chat',
-      };
-    case 'part.delta':
-      if (ev.delta.type === 'text') return { kind: 'chat', text: ev.delta.text };
-      if (ev.delta.type === 'thinking') return { kind: 'chat', thinking: ev.delta.thinking };
-      if (ev.delta.type === 'tool_input_json') {
-        return { kind: 'chat', tool_input_json: ev.delta.partial_json };
-      }
-      return { kind: 'chat', refusal: ev.delta.refusal };
+      return { model: ev.message.model, client_format: 'openai.chat', provider_format: 'openai.chat' };
     case 'part.begin':
+      return { kind: 'chat', index: ev.index, part: ev.part };
     case 'part.end':
-      return { kind: 'chat', text: '' };
+      return { kind: 'chat', index: ev.index, part: ev.part };
+    case 'part.delta':
+      if (ev.delta.type === 'text') return { kind: 'chat', index: ev.index, text: ev.delta.text };
+      if (ev.delta.type === 'thinking') {
+        return { kind: 'chat', index: ev.index, thinking: ev.delta.thinking };
+      }
+      if (ev.delta.type === 'tool_input_json') {
+        return { kind: 'chat', index: ev.index, tool_input_json: ev.delta.partial_json };
+      }
+      return { kind: 'chat', index: ev.index, refusal: ev.delta.refusal };
     case 'usage':
       return { usage: ev.usage };
     case 'finish':

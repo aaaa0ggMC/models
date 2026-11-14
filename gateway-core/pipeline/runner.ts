@@ -149,23 +149,48 @@ export class PipelineRunner {
         if (state.short_circuit_response !== undefined) {
           state.usage = state.short_circuit_response.usage;
         }
+        await this.writeShortCircuit(state, deps);
         await run('S9');
         await run('S10');
         return;
       }
     }
 
-    // ---- S4–S8（第一轮）----
-    for (const id of ['S4', 'S5', 'S6', 'S7', 'S8']) {
-      await run(id);
+    // ---- 网关 agentic loop 判定（20 §5.2）----
+    // 判定依据（gateway.agentic_loop / raw.unmapped.ag_agentic_loop）在完整 canonical 上，
+    // 但**不能为了判断就物化**——那会让每个请求都付全量解码代价，fast path 的惰性白做。
+    // 因此先用两个廉价信号决定"要不要物化"：
+    //   a) 浅解析已给出 gateway_agentic_loop（generic 路径会填）；
+    //   b) 原始字节里出现过该标记（codec 的 decodeEnvelope 未填该字段时的兜底，
+    //      一次 substring 搜索，不做 JSON 解析）。
+    // 只有真要进循环时才物化（D-fastpath-1 的第三种触发点）。
+    const wantsLoop =
+      state.short_circuit_response === undefined &&
+      (state.shallow?.gateway_agentic_loop === true ||
+        (state.lazy !== undefined &&
+          state.lazy.raw.toString('utf8').includes('"ag_agentic_loop"')));
+    if (wantsLoop && state.canonical === undefined && state.lazy !== undefined) {
+      state.canonical = state.lazy.full();
+      state.materialized = true;
+      deps.metrics.increment('pipeline.materialize', 1, { stage: 'tool-loop' });
     }
-
-    // ---- 网关 agentic loop（20 §5.2）：每轮重跑 S4→S8 ----
-    if (
+    const useGatewayLoop =
       state.canonical !== undefined &&
       state.short_circuit_response === undefined &&
-      shouldUseGatewayLoop(state.canonical)
-    ) {
+      shouldUseGatewayLoop(state.canonical);
+
+    if (useGatewayLoop) {
+      // 网关循环需要往 canonical.messages 里追加 tool_use / tool_result 回合（APPEND_TURN），
+      // 因此**必须关闭 fast path**——否则上游应答不会被解码成 canonical，循环拿不到 tool_use。
+      // 这也是 fast path 关闭率的一个可观测来源（20 §4.1 / 70 Phase 3 验收）。
+      if (ctx.fast_path) {
+        ctx.disableFastPath('gateway agentic loop requires canonical');
+      }
+    }
+
+    if (useGatewayLoop && state.canonical !== undefined) {
+      // ---- 网关 agentic loop：每一轮重跑 S4→S7，循环结束后才 S8/S9/S10 ----
+      // 中间轮次的应答**不写给客户端**——否则第二次 sink.start 会触发 20 §S8 的硬约束。
       const maxTurns = state.canonical.gateway?.max_turns ?? deps.config.maxTurns;
       const loopResult = await runToolLoop(
         state.canonical,
@@ -173,17 +198,13 @@ export class PipelineRunner {
         {
           pluginHost: deps.pluginHost,
           runTurn: async (req) => {
-            // 每轮重跑 S4→S8（canonical 变，provider 不变）
-            const turnState: PipelineState = { ...state, canonical: req };
-            const turnRun = async (id: string): Promise<void> => {
+            const turnState: PipelineState = { ...state, canonical: req, canonical_override: req };
+            for (const id of ['S4', 'S5', 'S6', 'S7']) {
               const stage = stageById.get(id);
               if (stage === undefined) throw new Error(`未知阶段: ${id}`);
               await stage.execute(turnState, deps);
-            };
-            for (const id of ['S4', 'S5', 'S6', 'S7', 'S8']) {
-              await turnRun(id);
             }
-            // 把这一轮的产物合并回主 state（S9/S10 只跑一次）
+            // 把这一轮的产物合并回主 state（S8/S9/S10 只跑一次）
             state.turns = turnState.turns;
             state.usage = turnState.usage;
             state.response = turnState.response;
@@ -192,7 +213,10 @@ export class PipelineRunner {
             state.aggregated = turnState.aggregated;
             state.final_response = turnState.final_response;
             state.upstream_chunks = turnState.upstream_chunks;
+            state.upstream = turnState.upstream;
+            state.upstream_status = turnState.upstream_status;
             state.ttfb_ms = turnState.ttfb_ms;
+            state.sniffer = turnState.sniffer;
             state.diagnostics.push(...turnState.diagnostics);
             state.dropped_capabilities.push(...turnState.dropped_capabilities);
             return turnState.response ?? (turnState.final_response as CanonicalResponseEnvelope);
@@ -202,15 +226,67 @@ export class PipelineRunner {
       );
       state.turns = loopResult.turns;
       state.response = loopResult.response;
+      state.final_response = loopResult.response;
       if (loopResult.exceeded) {
         ctx.warn('agentic_loop_exceeded', `turns=${loopResult.turns}`);
       }
+      // 循环结束：把**最终**应答编码一次写给客户端
+      await run('S8');
+      await run('S9');
+      await run('S10');
+      return;
+    }
+
+    // ---- 普通路径：S4→S8→S9→S10 ----
+    for (const id of ['S4', 'S5', 'S6', 'S7', 'S8']) {
+      await run(id);
     }
 
     // ---- S9 / S10（整个请求只跑一次）----
     await run('S9');
     await run('S10');
   }
+
+  /**
+   * 插件短路时把应答写给客户端。
+   *
+   * S4–S8 被整体跳过（20 §S3），因此这里单独做一次「canonical → 客户端格式」编码。
+   * 流式下不适用（流已开始就无法回头，25 §7.1 禁止流式 ShortCircuit）。
+   */
+  private async writeShortCircuit(state: PipelineState, deps: PipelineDeps): Promise<void> {
+    const { ctx } = state;
+    if (state.short_circuit_error !== undefined) {
+      // guard 拦截：首字节前 → 直接非 2xx
+      const clientAdaptor = state.clientAdaptor;
+      const body =
+        clientAdaptor === undefined
+          ? {
+              error: {
+                message: state.short_circuit_error.message,
+                type: state.short_circuit_error.code,
+              },
+            }
+          : clientAdaptor.encodeResponse(errorEnvelope(state.short_circuit_error, ctx), ctx);
+      deps.sink.start(state.short_circuit_error.http_status, {
+        'content-type': 'application/json',
+        'x-request-id': ctx.request_id,
+      });
+      deps.sink.write(JSON.stringify(body));
+      state.bytes_written = true;
+      return;
+    }
+    const res = state.short_circuit_response;
+    const clientAdaptor = state.clientAdaptor;
+    if (res === undefined || clientAdaptor === undefined) return;
+    const body = clientAdaptor.encodeResponse(res, ctx);
+    deps.sink.start(200, {
+      'content-type': 'application/json',
+      'x-request-id': ctx.request_id,
+    });
+    deps.sink.write(JSON.stringify(body));
+    state.bytes_written = true;
+  }
+
 
   private successOutcome(state: PipelineState): PipelineOutcome {
     const { ctx } = state;
@@ -295,6 +371,15 @@ export class PipelineRunner {
   }
 }
 
+/**
+ * 把 CanonicalError 包成一个响应信封，供客户端格式 codec 按 20 §7.2 生成错误体。
+ *
+ * `raw.nodes.error` 带**完整**的 CanonicalError（code / http_status / retryable /
+ * provider_code / capability_rejected）——客户端 codec 需要这些才能填出
+ * `{error:{type, code}}`；只给 message 会逼它猜码（OpenAI 的 rate_limit_error /
+ * Anthropic 的 overloaded_error 全靠它们区分）。`raw` 默认不回给客户端（20 §7.2），
+ * 由 codec 决定挑哪些字段透出。
+ */
 function errorEnvelope(err: CanonicalError, ctx: MutableRequestContext): CanonicalResponseEnvelope {
   return {
     ir_version: 'ag-ir/1',
@@ -304,7 +389,7 @@ function errorEnvelope(err: CanonicalError, ctx: MutableRequestContext): Canonic
     finish_reason: 'error',
     payload: { message: { role: 'assistant', parts: [{ type: 'refusal', reason: err.message }] } },
     warnings: [],
-    raw: {},
+    raw: { nodes: { error: err } },
   };
 }
 
