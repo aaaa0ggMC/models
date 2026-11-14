@@ -290,6 +290,16 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
         return true;
       }
 
+      // ---- 用量时间序列（趋势图；只读，不新增写入面）----
+      if (route === 'usage/timeseries' && method === 'GET') {
+        const q = url.searchParams;
+        const from = parseIntOrUndefined(q.get('from_ts'));
+        const to = parseIntOrUndefined(q.get('to_ts'));
+        const bucketMs = parseIntOrUndefined(q.get('bucket_ms'));
+        sendJson(res, 200, await service.usageTimeseries(from, to, bucketMs));
+        return true;
+      }
+
       // ---- 余额探测 ----
       if (route === 'balance/probe' && method === 'POST') {
         const result = await service.probeBalance();
