@@ -132,8 +132,10 @@ export class ModelSyncService implements UpstreamSnapshotProvider {
   private readonly sources: ModelMetadataSource[];
   private readonly logger: Logger | undefined;
   private readonly metrics: Metrics | undefined;
-  private readonly intervalMs: number;
-  private readonly ttlMs: number;
+  /** 周期同步间隔（ms）。可变：运行时设置「模型同步间隔」要能热改。 */
+  private intervalMs: number;
+  /** 上游 TTL（ms）。可变：同上。 */
+  private ttlMs: number;
   private readonly syncOnStart: boolean;
   private readonly scheduler: TimerScheduler;
 
@@ -185,6 +187,39 @@ export class ModelSyncService implements UpstreamSnapshotProvider {
       interval_ms: this.intervalMs,
       ttl_ms: this.ttlMs,
     });
+  }
+
+  /**
+   * 热改同步策略（运行时设置用，见 config/settings.ts）。
+   *
+   * 改了间隔会**重启定时器**——`setInterval` 的周期在创建时定死，没有
+   * 「改个字段就生效」这种事。已在运行才重启；没运行（还没 start 或已 stop）
+   * 只更新字段，下次 start 自然用新值。
+   */
+  setPolicy(policy: { intervalMs?: number; ttlMs?: number }): void {
+    if (policy.intervalMs !== undefined) {
+      if (!Number.isFinite(policy.intervalMs) || policy.intervalMs < 0) {
+        throw new Error(`同步间隔必须是非负数，收到 ${policy.intervalMs}`);
+      }
+      this.intervalMs = policy.intervalMs;
+    }
+    if (policy.ttlMs !== undefined) {
+      if (!Number.isFinite(policy.ttlMs) || policy.ttlMs < 0) {
+        throw new Error(`上游 TTL 必须是非负数，收到 ${policy.ttlMs}`);
+      }
+      this.ttlMs = policy.ttlMs;
+    }
+    if (this.started) {
+      if (this.timer !== undefined) {
+        this.scheduler.clearInterval(this.timer);
+        this.timer = undefined;
+      }
+      if (this.intervalMs > 0) {
+        this.timer = this.scheduler.setInterval(async () => {
+          await this.syncNow('periodic');
+        }, this.intervalMs);
+      }
+    }
   }
 
   /** 停止周期同步（优雅退出用）。 */

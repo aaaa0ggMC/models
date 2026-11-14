@@ -10,6 +10,7 @@
  *   crypto/   —— 密码学原语（XChaCha20-Poly1305 / Argon2id / AES-256-KW / AAD）
  *   keystore.ts        —— 密钥管理（解锁模式、DEK、KEK 轮换、canary）
  *   record-store.ts    —— 加密记录存储（接口 + 内存 / JSON 文件实现）+ 脱敏
+ *   virtual-keys.ts    —— 数据面 virtual key 记录（**只存 Argon2id 哈希，永不明文**）
  *
  * ⚠️ 待文档更新（不由本线程改，走 PR）：00-overview.md §4.2 的模块表还没有
  * `storage/` 的「加密 KV/记录存储」一行——65 号文档设计了它，但没有模块条目。
@@ -22,3 +23,4 @@ export * from './crypto/kdf.js';
 export * from './crypto/wrap.js';
 export * from './keystore.js';
 export * from './record-store.js';
+export * from './virtual-keys.js';

@@ -16,6 +16,7 @@
     "providers/**/*.ts",
     "storage/**/*.ts",
     "admin/**/*.ts",
+    "auth/**/*.ts",
     "config/**/*.ts",
     "catalog/**/*.ts",
     "capability/**/*.ts",
