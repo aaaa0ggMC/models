@@ -89,6 +89,15 @@ export interface GatewayConfig {
   port: number;
   /** HTTP ingress 监听 host。 */
   host: string;
+  /**
+   * DeepSeek 上游 base URL 覆盖（可选）。
+   *
+   * 两个 DeepSeek access path（deepseek.openai-chat / deepseek.anthropic-messages）
+   * 共用这一个 base；dialect 差异（/chat/completions 与 /anthropic/v1/messages）
+   * 由 provider profile 的 endpointPath 表达，不靠 base URL 拼接。
+   * 留空 = 用默认值 https://api.deepseek.com（代理/内网镜像场景才需要覆盖）。
+   */
+  deepseekBaseUrl?: string;
 }
 
 export const DEFAULT_CONFIG: GatewayConfig = {
@@ -105,6 +114,117 @@ export const DEFAULT_CONFIG: GatewayConfig = {
   port: 8787,
   host: '127.0.0.1',
 };
+
+/**
+ * Provider profile：**单个上游 provider 的专有知识**。
+ *
+ * 为什么需要它（而不是把 provider 知识塞进 dialect codec）：codec 按
+ * (FormatId, ModalityKind) 注册、一个实例服务所有同 dialect 的 access path
+ * （openai / mock / deepseek.openai-chat 共用 OpenAIChatCodec）。DeepSeek 的
+ * OpenAI 兼容面与 OpenAI 本家有系统性差异（端点路径、usage 缓存字段名、
+ * 服务端工具类型名、thinking 开关形态），这些是 **provider 级**而不是
+ * dialect 级的差异。按 00 §4.2 的模块划分，这类知识集中在
+ * `providers/<provider>/profile.ts`，经本端口注入：
+ *   - adaptor（codec）在 encode/decode 时按 `ctx.route.access_path` 查 profile，
+ *     拿到端点路径 / builtin tool 的厂商专有形态；
+ *   - S10（计量边界）按 access path 查 profile，把厂商专有 usage 字段名
+ *     归一成 canonical（metering 模块的「usage 归一」职责，60-billing §2）。
+ *
+ * 全部方法可选：没有 profile（openai / anthropic / mock）时行为与今天完全一致。
+ */
+export interface ProviderProfile {
+  readonly id: string;
+  /** 该 profile 覆盖的 access path id 列表。 */
+  readonly accessPaths: readonly string[];
+  /**
+   * 端点路径覆盖：该 access path 的上游路径。
+   *
+   * 典型用例：DeepSeek 的 OpenAI 兼容面是 `POST /chat/completions`（**没有 /v1**，
+   * 与 OpenAI 本家的 `/v1/chat/completions` 不同），Anthropic 兼容面是
+   * `/anthropic/v1/messages`（SDK base_url 是 `https://api.deepseek.com/anthropic`）。
+   * 返回 undefined = 用 dialect codec 的默认路径。
+   */
+  endpointPath?(accessPath: string): string | undefined;
+  /**
+   * usage 归一：从**上游原始 usage 对象**导出 token 计量。
+   *
+   * 入参是 dialect codec 逐字段保留进 `CanonicalUsage.raw` 的那份原文
+   * （40 §2.2c I4：raw 独立于 units，永不被聚合破坏）。典型用例：DeepSeek 的
+   * `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens` 是 usage **顶层**字段，
+   * 而 OpenAI 系把缓存数埋在 `prompt_tokens_details.cached_tokens` 里。
+   * 返回 undefined = 不干预（沿用 dialect codec 已算出的 units）。
+   */
+  usageFromRaw?(raw: Record<string, unknown>): import('../ir/index.js').TokenUsage | undefined;
+  /**
+   * canonical builtin tool 名 → 上游 wire 形态（`tools[]` 条目）。
+   *
+   * 50-builtin-search.md §3.1 模式 A（上游原生执行）：canonical 只用稳定名
+   * （web_search / url_context），厂商专有类型串（deepseek_web_search …）在
+   * 映射时还原。`format` 让同一 provider 在不同 dialect 下给不同形态——
+   * DeepSeek 的 Messages 面要求 `{"type":"deepseek_web_search","name":"deepseek_web_search"}`
+   * （name 必填且等于 type），Chat Completions 面只要 `{"type":"deepseek_web_search"}`。
+   * 返回 undefined = 该 canonical 名在此 provider 无原生对应（调用方丢弃 + 告警）。
+   */
+  builtinToolWire?(
+    canonicalName: import('../ir/index.js').BuiltinTool['name'],
+    format: string,
+  ): { type: string; name?: string } | undefined;
+  /**
+   * 上游 wire 的 `tools[].type` → canonical builtin 名（`builtinToolWire` 的逆）。
+   * 认不出返回 undefined（调用方按未建模节点保留，不猜）。
+   */
+  builtinToolCanonicalName?(
+    vendorType: string,
+  ): import('../ir/index.js').BuiltinTool['name'] | undefined;
+  /**
+   * 该 canonical builtin 工具在上游是否接受 `BuiltinTool.config` 里的配置字段
+   * （缺省 true = 原样带上）。
+   *
+   * 为什么需要这个开关：canonical 的 WebSearchConfig 有 max_results / allowed_domains /
+   * recency 等一整套过滤能力，但不是每家上游都认——DeepSeek 的全家桶工具是**裸能力
+   * 开关**，官方文档明确 `allowed_domains` / `blocked_domains` / `user_location`
+   * 一律返回 400，「A tool has allowed_domains … → tools: allowed_domains is not
+   * supported」。这种 provider 必须显式声明「不吃配置」，让调用方丢弃 + 告警，
+   * 而不是把一个上游会 400 的字段原样发过去。
+   */
+  builtinToolAcceptsConfig?(canonicalName: import('../ir/index.js').BuiltinTool['name']): boolean;
+  /**
+   * canonical `ThinkingConfig` → 上游请求参数字段（provider 专有形态）。
+   *
+   * 典型用例：DeepSeek 的 Chat Completions 面用 `thinking: {"type":"enabled"|"disabled"}`
+   * 对象开关（省略时**默认开启**推理），而 OpenAI 本家只有离散 `reasoning_effort`。
+   * 若 provider 的默认值与 canonical 的 `enabled` 语义相反，必须在这里显式表达，
+   * 否则「客户端要求关推理」会被上游的默认开启吞掉。返回 undefined = 用 dialect
+   * codec 的默认映射。
+   */
+  thinkingWire?(thinking: import('../ir/index.js').ThinkingConfig): Record<string, unknown>;
+}
+
+/** provider profile 注册表（按 access path 查；组合根装配时注入）。 */
+export interface ProviderProfileRegistry {
+  forAccessPath(accessPath: string): ProviderProfile | undefined;
+  list(): ProviderProfile[];
+}
+
+/** 内存实现：显式注册、重复 id 即报错（与 InMemoryAdaptorRegistry 同立场）。 */
+export class InMemoryProviderProfileRegistry implements ProviderProfileRegistry {
+  private readonly profiles: ProviderProfile[] = [];
+
+  register(profile: ProviderProfile): void {
+    if (this.profiles.some((p) => p.id === profile.id)) {
+      throw new Error(`provider profile 重复注册: ${profile.id}`);
+    }
+    this.profiles.push(profile);
+  }
+
+  forAccessPath(accessPath: string): ProviderProfile | undefined {
+    return this.profiles.find((p) => p.accessPaths.includes(accessPath));
+  }
+
+  list(): ProviderProfile[] {
+    return [...this.profiles];
+  }
+}
 
 /** 内存 Logger：把日志收进数组，测试可断言。 */
 export class MemoryLogger implements Logger {

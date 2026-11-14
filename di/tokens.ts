@@ -49,6 +49,26 @@ export const TOKENS = {
       'CapabilityRegistry',
     ),
 
+  // ---- provider profile（provider 专有知识：端点路径 / usage 归一 / builtin tool 映射）----
+  ProviderProfiles: createToken<import('./ports.js').ProviderProfileRegistry>('ProviderProfiles'),
+
+  // ---- 管理面 / 加密存储（控制平面；不被请求主链路同步依赖）----
+  /** 加密记录存储（凭据 / 别名 / 审计；DI 注入，可整体替换）。 */
+  EncryptedRecordStore:
+    createToken<import('../storage/record-store.js').EncryptedRecordStore>('EncryptedRecordStore'),
+  /** 已解锁的密钥库（KEK/DEK 管理）。 */
+  UnlockedKeystore:
+    createToken<import('../storage/keystore.js').UnlockedKeystore>('UnlockedKeystore'),
+  /** 管理面业务逻辑（admin/service.ts）。 */
+  AdminService: createToken<import('../admin/service.js').AdminService>('AdminService'),
+  /** 管理面本地认证（admin/auth.ts）。 */
+  AdminAuth: createToken<import('../admin/auth.js').AdminAuth>('AdminAuth'),
+  /** 管理面 HTTP 路由 handler（admin/routes.ts；http/server.ts 的挂载点）。 */
+  AdminRouteHandler:
+    createToken<import('../admin/routes.js').AdminRouteHandler>('AdminRouteHandler'),
+  /** 别名解析器（S2 路由的输入；gateway-core/router.ts 只依赖接口）。 */
+  AliasResolver: createToken<import('../admin/aliases.js').AliasResolver>('AliasResolver'),
+
   // ---- 路由 ----
   Router: createToken<import('../gateway-core/router.js').Router>('Router'),
 

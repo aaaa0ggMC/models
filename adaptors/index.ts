@@ -18,7 +18,8 @@ import {
   AnthropicMessagesCodec,
   createAnthropicMessagesAdaptorMeta,
 } from './anthropic-messages/index.js';
-import type { Clock, Logger } from '../di/ports.js';
+import type { Clock, Logger, ProviderProfileRegistry } from '../di/ports.js';
+import type { CapabilityEntry } from '../ir/index.js';
 
 export interface AdaptorBundle {
   registry: AdaptorRegistry;
@@ -30,8 +31,24 @@ export interface AdaptorBundle {
  * 装配全部已实现的 adaptor。
  *
  * `clock` 由组合根注入——adaptor 内部不自己造时钟（禁止隐式全局状态）。
+ * `providerProfiles` 同样由组合根注入（可缺省）：两个 chat codec 按 access path
+ * 查 profile 拿 provider 专有映射（端点路径 / builtin tool / thinking 形态），
+ * 见 di/ports.ts 的 ProviderProfile。没有 profile 时 codec 行为与历史版本一致。
+ * `capabilityRegistry`（可缺省）供 anthropic codec 读**上游声明的行为约束**
+ * （DeepSeek /models 的 api_capabilities：system_prompt_update / tool_update）并执行。
  */
-export function createAdaptorRegistry(deps: { clock: Clock; logger?: Logger }): AdaptorBundle {
+export function createAdaptorRegistry(deps: {
+  clock: Clock;
+  logger?: Logger;
+  providerProfiles?: ProviderProfileRegistry;
+  capabilityRegistry?: {
+    find(
+      accessPath: string,
+      model: string,
+      modality: 'chat',
+    ): Pick<CapabilityEntry, 'constraints'> | undefined;
+  };
+}): AdaptorBundle {
   const registry = new InMemoryAdaptorRegistry();
   const metas: AdaptorMeta[] = [];
 
@@ -43,7 +60,17 @@ export function createAdaptorRegistry(deps: { clock: Clock; logger?: Logger }): 
   // meta 由各 codec 目录里的工厂产出，避免"注册处抄一份、codec 抄一份"的两处漂移
   // （40 §1.3：注册集中在这里，但**内容**的单一来源在 codec 侧）。
   register(new OpenAIChatCodec(deps), openAIChatAdaptorMeta());
-  register(new AnthropicMessagesCodec(deps), createAnthropicMessagesAdaptorMeta());
+  register(
+    new AnthropicMessagesCodec({
+      clock: deps.clock,
+      ...(deps.logger === undefined ? {} : { logger: deps.logger }),
+      ...(deps.providerProfiles === undefined ? {} : { providerProfiles: deps.providerProfiles }),
+      ...(deps.capabilityRegistry === undefined
+        ? {}
+        : { capabilityRegistry: deps.capabilityRegistry }),
+    }),
+    createAnthropicMessagesAdaptorMeta(),
+  );
 
   return { registry, metas };
 }

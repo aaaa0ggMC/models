@@ -1,0 +1,3 @@
+# privacy-scan 忽略清单（一行一个 glob）。仅收录已确认的假数据。
+# DeepSeek Search API 的 localization 字段是 IP 语义，夹具用 RFC 5737 文档段地址。
+providers/deepseek/fixtures/search.request.json

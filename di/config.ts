@@ -42,6 +42,7 @@ export const UPSTREAM_KEY_ENV_VARS: Record<string, string> = {
   openai: 'AG_OPENAI_API_KEY',
   anthropic: 'AG_ANTHROPIC_API_KEY',
   gemini: 'AG_GEMINI_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
 };
 
 export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): GatewayConfig {
@@ -71,6 +72,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gateway
       debug: boolFromEnv('AG_DEBUG', DEFAULT_CONFIG.debug),
       port: intFromEnv('AG_PORT', DEFAULT_CONFIG.port),
       host: process.env['AG_HOST'] ?? DEFAULT_CONFIG.host,
+      // DeepSeek 上游 base URL 覆盖（可留空）。只读变量名对应的值，值不进日志。
+      ...(process.env['DEEPSEEK_BASE_URL'] === undefined || process.env['DEEPSEEK_BASE_URL'] === ''
+        ? {}
+        : { deepseekBaseUrl: process.env['DEEPSEEK_BASE_URL'] }),
     };
   } finally {
     // 恢复真实 process.env，避免测试副作用

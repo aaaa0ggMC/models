@@ -1,0 +1,6 @@
+{
+  "text": "你好，这是一段用于测试的示例合成文本（假数据）。",
+  "voice_id": "stella",
+  "format": "wav",
+  "filter_markdown": true
+}

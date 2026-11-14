@@ -68,11 +68,14 @@ import type {
 } from '../../ir/index.js';
 import { CTX_STATE_KEYS, IR_VERSION } from '../../ir/index.js';
 import { asChatPayload, asChatResponsePayload } from '../../ir/index.js';
+import { createCanonicalError } from '../../ir/index.js';
 import type { Adaptor, AdaptorMeta, EncodedRequest, RequestEnvelopeShallow } from '../types.js';
 // `Logger` 不是 IR 类型，而是 di/ports.ts 定义的跨切面"能力"接口（该文件头部自述：
 // 统一放 di/ 下并经构造函数注入）。`Clock` 按任务要求从 ir/index.js 取——两者结构兼容，
 // adaptors/index.ts 传进来的 di/ports.Clock 可以直接赋给 ir/clock.ts 的 Clock。
 import type { Logger } from '../../di/ports.js';
+import type { ProviderProfile, ProviderProfileRegistry } from '../../di/ports.js';
+import type { CapabilityEntry, ModelConstraints } from '../../ir/index.js';
 
 // ---------------------------------------------------------------------------
 // 常量：协议版本、端点、映射表
@@ -86,7 +89,22 @@ import type { Logger } from '../../di/ports.js';
  */
 export const ANTHROPIC_API_VERSION = '2026-10-21';
 
-/** Anthropic Messages 的端点路径（RequestEnvelopeShallow.default_path 同值）。 */
+/**
+ * 本 codec 只需要能力矩阵的**读**接口（按 (access_path, model, modality) 找约束）。
+ * 用局部结构类型而不是 import credentials/capability-registry.ts 的具体类：
+ * adaptors 层不反向依赖具体实现（AGENTS.md 代码组织），组合根注入时结构相容即可。
+ */
+interface CapabilityRegistryLike {
+  find(
+    accessPath: string,
+    model: string,
+    modality: 'chat',
+  ): Pick<CapabilityEntry, 'constraints'> | undefined;
+}
+
+/**
+ * Anthropic Messages 的端点路径（RequestEnvelopeShallow.default_path 同值）。
+ */
 export const ANTHROPIC_MESSAGES_PATH = '/v1/messages';
 
 /**
@@ -428,14 +446,65 @@ export class AnthropicMessagesCodec implements Adaptor {
 
   private readonly clock: Clock;
   private readonly logger: Logger | undefined;
+  /**
+   * provider profile 注册表（可选注入）。
+   *
+   * 同一 codec 实例服务所有 anthropic.messages dialect 的 access path
+   * （anthropic 本家 / deepseek.anthropic-messages / mock-anthropic）。DeepSeek 的
+   * Anthropic 兼容面与本家的差异（端点路径 `/anthropic/v1/messages`、服务端工具
+   * 类型串 `deepseek_web_search`）按 access path 查 profile 后启用，查不到时行为
+   * 与本文件历史版本完全一致。详见 di/ports.ts 的 ProviderProfile。
+   */
+  private readonly providerProfiles: ProviderProfileRegistry | undefined;
+  /**
+   * 能力矩阵（可选注入）：编码时按 (access_path, model) 读**上游声明的行为约束**
+   * （DeepSeek /models 的 api_capabilities：system_prompt_update / tool_update）并执行。
+   * 缺省 = 不做约束检查（行为与本文件历史版本一致）。
+   */
+  private readonly capabilityRegistry: CapabilityRegistryLike | undefined;
 
   /**
    * 依赖经构造函数注入（di/ports.ts 的两条硬约束：禁止模块级单例、禁止隐式全局状态）。
    * 不自己造时钟——否则流式帧的 `ts` 在测试里不可控。
    */
-  constructor(deps: { clock: Clock; logger?: Logger }) {
+  constructor(deps: {
+    clock: Clock;
+    logger?: Logger;
+    providerProfiles?: ProviderProfileRegistry;
+    capabilityRegistry?: CapabilityRegistryLike;
+  }) {
     this.clock = deps.clock;
     this.logger = deps.logger;
+    this.providerProfiles = deps.providerProfiles;
+    this.capabilityRegistry = deps.capabilityRegistry;
+  }
+
+  /**
+   * 取本次请求目标模型的**上游声明约束**（没有则 undefined = 无约束）。
+   *
+   * 为什么按 access_path + model 查而不是写死在 codec 里：约束是上游按 (model, dialect)
+   * 主动声明的（DeepSeek `GET /models` 的 `api_capabilities.anthropic_messages`），
+   * 会随模型演进而变；能力矩阵是它的登记处，model discovery 会实时刷新矩阵
+   * （providers/deepseek/discovery.ts），codec 读矩阵就等于永远读最新值。
+   */
+  private constraintsFor(ctx: RequestContext, model: string): ModelConstraints | undefined {
+    const accessPath = ctx.route?.access_path;
+    if (accessPath === undefined || this.capabilityRegistry === undefined) return undefined;
+    return this.capabilityRegistry.find(accessPath, model, 'chat')?.constraints;
+  }
+
+  /** 按本次请求的 access path 取 provider profile（没有则 undefined）。 */
+  private profileFor(ctx: RequestContext): ProviderProfile | undefined {
+    const accessPath = ctx.route?.access_path;
+    if (accessPath === undefined || this.providerProfiles === undefined) return undefined;
+    return this.providerProfiles.forAccessPath(accessPath);
+  }
+
+  /** 上游端点路径：profile 覆盖优先（DeepSeek: /anthropic/v1/messages），否则 /v1/messages。 */
+  private endpointPathFor(ctx: RequestContext): string {
+    const profile = this.profileFor(ctx);
+    if (profile === undefined) return ANTHROPIC_MESSAGES_PATH;
+    return profile.endpointPath?.(ctx.route?.access_path ?? '') ?? ANTHROPIC_MESSAGES_PATH;
   }
 
   // =========================================================================
@@ -459,7 +528,7 @@ export class AnthropicMessagesCodec implements Adaptor {
     const system = this.decodeSystem(body['system']);
     if (system !== undefined) payload.system = system;
 
-    const tools = this.decodeTools(body['tools']);
+    const tools = this.decodeTools(body['tools'], this.profileFor(ctx));
     if (tools !== undefined) payload.tools = tools;
 
     const toolChoiceResult = this.decodeToolChoice(body['tool_choice']);
@@ -688,7 +757,10 @@ export class AnthropicMessagesCodec implements Adaptor {
    * 但 `ir/chat.ts` 的 `BuiltinTool` 没有 `raw` 字段，只有 `native?: Record<string, unknown>`
    * （00 §5 术语表的 core/native/raw 三分法，决策 D2）。本仓库按 `ir/` 的类型定义收进 `native`。
    */
-  private decodeTools(tools: unknown): CanonicalTool[] | undefined {
+  private decodeTools(
+    tools: unknown,
+    profile: ProviderProfile | undefined,
+  ): CanonicalTool[] | undefined {
     const arr = asArray(tools);
     if (arr === undefined) return undefined;
     const out: CanonicalTool[] = [];
@@ -697,7 +769,7 @@ export class AnthropicMessagesCodec implements Adaptor {
       if (rec === undefined) continue;
       const type = asString(rec['type']);
       if (type !== undefined && type !== 'function') {
-        const builtin = this.decodeBuiltinTool(type, rec);
+        const builtin = this.decodeBuiltinTool(type, rec, profile);
         if (builtin !== undefined) {
           out.push(builtin);
           continue;
@@ -731,10 +803,21 @@ export class AnthropicMessagesCodec implements Adaptor {
     return out;
   }
 
-  /** server tool `type` 串 → `BuiltinTool`（认不出返回 undefined）。 */
+  /**
+   * server tool `type` 串 → `BuiltinTool`（认不出返回 undefined）。
+   *
+   * 两级识别：
+   *   1. **dialect 级**：Anthropic 本家的 server tool 前缀表（`web_search_20250305` …），
+   *      见 BUILTIN_TOOL_NAME_BY_PREFIX；
+   *   2. **provider 级**：当前 access path 的 profile（如 DeepSeek 的
+   *      `deepseek_web_search` / `deepseek_read_url`，前缀表认不出来，因为它们
+   *      不以 canonical 名前缀开头）。
+   * 两级都认不出才降级成 FunctionTool 壳 + `_raw`（40 §1.7「默认按名拒绝」）。
+   */
   private decodeBuiltinTool(
     providerToolType: string,
     rec: Record<string, unknown>,
+    profile: ProviderProfile | undefined,
   ): BuiltinTool | undefined {
     let name: BuiltinTool['name'] | undefined;
     for (const [prefix, canonicalName] of BUILTIN_TOOL_NAME_BY_PREFIX) {
@@ -742,6 +825,10 @@ export class AnthropicMessagesCodec implements Adaptor {
         name = canonicalName;
         break;
       }
+    }
+    // provider 专有类型串（DeepSeek 全家桶工具）：厂商名进 native，canonical 名保持稳定名
+    if (name === undefined && profile?.builtinToolCanonicalName !== undefined) {
+      name = profile.builtinToolCanonicalName(providerToolType);
     }
     if (name === undefined) return undefined;
 
@@ -833,6 +920,10 @@ export class AnthropicMessagesCodec implements Adaptor {
   private decodeThinking(thinking: unknown): ThinkingConfig | undefined {
     const t = asRecord(thinking);
     if (t === undefined) return undefined;
+    // `type: "disabled"` 是显式关推理（Anthropic 本家的合法值，DeepSeek 的兼容面同样
+    // 认它）。之前只读 budget_tokens、恒定 enabled:true，会把「关」静默吞成「开」——
+    // 跨方言转到 DeepSeek OpenAI 面时尤其致命：那边省略 thinking 就是默认开。
+    if (asString(t['type']) === 'disabled') return { enabled: false };
     const budgetTokens = asNumber(t['budget_tokens']);
     const out: ThinkingConfig = { enabled: true };
     if (budgetTokens !== undefined) out.budget_tokens = budgetTokens;
@@ -852,7 +943,7 @@ export class AnthropicMessagesCodec implements Adaptor {
           body: undefined,
           raw_bytes: rawBytes,
           fast_path: true,
-          path: ANTHROPIC_MESSAGES_PATH,
+          path: this.endpointPathFor(ctx),
           headers: { 'anthropic-version': ANTHROPIC_API_VERSION },
         };
       }
@@ -883,17 +974,42 @@ export class AnthropicMessagesCodec implements Adaptor {
     const system = this.encodeSystem(payload.system);
     if (system !== undefined) body['system'] = system;
 
-    body['messages'] = payload.messages.map((m) => this.encodeMessage(m));
-
-    const tools = this.encodeTools(payload.tools);
-    if (tools !== undefined) body['tools'] = tools;
-
-    const toolChoice = this.encodeToolChoice(payload.tool_choice);
-    if (toolChoice !== undefined) body['tool_choice'] = toolChoice;
-
     const diagnostics: ConversionDiagnostic[] = [];
     const dropped: string[] = [];
     const warnings: string[] = [];
+
+    // ---- 上游声明的行为约束（DeepSeek /models 的 api_capabilities.anthropic_messages）----
+    // system_prompt_update 决定"历史中的 system 消息"怎么办；tool_update 决定"中途增删
+    // 工具"怎么办。没有约束声明（Anthropic 本家等）时走本文件的历史默认行为。
+    const constraints = this.constraintsFor(ctx, req.resolved_model ?? req.model);
+    const systemHandling = this.enforceSystemPromptConstraint(
+      payload,
+      constraints?.system_prompt_update,
+      body,
+      ctx,
+      diagnostics,
+      warnings,
+      dropped,
+    );
+
+    body['messages'] = payload.messages
+      .filter((m) => !(systemHandling.merged && m.role === 'system'))
+      .map((m) => this.encodeMessage(m, systemHandling.allowSystemRole));
+
+    const tools = this.encodeTools(payload.tools, this.profileFor(ctx));
+    if (tools !== undefined) body['tools'] = tools;
+
+    this.enforceToolUpdateConstraint(
+      payload,
+      constraints?.tool_update,
+      ctx,
+      warnings,
+      diagnostics,
+      dropped,
+    );
+
+    const toolChoice = this.encodeToolChoice(payload.tool_choice);
+    if (toolChoice !== undefined) body['tool_choice'] = toolChoice;
 
     if (params !== undefined) {
       const encodedParams = this.encodeParams(params, ctx);
@@ -927,7 +1043,7 @@ export class AnthropicMessagesCodec implements Adaptor {
     return {
       body,
       fast_path: false,
-      path: ANTHROPIC_MESSAGES_PATH,
+      path: this.endpointPathFor(ctx),
       headers: { 'anthropic-version': ANTHROPIC_API_VERSION },
       ...(diagnostics.length > 0 ? { diagnostics } : {}),
       ...(dropped.length > 0 ? { dropped } : {}),
@@ -956,14 +1072,147 @@ export class AnthropicMessagesCodec implements Adaptor {
   }
 
   /**
+   * **上游约束执行①：`system_prompt_update`**（DeepSeek /models 的 api_capabilities）。
+   *
+   * 官方语义（https://api-docs.deepseek.com/api/list-models ）：
+   *   - `leading-only`：只有对话**开头**的 system prompt 生效；历史中后出现的 system
+   *     消息不被当作系统提示更新。→ 合规转换：把历史里的 system 消息**按顺序合并进
+   *     开头的 system 字段**（官方给的改法就是"改开头那条"），并记诊断。绝不禁默
+   *     发一条上游会忽略的 system 消息。
+   *   - `in-history`：system 消息可以追加进历史，**最后一条**提供完整生效的系统提示。
+   *     → 合规转换：原样透传 system-role 消息（DeepSeek 的 Messages 面认这个形态），
+   *     不折叠进 user。
+   *   - 无声明（Anthropic 本家等）：历史默认行为——折叠进 user + 告警。
+   *
+   * 返回 `merged: true` 表示历史里的 system 消息已被合并掉，调用方要把它们从
+   * messages 里过滤（否则同一份内容会出现两次）。
+   */
+  private enforceSystemPromptConstraint(
+    payload: ChatPayload,
+    mode: 'leading-only' | 'in-history' | undefined,
+    body: Record<string, unknown>,
+    ctx: RequestContext,
+    diagnostics: ConversionDiagnostic[],
+    warnings: string[],
+    dropped: string[],
+  ): { merged: boolean; allowSystemRole: boolean } {
+    const historySystem = payload.messages.filter((m) => m.role === 'system');
+    if (historySystem.length === 0) return { merged: false, allowSystemRole: false };
+
+    if (mode === 'in-history') {
+      // 上游认历史中的 system 消息：原样透传（role 保持 system）
+      return { merged: false, allowSystemRole: true };
+    }
+
+    if (mode === 'leading-only') {
+      // 合规转换：合并进开头的 system 字段（按历史顺序拼在既有 system 之后）
+      const leading = Array.isArray(body['system'])
+        ? (body['system'] as Array<Record<string, unknown>>)
+        : [];
+      const merged: Array<Record<string, unknown>> = [...leading];
+      for (const m of historySystem) {
+        const text = m.parts
+          .filter((p): p is TextPart => p.type === 'text')
+          .map((p) => p.text)
+          .join('');
+        if (text !== '') merged.push({ type: 'text', text });
+      }
+      body['system'] = merged;
+      const code = 'system_prompt_merged_leading_only';
+      warnings.push(code);
+      dropped.push('messages[].role=system');
+      diagnostics.push(
+        this.diag(
+          ctx,
+          code,
+          'messages[].role=system',
+          'warning',
+          `上游约束 system_prompt_update=leading-only：历史中 ${historySystem.length} 条 system 消息已按顺序合并进开头的 system 字段` +
+            '（官方口径：只有开头的系统提示生效，要改系统提示只能改开头那条）',
+        ),
+      );
+      return { merged: true, allowSystemRole: false };
+    }
+
+    // 无约束声明：历史默认行为（折叠进 user + 告警）——由 encodeRole 负责
+    return { merged: false, allowSystemRole: false };
+  }
+
+  /**
+   * **上游约束执行②：`tool_update`**（DeepSeek /models 的 api_capabilities）。
+   *
+   * 判据：历史回合里被调用过的工具（tool_use.name）是否仍在本次请求的 tools 声明里。
+   *   - `addition-only`（flash）：后续轮次只能新增工具。**移除**历史调用过的工具 →
+   *     明确报错（抛 canonical 错误）：网关无法凭空补回它的 schema，静默发过去上游
+   *     会面对一个"引用了未声明工具"的历史，行为不可预期。
+   *   - `leading-only`（v4-pro）：只有首次请求的工具声明生效，后续变更被上游忽略 →
+   *     记 warning 诊断（客户端会以为新工具可用，实际不会），不抛错。
+   *   - 无声明：不检查。
+   */
+  private enforceToolUpdateConstraint(
+    payload: ChatPayload,
+    mode: 'leading-only' | 'addition-only' | undefined,
+    ctx: RequestContext,
+    warnings: string[],
+    diagnostics: ConversionDiagnostic[],
+    dropped: string[],
+  ): void {
+    if (mode === undefined) return;
+    const historyTools = new Set<string>();
+    for (const m of payload.messages) {
+      for (const part of m.parts) {
+        if (part.type === 'tool_use' && part.name !== '') historyTools.add(part.name);
+      }
+    }
+    if (historyTools.size === 0) return;
+    const declared = new Set(
+      (payload.tools ?? [])
+        .filter((t): t is FunctionTool => t.type === 'function')
+        .map((t) => t.name),
+    );
+    const removed = [...historyTools].filter((name) => !declared.has(name));
+    if (removed.length === 0) return;
+
+    if (mode === 'addition-only') {
+      throw createCanonicalError(
+        'capability_unsupported',
+        `上游约束 tool_update=addition-only 不允许移除历史回合已调用过的工具: ${removed.join(', ')}。` +
+          '网关无法补回这些工具的 schema，静默发出会让上游面对"引用未声明工具"的历史',
+        ctx.request_id,
+        { http_status: 400, retryable: false, field_path: 'tools' },
+      );
+    }
+
+    const code = 'tool_update_leading_only';
+    warnings.push(code);
+    dropped.push('tools');
+    diagnostics.push(
+      this.diag(
+        ctx,
+        code,
+        'tools',
+        'warning',
+        `上游约束 tool_update=leading-only：只有对话首次请求的工具声明生效，本次变更（移除 ${removed.join(', ')}）会被上游忽略`,
+      ),
+    );
+  }
+
+  /**
    * canonical message → Anthropic message。
    *
    * **D7c 硬约束**：`tool_use` block 必须移到段尾。Anthropic 要求 assistant 消息里
    * tool_use 排在所有文本块之后（AI SDK 有 `moveToolUseBlocksToEnd()` 专门处理这个约束，
    * 见 10 §4.2 D7c 与 40 §7.2）。canonical 的 parts 顺序是客户端原样，不保证满足该约束，
    * 因此这里统一重排。
+   *
+   * `allowSystemRole`：上游声明 `system_prompt_update=in-history` 时，历史里的
+   * system-role 消息**原样透传**（DeepSeek 的 Messages 面认这个形态）；否则按历史
+   * 行为折叠进 user + 告警。
    */
-  private encodeMessage(message: CanonicalMessage): Record<string, unknown> {
+  private encodeMessage(
+    message: CanonicalMessage,
+    allowSystemRole = false,
+  ): Record<string, unknown> {
     const parts: Array<Record<string, unknown>> = [];
     for (const part of moveToolUseBlocksToEnd(message.parts)) {
       const wire = this.encodePart(part);
@@ -976,7 +1225,10 @@ export class AnthropicMessagesCodec implements Adaptor {
       }
       parts.push(wire);
     }
-    const wire: Record<string, unknown> = { role: this.encodeRole(message.role), content: parts };
+    const wire: Record<string, unknown> = {
+      role: this.encodeRole(message.role, allowSystemRole),
+      content: parts,
+    };
     const id = message.id;
     if (id !== undefined) wire['id'] = id;
     return applyRaw(wire, message._raw);
@@ -988,9 +1240,14 @@ export class AnthropicMessagesCodec implements Adaptor {
    * Anthropic 只有 `user` / `assistant` 两个值（`system` 是顶层字段、工具结果是 user 消息里的
    * `tool_result` block）。OpenAI 风格的 `system` / `tool` role 只能折叠进 user，且必须显式告警。
    */
-  private encodeRole(role: CanonicalMessage['role']): 'user' | 'assistant' {
+  private encodeRole(
+    role: CanonicalMessage['role'],
+    allowSystemRole = false,
+  ): 'user' | 'assistant' | 'system' {
     if (role === 'assistant') return 'assistant';
     if (role === 'user') return 'user';
+    // 上游声明 system_prompt_update=in-history 时，历史里的 system-role 消息原样透传
+    if (role === 'system' && allowSystemRole) return 'system';
     this.logger?.warn('anthropic.messages encode: role 折叠为 user', { role });
     return 'user';
   }
@@ -1108,12 +1365,13 @@ export class AnthropicMessagesCodec implements Adaptor {
 
   private encodeTools(
     tools: CanonicalTool[] | undefined,
+    profile: ProviderProfile | undefined,
   ): Array<Record<string, unknown>> | undefined {
     if (tools === undefined || tools.length === 0) return undefined;
     const out: Array<Record<string, unknown>> = [];
     for (const tool of tools) {
       if (tool.type === 'builtin') {
-        out.push(this.encodeBuiltinTool(tool));
+        out.push(this.encodeBuiltinTool(tool, profile));
         continue;
       }
       const wire: Record<string, unknown> = {
@@ -1133,18 +1391,44 @@ export class AnthropicMessagesCodec implements Adaptor {
   /**
    * `BuiltinTool` → Anthropic server tool。
    *
-   * `native.provider_tool_type` 有值就还原版本串；没有则用 `DEFAULT_PROVIDER_TOOL_TYPE`
-   * 猜一个（版本串会演进，见 10 §9.4），并记 `builtin_tool_type_inferred` warning。
+   * `type` 的来源优先级（从高到低）：
+   *   1. **provider profile 的 `builtinToolWire`**：目标 access path 的方言映射——
+   *      DeepSeek 的 Messages 面要 `{type:"deepseek_web_search",name:"deepseek_web_search"}`，
+   *      而 Anthropic 本家的 `web_search_20260318` 在 DeepSeek 上并不存在。目标方言
+   *      的表达优先于来源方言的原文（10 §7.2 回写规则第 1 条：原样回写只在同
+   *      provider 时成立，跨 provider 时原文是别家的枚举值）；
+   *   2. `native.provider_tool_type`：decode 时留住的来源原文（同 provider 回写时保真；
+   *      没有 profile 的 access path——anthropic 本家——走这条）；
+   *   3. `DEFAULT_PROVIDER_TOOL_TYPE`：按 canonical 名猜一个当前版本串并告警
+   *      （版本串会演进，见 10 §9.4）。
+   * `name` 字段同理：profile 要求 name 等于 type 串时按 profile（DeepSeek Messages
+   * 面的硬性要求），否则用 canonical 稳定名。
    */
-  private encodeBuiltinTool(tool: BuiltinTool): Record<string, unknown> {
+  private encodeBuiltinTool(
+    tool: BuiltinTool,
+    profile: ProviderProfile | undefined,
+  ): Record<string, unknown> {
+    const wire = profile?.builtinToolWire?.(tool.name, this.format);
     const providerToolType =
-      asString(tool.native?.['provider_tool_type']) ?? DEFAULT_PROVIDER_TOOL_TYPE[tool.name];
-    const wire: Record<string, unknown> = {
+      wire?.type ??
+      asString(tool.native?.['provider_tool_type']) ??
+      DEFAULT_PROVIDER_TOOL_TYPE[tool.name];
+    const acceptsConfig = profile?.builtinToolAcceptsConfig?.(tool.name) ?? true;
+    if (!acceptsConfig && Object.keys(tool.config).length > 0) {
+      // provider 明确不吃配置（DeepSeek 的 web 工具是裸开关，带配置字段上游 400）：
+      // 丢弃 + 日志，不静默发过去。
+      this.logger?.warn('anthropic.messages encode: builtin tool 配置字段不被上游支持，已丢弃', {
+        tool: tool.name,
+        access_path_hint: profile?.id,
+        dropped: Object.keys(tool.config),
+      });
+    }
+    const out: Record<string, unknown> = {
       type: providerToolType,
-      name: tool.name,
-      ...tool.config,
+      name: wire?.name ?? tool.name,
+      ...(acceptsConfig ? tool.config : {}),
     };
-    return applyRaw(wire, tool._raw);
+    return applyRaw(out, tool._raw);
   }
 
   private encodeToolChoice(choice: ToolChoice | undefined): Record<string, unknown> | undefined {

@@ -18,6 +18,7 @@
 import type { PipelineDeps, PipelineState, Stage } from '../types.js';
 import type { EncodedRequest } from '../../../adaptors/types.js';
 import { createCanonicalError } from '../../../ir/index.js';
+import { endpointPathFor } from '../provider-profile.js';
 
 export class S4Encode implements Stage {
   readonly id = 'S4';
@@ -46,7 +47,13 @@ export class S4Encode implements Stage {
         body: undefined,
         raw_bytes: rawBytes,
         fast_path: true,
-        path: state.shallow?.default_path ?? '/v1/chat/completions',
+        // 路径仍然要按 provider 解析：dialect 默认路径（/v1/chat/completions）对
+        // DeepSeek 是错的（官方是 /chat/completions）。profile 查不到才退回
+        // S1 浅解析给的 dialect 默认值。
+        path:
+          endpointPathFor(deps.providerProfiles, ctx.route.access_path) ??
+          state.shallow?.default_path ??
+          '/v1/chat/completions',
       };
       state.encoded = encoded;
       ctx.recordStage(
@@ -61,6 +68,8 @@ export class S4Encode implements Stage {
 
     // 慢路径：物化完整 canonical 后编码（D-fastpath-1 的第二个物化触发点）
     const req = state.canonical_override ?? lazy.full();
+    // 同 S3：补上 provider 侧真实 model id（S3 已物化时这里通常是同一对象）。
+    if (req.resolved_model === undefined) req.resolved_model = ctx.route.model;
     state.canonical = req;
     state.materialized = true;
 

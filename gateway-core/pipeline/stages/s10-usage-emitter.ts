@@ -12,7 +12,9 @@
  */
 
 import type { PipelineDeps, PipelineState, Stage } from '../types.js';
+import { applyProviderUsageProfile } from '../provider-profile.js';
 import { createUsageRecord, type ToolCallUsage } from '../../../metering/usage-record.js';
+import { asChatResponsePayload, emptyUsage } from '../../../ir/index.js';
 import type { UsageRecord } from '../../../metering/usage-record.js';
 
 export class S10UsageEmitter implements Stage {
@@ -29,6 +31,32 @@ export class S10UsageEmitter implements Stage {
     for (const t of traceTools) {
       toolCalls.push({ name: t.tool, ok: t.ok, duration_ms: t.duration_ms });
     }
+
+    // provider 特定的 usage 归一（计量边界）：按 access path 查 profile，把厂商专有
+    // usage 字段名（DeepSeek 的 prompt_cache_hit_tokens …）映射成 canonical。
+    // 快/慢路径、流式/非流式的原始 usage 都逐字段保留在 raw 里（40 §2.2c I4），
+    // 因此这一个点就能覆盖全部路径；没有 profile 时是恒等变换。
+    const usage =
+      applyProviderUsageProfile(state.usage, ctx.route.access_path, deps.providerProfiles) ??
+      state.usage ??
+      emptyUsage('provider');
+    // 写回 state.usage：successOutcome / trace 都在 S10 之后读它，让 outcome、
+    // UsageRecord、RequestTrace 三处看到同一份归一后的 usage（否则会出现
+    // 「记录里缓存命中已归一、outcome 里还是 0」的口径分裂）。
+    if (usage !== undefined) state.usage = usage;
+
+    // ---- 定价（请求时一次性算清 + 快照固化；缺服务 = unpriced）----
+    // 档位由请求**开始时间**定（流式跨峰谷边界时确定性优先，见 pricing-service.ts）。
+    const estimateText = estimateTextOf(state);
+    const priced =
+      deps.pricingService === undefined
+        ? undefined
+        : deps.pricingService.price({
+            ts: ctx.started_at,
+            model: ctx.route.model,
+            usage,
+            ...(estimateText === undefined ? {} : { estimateText }),
+          });
 
     const record: UsageRecord = createUsageRecord({
       request_id: ctx.request_id,
@@ -51,8 +79,20 @@ export class S10UsageEmitter implements Stage {
       total_ms: deps.clock.now() - ctx.started_at,
       status: state.status ?? 'success',
       finish_reason: state.finish_reason,
-      usage: state.usage,
-      usage_raw: state.usage?.raw,
+      usage: priced?.estimated_usage ?? usage,
+      usage_raw: (priced?.estimated_usage ?? usage)?.raw,
+      ...(ctx.route.access_path === undefined ? {} : { access_path: ctx.route.access_path }),
+      ...(priced === undefined
+        ? {}
+        : {
+            cost: priced.cost,
+            ...(priced.price_snapshot === null
+              ? { price_snapshot: null }
+              : { price_snapshot: priced.price_snapshot }),
+            ...(priced.estimate_method === undefined
+              ? {}
+              : { estimate_method: priced.estimate_method }),
+          }),
       warnings: ctx.warnings,
       dropped_capabilities: state.dropped_capabilities,
       error_code: state.error?.code,
@@ -73,7 +113,7 @@ export class S10UsageEmitter implements Stage {
       },
     ];
     state.trace.stages = ctx.metrics;
-    state.trace.usage = state.usage ?? record.usage;
+    state.trace.usage = usage ?? record.usage;
     state.trace.finish_reason =
       state.finish_reason === 'final' ? 'stop' : (state.finish_reason ?? 'stop');
     state.trace.warnings = ctx.warnings;
@@ -92,4 +132,21 @@ export class S10UsageEmitter implements Stage {
       deps.metrics.increment('metering.dropped', deps.usageEmitter.dropped());
     }
   }
+}
+
+/**
+ * 取自估算兜底的文本（usage 缺失时 as_api 用它估算 token）。
+ *
+ * 只取**响应侧**文本：请求侧文本在 raw_body 里，解析它会把 S10 变成第二个解码器；
+ * 输入侧估算留给后续迭代（接口已留 estimateText，补上即可）。
+ */
+function estimateTextOf(state: PipelineState): string | undefined {
+  const response = state.response ?? state.aggregated;
+  if (response === undefined) return undefined;
+  const payload = asChatResponsePayload(response);
+  if (payload === undefined) return undefined;
+  return payload.message.parts
+    .filter((p): p is { type: 'text'; text: string } => p.type === 'text')
+    .map((p) => p.text)
+    .join('');
 }
