@@ -1,0 +1,35 @@
+{
+  "model": "claude-test-1",
+  "max_tokens": 8192,
+  "system": [
+    {
+      "type": "text",
+      "text": "Think step by step before answering."
+    }
+  ],
+  "thinking": { "type": "enabled", "budget_tokens": 2048 },
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is 17 multiplied by 23? Show your reasoning."
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "17 * 23 = 17 * 20 + 17 * 3 = 340 + 51 = 391.",
+          "signature": "ErUBCkYIBxgCKkDtest-signature-block"
+        },
+        {
+          "type": "redacted_thinking",
+          "data": "Et0BCkYIBxgCKkDtest-redacted-payload"
+        },
+        {
+          "type": "text",
+          "text": "17 * 23 = 391."
+        }
+      ]
+    }
+  ]
+}

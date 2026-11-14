@@ -1,0 +1,25 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/root.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AG-IR v1 根 schema",
+  "description": "把 docs/design/10-canonical-schema.md §8 的分文件 schema 缝在一起，作为 ajv 校验 canonical 夹具的入口。根上**不设** additionalProperties:false——信封自己的封闭性由 envelope.schema.json 承担，根只负责按 kind 分派 payload schema。分文件布局（envelope/chat/decision/media/usage/parts/tools）保持 §8 原样；tts/asr/image/embedding 随对应 adaptor 落地时补（canonical 类型已在 ir/ 建好）。",
+  "allOf": [
+    { "$ref": "envelope.schema.json" },
+    {
+      "if": { "properties": { "kind": { "const": "chat" } }, "required": ["kind"] },
+      "then": { "properties": { "payload": { "$ref": "chat.schema.json" } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "decision" } }, "required": ["kind"] },
+      "then": { "properties": { "payload": { "$ref": "decision.schema.json" } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "chat" } }, "required": ["kind"] },
+      "then": { "properties": { "usage": { "$ref": "usage.schema.json" } } }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "decision" } }, "required": ["kind"] },
+      "then": { "properties": { "usage": { "$ref": "usage.schema.json" } } }
+    }
+  ]
+}

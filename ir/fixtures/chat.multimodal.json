@@ -1,0 +1,56 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "chat",
+  "model": "claude-test-1",
+  "source_format": "anthropic.messages",
+  "stream": { "enabled": false, "mode": "none", "on_mismatch": "bridge" },
+  "payload": {
+    "system": [
+      { "text": "系统提示一" },
+      { "text": "系统提示二", "cache_control": { "type": "ephemeral", "ttl": "1h" } }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          { "type": "text", "text": "这张图里有什么？" },
+          {
+            "type": "image",
+            "source": {
+              "kind": "inline",
+              "mime": "image/png",
+              "data": "iVBORw0KGgoAAAANSUhEUg==",
+              "byte_length": 32,
+              "width": 64,
+              "height": 64,
+              "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          },
+          {
+            "type": "image",
+            "role": "reference",
+            "source": {
+              "kind": "uri",
+              "mime": "image/jpeg",
+              "uri": "https://example.com/images/reference.jpg",
+              "fetch_by_gateway": true,
+              "credential_ref": "cred:example-internal"
+            }
+          },
+          {
+            "type": "document",
+            "source": {
+              "kind": "inline",
+              "mime": "application/pdf",
+              "data": "JVBERi0xLjQK",
+              "byte_length": 12
+            },
+            "media_type": "pdf",
+            "title": "规范文档"
+          }
+        ]
+      }
+    ]
+  },
+  "raw": { "source_provider": "anthropic" }
+}

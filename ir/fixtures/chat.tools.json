@@ -1,0 +1,79 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "chat",
+  "model": "gpt-test-1",
+  "source_format": "openai.chat",
+  "stream": { "enabled": false, "mode": "none", "on_mismatch": "bridge" },
+  "payload": {
+    "system": [{ "text": "你可以使用工具查询天气。" }],
+    "messages": [
+      { "role": "user", "parts": [{ "type": "text", "text": "北京现在天气如何？" }] },
+      {
+        "role": "assistant",
+        "parts": [
+          { "type": "text", "text": "我来查询一下。" },
+          {
+            "type": "tool_use",
+            "id": "call_test0001",
+            "name": "get_weather",
+            "input": { "city": "北京", "unit": "celsius" }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call_test0001",
+            "content": "晴，22℃，湿度 40%"
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "查询指定城市的当前天气",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "city": { "type": "string", "description": "城市名" },
+            "unit": { "type": "string", "enum": ["celsius", "fahrenheit"] }
+          },
+          "required": ["city"],
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      {
+        "type": "builtin",
+        "name": "web_search",
+        "config": { "max_results": 5, "include_citations": true },
+        "executor": "provider",
+        "native": { "provider_tool_type": "web_search_20250305" }
+      }
+    ],
+    "tool_choice": "auto",
+    "params": {
+      "max_output_tokens": 2048,
+      "temperature": 0,
+      "parallel_tool_calls": false,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "weather_report",
+          "schema": {
+            "type": "object",
+            "properties": { "summary": { "type": "string" } },
+            "required": ["summary"],
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      }
+    }
+  },
+  "raw": { "source_provider": "openai" }
+}

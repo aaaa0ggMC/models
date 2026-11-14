@@ -1,0 +1,59 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "chat",
+  "model": "gpt-test-1",
+  "source_format": "openai.chat",
+  "stream": { "enabled": false, "mode": "none", "on_mismatch": "bridge" },
+  "payload": {
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          { "type": "text", "text": "你好" },
+          {
+            "type": "unknown",
+            "raw_type": "future_provider_block",
+            "raw": { "some": "future", "shape": [1, 2, 3] }
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "tool_use",
+            "id": "call_test_bad_args",
+            "name": "get_weather",
+            "input": {},
+            "raw_arguments": "{ \"city\": \"北京\", "
+          }
+        ]
+      },
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "search_result",
+            "source": "example-search",
+            "title": "示例搜索结果",
+            "url": "https://example.com/page",
+            "snippet": "这是摘要…",
+            "citation_index": 1,
+            "score": 0.87
+          },
+          { "type": "refusal", "reason": "该请求触发了安全策略" }
+        ]
+      }
+    ]
+  },
+  "raw": {
+    "source_provider": "openai",
+    "unmapped": {
+      "__future_top_level_field": { "a": 1 },
+      "some_vendor_extension": "value"
+    },
+    "nodes": {
+      "messages[2].parts[0]": { "provider_specific_block_shape": true }
+    }
+  }
+}

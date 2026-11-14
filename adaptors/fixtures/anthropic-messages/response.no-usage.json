@@ -1,0 +1,14 @@
+{
+  "id": "msg_test_no_usage",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-test-1",
+  "content": [
+    {
+      "type": "text",
+      "text": "This response deliberately carries no usage block."
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null
+}

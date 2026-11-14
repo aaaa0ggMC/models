@@ -1,0 +1,32 @@
+{
+  "name": "agentgateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentGateway \u2014\u2014 \u81ea\u6258\u7ba1\u591a\u6a21\u6001 LLM API \u7f51\u5173\uff08canonical \u4e2d\u95f4\u683c\u5f0f AG-IR + \u53cc\u5411\u683c\u5f0f\u4e92\u8f6c + \u63d2\u4ef6 + \u8ba1\u91cf\uff09\u3002\u5b9e\u73b0\u4f9d\u636e docs/design/\u3002",
+  "type": "module",
+  "engines": {
+    "node": ">=24.7.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "format:fix": "prettier --write .",
+    "schema:check": "node scripts/check-json-schema.mjs",
+    "demo": "npm run build && node scripts/e2e-demo.mjs"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "eslint": "^9.39.0",
+    "prettier": "^3.6.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.0",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "model": "claude-test-1",
+  "max_tokens": 512,
+  "system": [
+    {
+      "type": "text",
+      "text": "You can read documents the user attaches."
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "document",
+          "source": {
+            "type": "base64",
+            "media_type": "text/plain",
+            "data": "QWdlbnRHYXRld2F5IGZpeHR1cmUgdGV4dA=="
+          },
+          "title": "fixture.txt"
+        },
+        {
+          "type": "image",
+          "source": {
+            "type": "base64",
+            "media_type": "image/png",
+            "data": "aW1hZ2UtZml4dHVyZS1ieXRlcw=="
+          }
+        },
+        {
+          "type": "image",
+          "source": {
+            "type": "url",
+            "url": "https://example.invalid/fixture-image.png"
+          }
+        }
+      ]
+    }
+  ]
+}

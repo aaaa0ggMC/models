@@ -1,0 +1,16 @@
+{
+  "id": "chatcmpl-test000",
+  "object": "chat.completion",
+  "created": 1763000300,
+  "model": "gpt-test-1",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Upstream did not report usage for this completion."
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

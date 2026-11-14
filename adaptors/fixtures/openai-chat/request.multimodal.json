@@ -1,0 +1,29 @@
+{
+  "model": "gpt-test-1",
+  "max_completion_tokens": 768,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a vision assistant used by the AgentGateway contract tests."
+    },
+    {
+      "role": "user",
+      "content": [
+        { "type": "text", "text": "Describe what is in these two images." },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "https://example.com/images/contract-test-chart.png",
+            "detail": "high"
+          }
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+          }
+        }
+      ]
+    }
+  ]
+}

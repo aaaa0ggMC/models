@@ -1,0 +1,33 @@
+{
+  "id": "msg_test_usage_full",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-test-1",
+  "content": [
+    {
+      "type": "thinking",
+      "thinking": "The user wants a short summary with full usage accounting.",
+      "signature": "ErUBCkYIBxgCKkDtest-signature-usage"
+    },
+    {
+      "type": "text",
+      "text": "Here is the summary."
+    }
+  ],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 120,
+    "cache_creation_input_tokens": 300,
+    "cache_read_input_tokens": 45,
+    "output_tokens": 80,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 200,
+      "ephemeral_1h_input_tokens": 100
+    },
+    "output_tokens_details": {
+      "thinking_tokens": 32
+    },
+    "service_tier": "standard"
+  }
+}

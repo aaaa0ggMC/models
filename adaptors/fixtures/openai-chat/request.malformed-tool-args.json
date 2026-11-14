@@ -1,0 +1,28 @@
+{
+  "model": "gpt-test-1",
+  "max_completion_tokens": 512,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a tool-calling assistant used by the AgentGateway contract tests."
+    },
+    {
+      "role": "user",
+      "content": "What is the weather in Paris?"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "id": "call_test_malformed_1",
+          "type": "function",
+          "function": {
+            "name": "get_weather",
+            "arguments": "{\"city\":\"Paris\",\"unit\":"
+          }
+        }
+      ]
+    }
+  ]
+}

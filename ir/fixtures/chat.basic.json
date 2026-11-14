@@ -1,0 +1,22 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "chat",
+  "model": "gpt-test-1",
+  "source_format": "openai.chat",
+  "stream": { "enabled": false, "mode": "none", "on_mismatch": "bridge" },
+  "payload": {
+    "system": [{ "text": "你是一个简洁的助手。" }],
+    "messages": [
+      { "role": "user", "parts": [{ "type": "text", "text": "你好" }] },
+      { "role": "assistant", "parts": [{ "type": "text", "text": "你好，有什么可以帮你？" }] },
+      { "role": "user", "parts": [{ "type": "text", "text": "介绍一下你自己" }] }
+    ],
+    "params": {
+      "max_output_tokens": 1024,
+      "temperature": 0.7,
+      "top_p": 1,
+      "stop": ["END"]
+    }
+  },
+  "raw": { "source_provider": "openai" }
+}

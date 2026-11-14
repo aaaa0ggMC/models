@@ -1,0 +1,9 @@
+# 仓库里既有的文件从未按 prettier 风格排版（docs/ 与 scripts/check-docs.mjs 在本轮
+# 实现之前就已存在且未格式化）。把它们整体重排会把无关 diff 混进每一次改动，
+# 因此 prettier 只覆盖本轮新增/维护的代码文件；既有文件保持原样，
+# 待单独的"格式化清理"任务处理。
+docs/
+scripts/check-docs.mjs
+.github/
+*.md
+.markdownlint-cli2.jsonc

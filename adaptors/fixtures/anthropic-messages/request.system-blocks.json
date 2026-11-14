@@ -1,0 +1,26 @@
+{
+  "model": "claude-test-1",
+  "max_tokens": 2048,
+  "system": [
+    {
+      "type": "text",
+      "text": "You are the AgentGateway contract-test assistant."
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "First line of the user turn."
+        },
+        {
+          "type": "text",
+          "text": "Second line of the same user turn.",
+          "cache_control": { "type": "ephemeral" }
+        }
+      ]
+    }
+  ]
+}
