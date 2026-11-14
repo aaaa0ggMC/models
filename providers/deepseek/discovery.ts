@@ -48,6 +48,14 @@ export interface DeepSeekModelMetadata {
       tool_update?: 'leading-only' | 'addition-only';
     };
   };
+  /**
+   * 该模型在上游响应里的**原始记录**（含我们未建模的键）。
+   *
+   * 为什么留着它：`/v1/models` 的 canonical 响应有 `raw` 字段做上游原样透传
+   * （10-canonical-schema §7 的同一立场：未建模字段显式保留，不悄悄丢弃）。归一化
+   * 过程只认已知键，原文必须另存一份，否则将来上游加字段我们就看不到了。
+   */
+  raw?: Record<string, unknown>;
 }
 
 /** `/models` 响应体（`{object: "list", data: [...]}`）。 */
@@ -83,7 +91,7 @@ export function decodeModelsResponse(raw: unknown): DeepSeekModelsResponse {
 }
 
 function normalizeModel(id: string, rec: Record<string, unknown>): DeepSeekModelMetadata {
-  const out: DeepSeekModelMetadata = { id };
+  const out: DeepSeekModelMetadata = { id, raw: rec };
   if (typeof rec['object'] === 'string') out.object = rec['object'];
   if (typeof rec['owned_by'] === 'string') out.owned_by = rec['owned_by'];
   if (typeof rec['name'] === 'string') out.name = rec['name'];
@@ -225,9 +233,16 @@ export class DeepSeekModelDiscovery {
    *
    * 对每个模型 × 每个 dialect 各刷一条；静态表里没有的模型补登新条目
    * （contract_tested: false——我们还没为它写过契约测试，状态诚实）。
+   *
+   * `preloaded` 允许调用方传入**已经拉到的** `/models` 响应：`/v1/models` 的同步链路
+   * 既要刷新矩阵、又要拿同一份响应当元数据快照，传进来就只需要一次 HTTP（否则一个
+   * tick 打两次上游）。省略时内部自己拉。
    */
-  async refresh(registry: CapabilityRegistryWriter): Promise<DiscoveryRefreshResult> {
-    const response = await this.discover();
+  async refresh(
+    registry: CapabilityRegistryWriter,
+    preloaded?: DeepSeekModelsResponse,
+  ): Promise<DiscoveryRefreshResult> {
+    const response = preloaded ?? (await this.discover());
     const result: DiscoveryRefreshResult = { discovered: [], updated: [], added: [] };
     for (const meta of response.data) {
       result.discovered.push(meta.id);
