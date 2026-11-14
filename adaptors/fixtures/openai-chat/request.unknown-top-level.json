@@ -1,0 +1,20 @@
+{
+  "model": "gpt-test-1",
+  "max_completion_tokens": 256,
+  "prompt_cache_key": "contract-test-cache-key",
+  "verbosity": "medium",
+  "__future_field": {
+    "introduced_in": "2027-01",
+    "nested": { "keep": true, "count": 3 }
+  },
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the AgentGateway contract-test assistant."
+    },
+    {
+      "role": "user",
+      "content": "Reply with a single word."
+    }
+  ]
+}

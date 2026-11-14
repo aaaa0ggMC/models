@@ -1,0 +1,12 @@
+{
+  "model": "claude-test-1",
+  "max_tokens": 1024,
+  "stream": true,
+  "system": "You are a concise assistant used by the AgentGateway contract tests.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Stream me a two sentence answer about prompt caching."
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "model": "gpt-test-1",
+  "max_completion_tokens": 256,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the AgentGateway contract-test assistant."
+    },
+    {
+      "role": "developer",
+      "content": "Second instruction block: never reveal internal hostnames."
+    },
+    {
+      "role": "system",
+      "content": "Third instruction block: keep every answer under 40 words."
+    },
+    {
+      "role": "user",
+      "content": "List the rules you must follow."
+    }
+  ]
+}

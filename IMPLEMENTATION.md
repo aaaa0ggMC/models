@@ -82,18 +82,50 @@ Phase 1 只实现了 chat 相关的 `/v1/chat/completions` 与 `/v1/messages` �
 ```bash
 npm test                          # 全量
 npx vitest run tests/<file>       # 单文件
+npx vitest run adaptors/          # 两个 codec 的 round-trip
+npm run schema:check              # ajv 校验 schema 编译 + 全部 canonical 夹具
 ```
 
 当前覆盖：
 
-| 文件                        | 覆盖                                                                                                                                                           |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `tests/di.test.ts`          | 容器：单例/多例/替身注入/循环依赖检测/子容器派生                                                                                                               |
-| `tests/fast-path.test.ts`   | **D-fastpath-1**（S1 浅解析不物化、路由必需集、首字节后禁改状态码）与 **D-fastpath-2**（fast path 准入、缓存失效重算）                                         |
-| `tests/ir-schema.test.ts`   | ajv 校验全部 canonical 夹具 + 「未知≠0」「免费≠未知」「未建模字段必须进 raw.unmapped」「BuiltinTool.name 只用稳定名」+ **TS ↔ schema 字段级 parity（防漂移）** |
-| `tests/metering.test.ts`    | 异步非阻塞发射器、drop 策略、可重放、UsageRecord 绝不含 header 原值/凭据/客户端 IP                                                                             |
-| `tests/plugin-host.test.ts` | 5 hook 调度顺序、ShortCircuit 语义、故障隔离、超时、注册期校验                                                                                                 |
-| `adaptors/*/codec.test.ts`  | 两个 codec 的 round-trip（40 §1.5 的 6 条断言 + 格式专属不变量）                                                                                               |
+| 文件                                        | 覆盖                                                                                                                                                           |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/di.test.ts`                          | 容器：单例/多例/替身注入/循环依赖检测/子容器派生                                                                                                               |
+| `tests/fast-path.test.ts`                   | **D-fastpath-1**（S1 浅解析不物化、路由必需集、首字节后禁改状态码）与 **D-fastpath-2**（fast path 准入、缓存失效重算）                                         |
+| `tests/ir-schema.test.ts`                   | ajv 校验全部 canonical 夹具 + 「未知≠0」「免费≠未知」「未建模字段必须进 raw.unmapped」「BuiltinTool.name 只用稳定名」+ **TS ↔ schema 字段级 parity（防漂移）** |
+| `tests/metering.test.ts`                    | 异步非阻塞发射器、drop 策略、可重放、UsageRecord 绝不含 header 原值/凭据/客户端 IP                                                                             |
+| `tests/plugin-host.test.ts`                 | 5 hook 调度顺序、ShortCircuit 语义、故障隔离、超时、注册期校验                                                                                                 |
+| `tests/usage-sniffer.test.ts`               | 四家 usage 到达方式、增量喂入与批处理等价、超限标 truncated 而**不**把未知记成 0、流尾 usage 必达、SSE 跨 chunk 分片                                           |
+| `tests/router-retry.test.ts`                | fast path 两条件、参数兼容性预检（error 档不进 fallback）、流式 mode=none 拒绝、attempt_plan、别名热更新；20 §7.3 决策矩阵逐行                                 |
+| `tests/pipeline-e2e.test.ts`                | 端到端：fast path 透传、跨格式慢路径 + usage 归一、流式 SSE、错误映射、插件短路、工具调用多轮循环                                                              |
+| `adaptors/openai-chat/codec.test.ts`        | OpenAI Chat ↔ canonical 的 40 §1.5 六条 round-trip + 格式专属不变量                                                                                            |
+| `adaptors/anthropic-messages/codec.test.ts` | Anthropic Messages ↔ canonical 的 40 §1.5 六条 round-trip + 格式专属不变量                                                                                     |
+
+## Pipeline 的执行顺序（含两条易错点）
+
+```text
+S0 → S1(浅解析) → S2(路由 + fast path 判定) → S3(插件链；无请求侧插件则 no-op，不物化)
+                                              │
+                        ┌─────────────────────┴──────────────────────┐
+                        │                                            │
+              S4→S5→S6→S7→S8→S9→S10                    网关 agentic loop：
+             （普通请求，S9/S10 只跑一次）                每轮只跑 S4→S7
+                                                          │
+                                                          └→ 循环结束后才跑一次 S8
+                                                             （最终应答）→ S9 → S10
+```
+
+两条**必须**这么写的原因（都曾是真实缺陷，有测试锁住）：
+
+1. **启用网关循环时必须关闭 fast path**。循环要往 `canonical.messages` 追加
+   tool_use / tool_result 回合，而 fast path 下上游应答根本不解码成 canonical，
+   循环会静默不前进。
+2. **中间轮次不跑 S8**。否则第二次 `sink.start` 会触发 20 §S8 的
+   「首字节后不能改状态码」硬约束。
+
+工具循环每一轮的 canonical 由 `PipelineState.canonical_override` 提供——
+`LazyRequest.full()` 返回的是首次物化时 memoize 的**原始**请求，不覆盖的话
+每一轮都会把同一份请求发给上游。
 
 ## 环境变量
 

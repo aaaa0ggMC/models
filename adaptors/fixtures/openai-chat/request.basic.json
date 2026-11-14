@@ -1,0 +1,20 @@
+{
+  "model": "gpt-test-1",
+  "max_completion_tokens": 512,
+  "temperature": 0.3,
+  "top_p": 0.9,
+  "stop": ["END"],
+  "seed": 42,
+  "user": "test-user-0001",
+  "metadata": { "trace_tag": "contract-basic" },
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are the AgentGateway contract-test assistant. Answer in one short sentence."
+    },
+    {
+      "role": "user",
+      "content": "Say hello to the gateway."
+    }
+  ]
+}
