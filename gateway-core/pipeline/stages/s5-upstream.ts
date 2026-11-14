@@ -15,21 +15,21 @@
  * 鉴权头由 CredentialResolver 产出（transport 只负责发送）——这是决策 P1 的二分。
  */
 
-import type { PipelineDeps, PipelineState, Stage } from "../types.js";
-import type { CanonicalError } from "../../../ir/index.js";
-import { createCanonicalError } from "../../../ir/index.js";
-import { RedirectNotFollowedError } from "../../transport.js";
-import { backoffDelayMs, canonicalCodeFromStatus, maybeMarkPromptTooLong } from "../retry.js";
+import type { PipelineDeps, PipelineState, Stage } from '../types.js';
+import type { CanonicalError } from '../../../ir/index.js';
+import { createCanonicalError } from '../../../ir/index.js';
+import { RedirectNotFollowedError } from '../../transport.js';
+import { backoffDelayMs, canonicalCodeFromStatus, maybeMarkPromptTooLong } from '../retry.js';
 
 export class S5Upstream implements Stage {
-  readonly id = "S5";
-  readonly name = "Upstream";
+  readonly id = 'S5';
+  readonly name = 'Upstream';
 
   async execute(state: PipelineState, deps: PipelineDeps): Promise<void> {
     const started = deps.clock.now();
     const { ctx } = state;
     const encoded = state.encoded;
-    if (encoded === undefined) throw new Error("S5 需要 S4 的编码产物");
+    if (encoded === undefined) throw new Error('S5 需要 S4 的编码产物');
 
     const attemptPlan = ctx.route.attempt_plan;
     let lastError: CanonicalError | undefined;
@@ -42,7 +42,7 @@ export class S5Upstream implements Stage {
         if (remaining <= 0) {
           throw (
             lastError ??
-            createCanonicalError("upstream_timeout", "整体 deadline 已用尽", ctx.request_id)
+            createCanonicalError('upstream_timeout', '整体 deadline 已用尽', ctx.request_id)
           );
         }
 
@@ -55,11 +55,11 @@ export class S5Upstream implements Stage {
             ctx,
           );
           const res = await deps.transport.send({
-            method: "POST",
+            method: 'POST',
             base_url: deps.credentialResolver.baseUrlFor(attempt.access_path),
-            path: encoded.path ?? state.shallow?.default_path ?? "/v1/chat/completions",
+            path: encoded.path ?? state.shallow?.default_path ?? '/v1/chat/completions',
             headers: {
-              "content-type": "application/json",
+              'content-type': 'application/json',
               ...(encoded.headers ?? {}),
               ...authHeaders,
             },
@@ -73,26 +73,26 @@ export class S5Upstream implements Stage {
           state.upstream = res;
           state.upstream_status = res.status;
           state.ttfb_ms = deps.clock.now() - ttfbStart;
-          ctx.state["attempt_credential_id"] = credential_id;
+          ctx.state['attempt_credential_id'] = credential_id;
           ctx.recordStage(
             this.id,
             deps.clock.now() - started,
             `attempt=${attemptIndex} status=${res.status}`,
           );
-          deps.metrics.increment("pipeline.upstream.status", 1, {
+          deps.metrics.increment('pipeline.upstream.status', 1, {
             access_path: attempt.access_path,
             status: String(res.status),
           });
 
           if (res.status >= 200 && res.status < 300) {
-            deps.metrics.increment("pipeline.stage", 1, { stage: this.id, result: "ok" });
+            deps.metrics.increment('pipeline.stage', 1, { stage: this.id, result: 'ok' });
             return;
           }
 
           // 非 2xx：读错误体，映射成 canonical 错误
-          const bodyText = res.body?.toString("utf8") ?? "";
+          const bodyText = res.body?.toString('utf8') ?? '';
           lastError = this.mapUpstreamError(res.status, bodyText, ctx.request_id);
-          deps.metrics.increment("pipeline.upstream.error", 1, {
+          deps.metrics.increment('pipeline.upstream.error', 1, {
             access_path: attempt.access_path,
             status: String(res.status),
           });
@@ -100,7 +100,7 @@ export class S5Upstream implements Stage {
           if (res.status === 400) {
             // 400 参数错误：同 attempt 不重试；按矩阵也不 fallback（除非 capability 类）
             const capabilityRejected = maybeMarkPromptTooLong(lastError, bodyText);
-            if (capabilityRejected.capability_rejected === "prompt_too_long") {
+            if (capabilityRejected.capability_rejected === 'prompt_too_long') {
               lastError = capabilityRejected;
               break; // 换更大上下文的 provider
             }
@@ -120,26 +120,25 @@ export class S5Upstream implements Stage {
           throw lastError;
         } catch (err) {
           if (err instanceof RedirectNotFollowedError) {
-            throw createCanonicalError(
-              "upstream_error",
-              err.message,
-              ctx.request_id,
-              { http_status: 502, retryable: false, provider_code: `redirect_${err.status}` },
-            );
+            throw createCanonicalError('upstream_error', err.message, ctx.request_id, {
+              http_status: 502,
+              retryable: false,
+              provider_code: `redirect_${err.status}`,
+            });
           }
           if (isCanonicalError(err)) {
             throw err;
           }
           const message = err instanceof Error ? err.message : String(err);
           lastError = createCanonicalError(
-            "provider_unavailable",
+            'provider_unavailable',
             `上游 ${attempt.access_path} 调用失败: ${message}`,
             ctx.request_id,
             { retryable: true },
           );
-          deps.metrics.increment("pipeline.upstream.error", 1, {
+          deps.metrics.increment('pipeline.upstream.error', 1, {
             access_path: attempt.access_path,
-            kind: "transport",
+            kind: 'transport',
           });
           if (retries < deps.config.maxRetries) {
             retries += 1;
@@ -156,7 +155,7 @@ export class S5Upstream implements Stage {
 
     throw (
       lastError ??
-      createCanonicalError("no_available_provider", "attempt_plan 已用尽", ctx.request_id)
+      createCanonicalError('no_available_provider', 'attempt_plan 已用尽', ctx.request_id)
     );
   }
 
@@ -165,12 +164,12 @@ export class S5Upstream implements Stage {
     let message = `上游返回 ${status}`;
     try {
       const parsed = JSON.parse(body) as Record<string, unknown>;
-      const err = (typeof parsed["error"] === "object" && parsed["error"] !== null
-        ? parsed["error"]
-        : parsed) as Record<string, unknown>;
-      if (typeof err["code"] === "string") providerCode = err["code"];
-      if (typeof err["message"] === "string") message = err["message"];
-      else if (typeof err["type"] === "string") message = `${String(err["type"])}: ${message}`;
+      const err = (
+        typeof parsed['error'] === 'object' && parsed['error'] !== null ? parsed['error'] : parsed
+      ) as Record<string, unknown>;
+      if (typeof err['code'] === 'string') providerCode = err['code'];
+      if (typeof err['message'] === 'string') message = err['message'];
+      else if (typeof err['type'] === 'string') message = `${String(err['type'])}: ${message}`;
     } catch {
       // 错误体不是 JSON：用状态码兜底
     }
@@ -179,18 +178,18 @@ export class S5Upstream implements Stage {
       retryable: status === 429 || status >= 500,
       ...(providerCode === undefined ? {} : { provider_code: providerCode }),
       // 上游错误体只进内部日志，**默认不回给客户端**（20 §7.2）
-      raw: body === "" ? undefined : body,
+      raw: body === '' ? undefined : body,
     });
   }
 }
 
 function isCanonicalError(err: unknown): err is CanonicalError {
   return (
-    typeof err === "object" &&
+    typeof err === 'object' &&
     err !== null &&
-    "code" in err &&
-    "http_status" in err &&
-    "request_id" in err
+    'code' in err &&
+    'http_status' in err &&
+    'request_id' in err
   );
 }
 

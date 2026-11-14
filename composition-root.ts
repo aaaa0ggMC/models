@@ -12,7 +12,7 @@
  * 创建一次，插件增减时由 PluginHost 广播 onChange 自动失效重算。
  */
 
-import { Container, TOKENS } from "./di/index.js";
+import { Container, TOKENS } from './di/index.js';
 import {
   ConsoleLogger,
   MemoryLogger,
@@ -27,24 +27,24 @@ import {
   type IdGenerator,
   type Logger,
   type Metrics,
-} from "./di/index.js";
-import { createAdaptorRegistry } from "./adaptors/index.js";
-import { EnvCredentialResolver, DEFAULT_ACCESS_PATHS } from "./credentials/resolver.js";
-import type { CredentialResolver } from "./credentials/resolver.js";
-import { InMemoryCapabilityRegistry } from "./credentials/capability-registry.js";
-import { DefaultPluginHost } from "./plugins/host.js";
-import type { PluginHost } from "./plugins/host.js";
-import type { GatewayServices, KVNamespace, Plugin } from "./ir/index.js";
-import { MemoryUsageEmitter, MemoryUsageSink } from "./metering/index.js";
-import type { UsageEmitter, UsageSink } from "./metering/index.js";
-import { ScriptedTransport } from "./gateway-core/transport.js";
-import type { Transport } from "./gateway-core/transport.js";
-import { StaticRouter } from "./gateway-core/router.js";
-import type { RouteTable } from "./gateway-core/router.js";
-import { PipelineRunner } from "./gateway-core/pipeline/runner.js";
-import { createFastPathAdmission } from "./gateway-core/pipeline/fast-path.js";
-import type { FastPathAdmission } from "./gateway-core/pipeline/fast-path.js";
-import type { CapabilityEntry } from "./ir/index.js";
+} from './di/index.js';
+import { createAdaptorRegistry } from './adaptors/index.js';
+import { EnvCredentialResolver, DEFAULT_ACCESS_PATHS } from './credentials/resolver.js';
+import type { CredentialResolver } from './credentials/resolver.js';
+import { InMemoryCapabilityRegistry } from './credentials/capability-registry.js';
+import { DefaultPluginHost } from './plugins/host.js';
+import type { PluginHost } from './plugins/host.js';
+import type { GatewayServices, KVNamespace, Plugin } from './ir/index.js';
+import { MemoryUsageEmitter, MemoryUsageSink } from './metering/index.js';
+import type { UsageEmitter, UsageSink } from './metering/index.js';
+import { ScriptedTransport } from './gateway-core/transport.js';
+import type { Transport } from './gateway-core/transport.js';
+import { StaticRouter } from './gateway-core/router.js';
+import type { RouteTable } from './gateway-core/router.js';
+import { PipelineRunner } from './gateway-core/pipeline/runner.js';
+import { createFastPathAdmission } from './gateway-core/pipeline/fast-path.js';
+import type { FastPathAdmission } from './gateway-core/pipeline/fast-path.js';
+import type { CapabilityEntry } from './ir/index.js';
 
 export interface GatewayOptions {
   /** 覆盖配置（测试用）。缺省从环境变量读。 */
@@ -67,7 +67,7 @@ export interface GatewayOptions {
   /** 凭据解析器。 */
   credentialResolver?: CredentialResolver;
   /** 用内存实现还是生产实现（logger/metrics/ids/transport 的默认值）。 */
-  mode?: "production" | "test";
+  mode?: 'production' | 'test';
 }
 
 export interface Gateway {
@@ -90,20 +90,20 @@ export interface Gateway {
 export function defaultRouteTable(): RouteTable {
   return {
     aliases: {
-      "mock-gpt": {
-        targets: [{ access_path: "openai", provider: "openai", model: "gpt-test-1" }],
+      'mock-gpt': {
+        targets: [{ access_path: 'openai', provider: 'openai', model: 'gpt-test-1' }],
         max_context_tokens: 128_000,
       },
-      "mock-claude": {
-        targets: [{ access_path: "anthropic", provider: "anthropic", model: "claude-test-1" }],
+      'mock-claude': {
+        targets: [{ access_path: 'anthropic', provider: 'anthropic', model: 'claude-test-1' }],
         max_context_tokens: 200_000,
       },
-      "gpt-4o": {
-        targets: [{ access_path: "openai", provider: "openai", model: "gpt-4o" }],
+      'gpt-4o': {
+        targets: [{ access_path: 'openai', provider: 'openai', model: 'gpt-4o' }],
         max_context_tokens: 128_000,
       },
-      "claude-sonnet-4-5": {
-        targets: [{ access_path: "anthropic", provider: "anthropic", model: "claude-sonnet-4-5" }],
+      'claude-sonnet-4-5': {
+        targets: [{ access_path: 'anthropic', provider: 'anthropic', model: 'claude-sonnet-4-5' }],
         max_context_tokens: 200_000,
       },
     },
@@ -114,26 +114,26 @@ export function defaultRouteTable(): RouteTable {
 export function defaultCapabilities(): CapabilityEntry[] {
   return [
     {
-      access_path: "openai",
-      model: "gpt-test-1",
-      modality: "chat",
-      format: "openai.chat",
-      streaming: { mode: "sse", usage_in_stream: true, cancellable: true, framing: "json-sse" },
-      usage_source: "provider",
-      usage_units: ["tokens"],
+      access_path: 'openai',
+      model: 'gpt-test-1',
+      modality: 'chat',
+      format: 'openai.chat',
+      streaming: { mode: 'sse', usage_in_stream: true, cancellable: true, framing: 'json-sse' },
+      usage_source: 'provider',
+      usage_units: ['tokens'],
       contract_tested: true,
-      status: "implemented",
+      status: 'implemented',
     },
     {
-      access_path: "anthropic",
-      model: "claude-test-1",
-      modality: "chat",
-      format: "anthropic.messages",
-      streaming: { mode: "sse", usage_in_stream: true, cancellable: true, framing: "json-sse" },
-      usage_source: "provider",
-      usage_units: ["tokens"],
+      access_path: 'anthropic',
+      model: 'claude-test-1',
+      modality: 'chat',
+      format: 'anthropic.messages',
+      streaming: { mode: 'sse', usage_in_stream: true, cancellable: true, framing: 'json-sse' },
+      usage_source: 'provider',
+      usage_units: ['tokens'],
       contract_tested: true,
-      status: "implemented",
+      status: 'implemented',
     },
   ];
 }
@@ -159,15 +159,16 @@ class MemoryKVNamespace implements KVNamespace {
  * 这是 `pnpm demo` / 测试 / 生产三种场景的共同入口；差异全部由 `GatewayOptions` 注入。
  */
 export function createGateway(options: GatewayOptions = {}): Gateway {
-  const mode = options.mode ?? "production";
+  const mode = options.mode ?? 'production';
   const container = new Container();
 
   // ---- 跨切面基础设施 ----
   const config: GatewayConfig = { ...loadConfigFromEnv(), ...options.config };
   const clock = options.clock ?? systemClock;
-  const logger = options.logger ?? (mode === "test" ? new MemoryLogger() : new ConsoleLogger());
-  const metrics = options.metrics ?? (mode === "test" ? new MemoryMetrics() : new NoopMetrics());
-  const ids = options.ids ?? (mode === "test" ? new SequentialIdGenerator() : new UlidIdGenerator());
+  const logger = options.logger ?? (mode === 'test' ? new MemoryLogger() : new ConsoleLogger());
+  const metrics = options.metrics ?? (mode === 'test' ? new MemoryMetrics() : new NoopMetrics());
+  const ids =
+    options.ids ?? (mode === 'test' ? new SequentialIdGenerator() : new UlidIdGenerator());
 
   container.registerValue(TOKENS.Config, config);
   container.registerValue(TOKENS.Clock, clock);
@@ -207,7 +208,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     log: logger,
     metrics,
     clock,
-    currentUsage: () => ({ units: {}, source: "provider" }),
+    currentUsage: () => ({ units: {}, source: 'provider' }),
     kv: new MemoryKVNamespace(),
   };
   const pluginHost = new DefaultPluginHost(services, config.pluginTimeoutMs);
@@ -220,14 +221,14 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
   let usageSink: MemoryUsageSink | undefined;
   const emitter = new MemoryUsageEmitter({
     capacity: 10_000,
-    drop_policy: "drop_oldest",
+    drop_policy: 'drop_oldest',
     batchSize: 500,
     flushIntervalMs: 2_000,
-    autoFlush: mode !== "test",
+    autoFlush: mode !== 'test',
   });
   if (options.usageSink !== undefined) {
     emitter.setSink(options.usageSink);
-  } else if (mode === "test") {
+  } else if (mode === 'test') {
     usageSink = new MemoryUsageSink();
     emitter.setSink(usageSink);
   }
@@ -286,15 +287,15 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
 /** mock 上游的 OpenAI Chat 非流式响应（本地演示用，全部假数据）。 */
 export function defaultOpenAiChatResponse(): Record<string, unknown> {
   return {
-    id: "chatcmpl-test0001",
-    object: "chat.completion",
+    id: 'chatcmpl-test0001',
+    object: 'chat.completion',
     created: 1_700_000_000,
-    model: "gpt-test-1",
+    model: 'gpt-test-1',
     choices: [
       {
         index: 0,
-        message: { role: "assistant", content: "你好，这是来自 mock 上游的回复。" },
-        finish_reason: "stop",
+        message: { role: 'assistant', content: '你好，这是来自 mock 上游的回复。' },
+        finish_reason: 'stop',
       },
     ],
     usage: {
@@ -310,12 +311,12 @@ export function defaultOpenAiChatResponse(): Record<string, unknown> {
 /** mock 上游的 Anthropic 非流式响应（本地演示用，全部假数据）。 */
 export function defaultAnthropicResponse(): Record<string, unknown> {
   return {
-    id: "msg_test0001",
-    type: "message",
-    role: "assistant",
-    model: "claude-test-1",
-    content: [{ type: "text", text: "你好，这是来自 mock 上游的回复。" }],
-    stop_reason: "end_turn",
+    id: 'msg_test0001',
+    type: 'message',
+    role: 'assistant',
+    model: 'claude-test-1',
+    content: [{ type: 'text', text: '你好，这是来自 mock 上游的回复。' }],
+    stop_reason: 'end_turn',
     usage: {
       input_tokens: 12,
       output_tokens: 8,
@@ -325,4 +326,4 @@ export function defaultAnthropicResponse(): Record<string, unknown> {
   };
 }
 
-export type { AdaptorMeta } from "./adaptors/types.js";
+export type { AdaptorMeta } from './adaptors/types.js';

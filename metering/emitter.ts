@@ -10,9 +10,9 @@
  *     开关控制——Phase 1 不落 Tier-2（70 §2）。
  */
 
-import type { UsageRecord } from "./usage-record.js";
+import type { UsageRecord } from './usage-record.js';
 
-export type DropPolicy = "drop_oldest" | "drop_newest" | "block";
+export type DropPolicy = 'drop_oldest' | 'drop_newest' | 'block';
 
 export interface UsageEmitter {
   /**

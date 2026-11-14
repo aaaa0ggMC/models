@@ -10,12 +10,12 @@
  * 不做自动装配/魔法发现——装配是组合根的显式职责，可审查。
  */
 
-import type { Token } from "./tokens.js";
+import type { Token } from './tokens.js';
 
 export class DependencyResolutionError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "DependencyResolutionError";
+    this.name = 'DependencyResolutionError';
   }
 }
 
@@ -63,7 +63,7 @@ export class Container {
     }
     if (this.resolving.includes(token.key)) {
       throw new DependencyResolutionError(
-        `循环依赖: ${[...this.resolving, token.key].join(" -> ")}`,
+        `循环依赖: ${[...this.resolving, token.key].join(' -> ')}`,
       );
     }
     this.resolving.push(token.key);

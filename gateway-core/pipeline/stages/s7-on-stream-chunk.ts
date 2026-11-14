@@ -17,18 +17,18 @@
  * （20 §4.2「流式 fast path」）。
  */
 
-import type { PipelineDeps, PipelineState, Stage } from "../types.js";
+import type { PipelineDeps, PipelineState, Stage } from '../types.js';
 import type {
   CanonicalResponseEnvelope,
   CanonicalStreamEvent,
   FinishReason,
   Part,
-} from "../../../ir/index.js";
-import { emptyUsage } from "../../../ir/index.js";
+} from '../../../ir/index.js';
+import { emptyUsage } from '../../../ir/index.js';
 
 export class S7OnStreamChunk implements Stage {
-  readonly id = "S7";
-  readonly name = "onStreamChunk";
+  readonly id = 'S7';
+  readonly name = 'onStreamChunk';
 
   async execute(state: PipelineState, deps: PipelineDeps): Promise<void> {
     const started = deps.clock.now();
@@ -36,8 +36,8 @@ export class S7OnStreamChunk implements Stage {
 
     if (ctx.fast_path) {
       // fast path：字节直通，插件不介入（20 §4.2）
-      ctx.recordStage(this.id, deps.clock.now() - started, "fast_path:bypass");
-      deps.metrics.increment("pipeline.stage", 1, { stage: this.id, mode: "fast_path" });
+      ctx.recordStage(this.id, deps.clock.now() - started, 'fast_path:bypass');
+      deps.metrics.increment('pipeline.stage', 1, { stage: this.id, mode: 'fast_path' });
       return;
     }
 
@@ -47,8 +47,8 @@ export class S7OnStreamChunk implements Stage {
       const result = await deps.pluginHost.runOnStreamChunk(ev, ctx);
       if (result === null) {
         // tts 音频分片禁止丢弃（25 §7.1）
-        if (ev.type === "part.delta" && ev.delta.type === "text") continue;
-        ctx.warn("plugin_dropped_non_text_frame");
+        if (ev.type === 'part.delta' && ev.delta.type === 'text') continue;
+        ctx.warn('plugin_dropped_non_text_frame');
         continue;
       }
       if (Array.isArray(result)) out.push(...result);
@@ -62,45 +62,45 @@ export class S7OnStreamChunk implements Stage {
     }
 
     ctx.recordStage(this.id, deps.clock.now() - started, `events=${out.length}`);
-    deps.metrics.increment("pipeline.stage", 1, { stage: this.id });
+    deps.metrics.increment('pipeline.stage', 1, { stage: this.id });
   }
 }
 
 /** 把事件序列折叠成一个完整 CanonicalResponse（聚合视图）。 */
 export function aggregateEvents(
   events: CanonicalStreamEvent[],
-  requestId = "",
+  requestId = '',
 ): CanonicalResponseEnvelope {
-  let usage = emptyUsage("provider");
-  let finish: FinishReason = "stop";
+  let usage = emptyUsage('provider');
+  let finish: FinishReason = 'stop';
   const textParts: string[] = [];
   const toolParts: Array<{ id: string; name: string; args: string }> = [];
-  let model = "";
+  let model = '';
 
   for (const ev of events) {
     switch (ev.type) {
-      case "start":
+      case 'start':
         model = ev.message.model;
         break;
-      case "part.delta":
-        if (ev.delta.type === "text") textParts.push(ev.delta.text);
-        else if (ev.delta.type === "tool_input_json") {
+      case 'part.delta':
+        if (ev.delta.type === 'text') textParts.push(ev.delta.text);
+        else if (ev.delta.type === 'tool_input_json') {
           const last = toolParts[toolParts.length - 1];
           if (last !== undefined) last.args += ev.delta.partial_json;
         }
         break;
-      case "part.end": {
-        if (ev.part.type === "tool_use") {
-          toolParts.push({ id: ev.part.id, name: ev.part.name, args: "" });
-        } else if (ev.part.type === "text") {
+      case 'part.end': {
+        if (ev.part.type === 'tool_use') {
+          toolParts.push({ id: ev.part.id, name: ev.part.name, args: '' });
+        } else if (ev.part.type === 'text') {
           textParts.push(ev.part.text);
         }
         break;
       }
-      case "usage":
+      case 'usage':
         usage = ev.usage;
         break;
-      case "finish":
+      case 'finish':
         usage = ev.usage;
         finish = ev.finish_reason;
         break;
@@ -110,18 +110,18 @@ export function aggregateEvents(
   }
 
   const parts: Part[] = [];
-  if (textParts.length > 0) parts.push({ type: "text", text: textParts.join("") });
+  if (textParts.length > 0) parts.push({ type: 'text', text: textParts.join('') });
   for (const t of toolParts) {
-    parts.push({ type: "tool_use", id: t.id, name: t.name, input: safeParse(t.args) });
+    parts.push({ type: 'tool_use', id: t.id, name: t.name, input: safeParse(t.args) });
   }
 
   return {
-    ir_version: "ag-ir/1",
-    kind: "chat",
+    ir_version: 'ag-ir/1',
+    kind: 'chat',
     request_id: requestId,
     usage,
     finish_reason: finish,
-    payload: { message: { role: "assistant", parts }, ...(model === "" ? {} : { model }) },
+    payload: { message: { role: 'assistant', parts }, ...(model === '' ? {} : { model }) },
     warnings: [],
     raw: {},
   };
@@ -130,7 +130,7 @@ export function aggregateEvents(
 function safeParse(s: string): Record<string, unknown> {
   try {
     const v: unknown = JSON.parse(s);
-    return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+    return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : {};
   } catch {
     return {};
   }

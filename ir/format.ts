@@ -9,35 +9,35 @@
 /** 入站/出站协议格式 id。多模态端点清单见 10 §2.1 与 15-modalities.md §8.1。 */
 export type FormatId =
   // ---- chat 三件套（v1 写透）----
-  | "openai.chat" // POST /v1/chat/completions
-  | "openai.responses" // POST /v1/responses
-  | "anthropic.messages" // POST /v1/messages
-  | "gemini.generateContent" // POST /v1beta/models/{model}:generateContent
+  | 'openai.chat' // POST /v1/chat/completions
+  | 'openai.responses' // POST /v1/responses
+  | 'anthropic.messages' // POST /v1/messages
+  | 'gemini.generateContent' // POST /v1beta/models/{model}:generateContent
   // ---- 多模态端点（15-modalities.md §8.1）----
-  | "openai.audio.speech"
-  | "openai.audio.transcription"
-  | "openai.images.generations"
-  | "openai.images.edits"
-  | "elevenlabs.tts"
-  | "azure.tts"
-  | "google.tts"
-  | "minimax.tts"
-  | "deepgram.listen"
-  | "assemblyai.transcript"
-  | "bflux.image"
-  | "stability.image"
+  | 'openai.audio.speech'
+  | 'openai.audio.transcription'
+  | 'openai.images.generations'
+  | 'openai.images.edits'
+  | 'elevenlabs.tts'
+  | 'azure.tts'
+  | 'google.tts'
+  | 'minimax.tts'
+  | 'deepgram.listen'
+  | 'assemblyai.transcript'
+  | 'bflux.image'
+  | 'stability.image'
   // ---- decision 品类（40 §6.2）----
-  | "gemini.decisions"
-  | "jev.decisions"
-  | "openai.decisions";
+  | 'gemini.decisions'
+  | 'jev.decisions'
+  | 'openai.decisions';
 
 /** chat 三件套：S0 格式识别与 fast path 判定最常打交道的子集。 */
-export type ChatFormatId = "openai.chat" | "openai.responses" | "anthropic.messages";
+export type ChatFormatId = 'openai.chat' | 'openai.responses' | 'anthropic.messages';
 
 export const CHAT_FORMAT_IDS: readonly ChatFormatId[] = [
-  "openai.chat",
-  "openai.responses",
-  "anthropic.messages",
+  'openai.chat',
+  'openai.responses',
+  'anthropic.messages',
 ];
 
 export function isChatFormatId(value: string): value is ChatFormatId {

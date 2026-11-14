@@ -10,14 +10,14 @@
  * 客户端侧 SSE 事件名统一为 `ag.frame`（25 §2.2），新增模态不需要新事件名。
  */
 
-import type { ModalityKind } from "./modality.js";
-import type { CanonicalError, FinishReason } from "./error.js";
-import type { CanonicalUsage } from "./usage.js";
-import type { MediaChunk, MediaRef } from "./media.js";
-import type { InterimTranscript } from "./asr.js";
-import type { FormatId } from "./format.js";
+import type { ModalityKind } from './modality.js';
+import type { CanonicalError, FinishReason } from './error.js';
+import type { CanonicalUsage } from './usage.js';
+import type { MediaChunk, MediaRef } from './media.js';
+import type { InterimTranscript } from './asr.js';
+import type { FormatId } from './format.js';
 
-export type StreamEventType = "start" | "delta" | "end" | "error" | "usage" | "meta";
+export type StreamEventType = 'start' | 'delta' | 'end' | 'error' | 'usage' | 'meta';
 
 export interface StreamFrame<E extends StreamEventType = StreamEventType> {
   event: E;
@@ -48,12 +48,12 @@ export interface StartData {
 
 /** delta 的 payload 由 kind 决定。 */
 export type DeltaData =
-  | { kind: "chat"; text?: string; thinking?: string; tool_input_json?: string; refusal?: string }
-  | { kind: "tts"; audio: MediaChunk }
-  | { kind: "asr"; transcript: InterimTranscript }
-  | { kind: "image"; progress?: number; partial?: MediaRef; index: number }
-  | { kind: "embedding"; vector_chunk?: number[]; index: number }
-  | { kind: "moderation"; scores: Record<string, number>; index: number };
+  | { kind: 'chat'; text?: string; thinking?: string; tool_input_json?: string; refusal?: string }
+  | { kind: 'tts'; audio: MediaChunk }
+  | { kind: 'asr'; transcript: InterimTranscript }
+  | { kind: 'image'; progress?: number; partial?: MediaRef; index: number }
+  | { kind: 'embedding'; vector_chunk?: number[]; index: number }
+  | { kind: 'moderation'; scores: Record<string, number>; index: number };
 
 export interface EndData {
   /** 归一化 finish_reason；ASR 下为 "final"。 */
@@ -83,40 +83,46 @@ export interface MetaData {
  * 各 provider 的原生流事件折叠进这 7 种事件，是 codec 的核心工作。
  */
 export type CanonicalStreamEvent =
-  | { type: "start"; message: MessageMeta }
-  | { type: "part.begin"; index: number; part: StreamPart }
-  | { type: "part.delta"; index: number; delta: PartDelta }
-  | { type: "part.end"; index: number; part: StreamPart }
-  | { type: "usage"; usage: CanonicalUsage }
-  | { type: "finish"; finish_reason: FinishReason; usage: CanonicalUsage }
-  | { type: "error"; error: CanonicalError };
+  | { type: 'start'; message: MessageMeta }
+  | { type: 'part.begin'; index: number; part: StreamPart }
+  | { type: 'part.delta'; index: number; delta: PartDelta }
+  | { type: 'part.end'; index: number; part: StreamPart }
+  | { type: 'usage'; usage: CanonicalUsage }
+  | { type: 'finish'; finish_reason: FinishReason; usage: CanonicalUsage }
+  | { type: 'error'; error: CanonicalError };
 
 export interface MessageMeta {
   id?: string;
   model: string;
-  role: "assistant";
+  role: 'assistant';
 }
 
 /** part 级别的流式增量。 */
 export type PartDelta =
-  | { type: "text"; text: string }
-  | { type: "thinking"; thinking: string }
-  | { type: "tool_input_json"; partial_json: string }
-  | { type: "refusal"; refusal: string };
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string }
+  | { type: 'tool_input_json'; partial_json: string }
+  | { type: 'refusal'; refusal: string };
 
 /** 流式里出现的 part（与 ir/chat.ts 的 Part 同源，这里只引用需要的子集形状）。 */
 export type StreamPart =
-  | { type: "text"; text: string }
-  | { type: "thinking"; thinking: string; signature?: string }
-  | { type: "tool_use"; id: string; name: string; input: Record<string, unknown>; raw_arguments?: string }
-  | { type: "refusal"; reason: string }
-  | { type: "unknown"; raw_type?: string; raw: unknown };
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string; signature?: string }
+  | {
+      type: 'tool_use';
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+      raw_arguments?: string;
+    }
+  | { type: 'refusal'; reason: string }
+  | { type: 'unknown'; raw_type?: string; raw: unknown };
 
 /**
  * SSE 序列化/反序列化（25 §2.2）。
  * 网关对客户端暴露为 SSE 时事件名统一为 `ag.frame`；`nativeEventNames` 模式下只改 `event:` 行。
  */
-export const AG_FRAME_EVENT_NAME = "ag.frame";
+export const AG_FRAME_EVENT_NAME = 'ag.frame';
 
 export function frameToSse(frame: StreamFrame, nativeEventNames = false): string {
   const event = nativeEventNames ? nativeEventNameFor(frame) : AG_FRAME_EVENT_NAME;
@@ -131,23 +137,23 @@ export function frameToSse(frame: StreamFrame, nativeEventNames = false): string
  */
 function nativeEventNameFor(frame: StreamFrame): string {
   switch (frame.event) {
-    case "start":
-      return "message_start";
-    case "delta": {
+    case 'start':
+      return 'message_start';
+    case 'delta': {
       const data = frame.data as DeltaData;
-      if (data.kind === "chat" && data.tool_input_json !== undefined) {
-        return "content_block_delta";
+      if (data.kind === 'chat' && data.tool_input_json !== undefined) {
+        return 'content_block_delta';
       }
-      return "content_block_delta";
+      return 'content_block_delta';
     }
-    case "end":
-      return "message_stop";
-    case "usage":
-      return "message_delta";
-    case "error":
-      return "error";
-    case "meta":
-      return "meta";
+    case 'end':
+      return 'message_stop';
+    case 'usage':
+      return 'message_delta';
+    case 'error':
+      return 'error';
+    case 'meta':
+      return 'meta';
   }
 }
 
@@ -155,14 +161,14 @@ function nativeEventNameFor(frame: StreamFrame): string {
 export function parseSseFrames(text: string): StreamFrame[] {
   const frames: StreamFrame[] = [];
   for (const block of text.split(/\n\n/)) {
-    if (block.trim() === "") continue;
+    if (block.trim() === '') continue;
     const dataLines: string[] = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+    for (const line of block.split('\n')) {
+      if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
     }
     if (dataLines.length === 0) continue;
-    const payload = dataLines.join("\n");
-    if (payload === "[DONE]") continue;
+    const payload = dataLines.join('\n');
+    if (payload === '[DONE]') continue;
     try {
       frames.push(JSON.parse(payload) as StreamFrame);
     } catch {

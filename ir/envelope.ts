@@ -9,13 +9,13 @@
  *   §7.2 回写按优先级：整体还原 → 逐节点还原 → 顶层 unmapped 回写 → 结构化转换。
  */
 
-import type { ModalityKind, ModalityPayload, ModalityResponsePayload } from "./modality.js";
-import type { CanonicalUsage } from "./usage.js";
-import type { ConversionDiagnostic } from "./diagnostic.js";
-import type { FinishReason } from "./error.js";
-import type { FormatId } from "./format.js";
+import type { ModalityKind, ModalityPayload, ModalityResponsePayload } from './modality.js';
+import type { CanonicalUsage } from './usage.js';
+import type { ConversionDiagnostic } from './diagnostic.js';
+import type { FinishReason } from './error.js';
+import type { FormatId } from './format.js';
 
-export const IR_VERSION = "ag-ir/1" as const;
+export const IR_VERSION = 'ag-ir/1' as const;
 
 /** 请求/响应根上未建模字段 + 节点级 raw 的容器（10 §7.1）。 */
 export interface RawEnvelope {
@@ -85,7 +85,7 @@ export interface CanonicalResponseEnvelope {
 /** decision 模态专用：校准性标记（40 §6.3）。 */
 export interface DecisionCalibration {
   /** "native" = 真 decision 模型；"degraded" = chat 模拟。 */
-  calibration: "native" | "degraded";
+  calibration: 'native' | 'degraded';
   /** degraded 时的降级原因与替代模型。 */
   degraded_by?: { reason: string; model: string; chat_adaptor: string };
 }
@@ -94,11 +94,11 @@ export interface DecisionCalibration {
 export interface StreamOptions {
   enabled: boolean;
   /** 客户端要的形态。 */
-  mode: "sse" | "chunked-binary" | "ws-duplex" | "none";
+  mode: 'sse' | 'chunked-binary' | 'ws-duplex' | 'none';
   /** 是否要求上游在流里带 usage。 */
   include_usage?: boolean;
   /** 客户端是否会用 OpenAI 原生事件名（否则用 ag.frame）。 */
   native_event_names?: boolean;
   /** 上游能力不匹配时的策略。chat 默认 bridge；ws-duplex 与 decision 默认 reject。 */
-  on_mismatch: "reject" | "bridge" | "buffer";
+  on_mismatch: 'reject' | 'bridge' | 'buffer';
 }

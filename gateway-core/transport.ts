@@ -13,7 +13,7 @@
  */
 
 export interface UpstreamRequest {
-  method: "POST" | "GET";
+  method: 'POST' | 'GET';
   /** 上游 base URL（如 "https://api.anthropic.com"），不含路径。 */
   base_url: string;
   /** 端点路径（如 "/v1/messages"）。 */
@@ -44,9 +44,12 @@ export interface Transport {
 
 /** 上游返回了 3xx——按 provider error 处理，不跟随（20 §S5）。 */
 export class RedirectNotFollowedError extends Error {
-  constructor(readonly status: number, readonly location: string | undefined) {
+  constructor(
+    readonly status: number,
+    readonly location: string | undefined,
+  ) {
     super(`上游返回 ${status}，网关不跟随 redirect（避免把 prompt 与凭据头转发到别的端点）`);
-    this.name = "RedirectNotFollowedError";
+    this.name = 'RedirectNotFollowedError';
   }
 }
 
@@ -67,7 +70,7 @@ export class FetchTransport implements Transport {
     const onAbort = () => controller.abort();
     if (req.signal !== undefined) {
       if (req.signal.aborted) controller.abort();
-      else req.signal.addEventListener("abort", onAbort, { once: true });
+      else req.signal.addEventListener('abort', onAbort, { once: true });
     }
 
     let res: globalThis.Response;
@@ -76,15 +79,15 @@ export class FetchTransport implements Transport {
         method: req.method,
         headers: req.headers,
         body: req.body,
-        redirect: "manual",
+        redirect: 'manual',
         signal: controller.signal,
       });
     } finally {
-      req.signal?.removeEventListener("abort", onAbort);
+      req.signal?.removeEventListener('abort', onAbort);
     }
 
     if (res.status >= 300 && res.status < 400) {
-      throw new RedirectNotFollowedError(res.status, res.headers.get("location") ?? undefined);
+      throw new RedirectNotFollowedError(res.status, res.headers.get('location') ?? undefined);
     }
 
     const headers: Record<string, string> = {};
@@ -145,11 +148,11 @@ export class ScriptedTransport implements Transport {
     if (step.delay_ms !== undefined && step.delay_ms > 0) {
       await new Promise((r) => setTimeout(r, step.delay_ms));
     }
-    const headers = { "content-type": "application/json", ...(step.headers ?? {}) };
+    const headers = { 'content-type': 'application/json', ...(step.headers ?? {}) };
     if (step.chunks !== undefined) {
       return { status: step.status ?? 200, headers, chunks: iterate(step.chunks) };
     }
-    const body = Buffer.from(step.body ?? "");
+    const body = Buffer.from(step.body ?? '');
     return { status: step.status ?? 200, headers, body };
   }
 }

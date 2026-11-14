@@ -15,19 +15,19 @@
  *   `createFastPathAdmission()`），运行中增删插件时调用 `invalidate()` 失效重算。
  */
 
-import type { JSONSchema } from "./json-schema.js";
-import type { CanonicalRequestEnvelope, CanonicalResponseEnvelope } from "./envelope.js";
-import type { CanonicalStreamEvent, StreamFrame } from "./stream.js";
-import type { CanonicalError } from "./error.js";
-import type { CanonicalUsage } from "./usage.js";
-import type { ToolResultPart, ToolUsePart } from "./chat.js";
-import type { RequestContext } from "./context.js";
-import type { Clock } from "./clock.js";
+import type { JSONSchema } from './json-schema.js';
+import type { CanonicalRequestEnvelope, CanonicalResponseEnvelope } from './envelope.js';
+import type { CanonicalStreamEvent, StreamFrame } from './stream.js';
+import type { CanonicalError } from './error.js';
+import type { CanonicalUsage } from './usage.js';
+import type { ToolResultPart, ToolUsePart } from './chat.js';
+import type { RequestContext } from './context.js';
+import type { Clock } from './clock.js';
 
-export type HookName = "onRequest" | "onResponse" | "onStreamChunk" | "onError" | "onToolCall";
+export type HookName = 'onRequest' | 'onResponse' | 'onStreamChunk' | 'onError' | 'onToolCall';
 
 /** 插件需要的 canonical 完整度（D-fastpath-2）。 */
-export type PluginScope = "envelope-only" | "full-canonical";
+export type PluginScope = 'envelope-only' | 'full-canonical';
 
 /** 插件声明。注册时提供，运行期不可变。 */
 export interface PluginManifest {
@@ -44,7 +44,7 @@ export interface PluginManifest {
    * 需要全量响应才能工作（如内容审核、用量改写）。
    * 声明后 Runner 仍以流式转发，但会额外维护聚合视图传给插件。
    */
-  needs?: "aggregate" | "cross_chunk";
+  needs?: 'aggregate' | 'cross_chunk';
   /** 插件异常是否阻断请求，默认 false。 */
   fatal?: boolean;
   /** 单次调用超时 ms，默认 5000。 */
@@ -59,11 +59,7 @@ export interface PluginManifest {
 }
 
 export type PluginCapability =
-  | "context_compaction"
-  | "redaction"
-  | "tool_provider"
-  | "audit"
-  | "guard";
+  'context_compaction' | 'redaction' | 'tool_provider' | 'audit' | 'guard';
 
 export type PluginResult<T> =
   | T // 改写后的值
@@ -127,7 +123,10 @@ export interface GatewayTool {
   name: string;
   description?: string;
   parameters: JSONSchema;
-  execute(input: Record<string, unknown>, ctx: RequestContext): Promise<ToolResultPart> | ToolResultPart;
+  execute(
+    input: Record<string, unknown>,
+    ctx: RequestContext,
+  ): Promise<ToolResultPart> | ToolResultPart;
 }
 
 export interface Plugin {
@@ -175,17 +174,20 @@ export interface StreamChunkBuffer {
 /** 注册期校验：`onStreamChunk` 插件不能同时声明 context_compaction（25 §7.3）。 */
 export function validatePluginManifest(manifest: PluginManifest): string[] {
   const errors: string[] = [];
-  if (manifest.hooks.includes("onStreamChunk") && manifest.capabilities?.includes("context_compaction")) {
+  if (
+    manifest.hooks.includes('onStreamChunk') &&
+    manifest.capabilities?.includes('context_compaction')
+  ) {
     errors.push(
       `plugin ${manifest.name}: hooks 含 onStreamChunk 时不得声明 capabilities.context_compaction` +
-        "（压缩只在 onRequest 生效，25-streaming.md §7.3）",
+        '（压缩只在 onRequest 生效，25-streaming.md §7.3）',
     );
   }
   if (manifest.hooks.length === 0) {
     errors.push(`plugin ${manifest.name}: hooks 不能为空`);
   }
   for (const hook of manifest.hooks) {
-    if (!["onRequest", "onResponse", "onStreamChunk", "onError", "onToolCall"].includes(hook)) {
+    if (!['onRequest', 'onResponse', 'onStreamChunk', 'onError', 'onToolCall'].includes(hook)) {
       errors.push(`plugin ${manifest.name}: 未知 hook ${hook}`);
     }
   }
@@ -194,5 +196,5 @@ export function validatePluginManifest(manifest: PluginManifest): string[] {
 
 /** 取生效的 scope；缺省按 full-canonical（安全侧优先，D-fastpath-2）。 */
 export function effectivePluginScope(manifest: PluginManifest): PluginScope {
-  return manifest.scope ?? "full-canonical";
+  return manifest.scope ?? 'full-canonical';
 }

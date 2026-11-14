@@ -13,7 +13,10 @@
     "type": {
       "anyOf": [
         { "enum": ["string", "number", "integer", "boolean", "object", "array", "null"] },
-        { "type": "array", "items": { "enum": ["string", "number", "integer", "boolean", "object", "array", "null"] } }
+        {
+          "type": "array",
+          "items": { "enum": ["string", "number", "integer", "boolean", "object", "array", "null"] }
+        }
       ]
     },
     "properties": { "type": "object" },

@@ -8,8 +8,8 @@
  * **放行**。矩阵三态必须诚实（40 §5：`planned` 只允许存在于当前 Phase 的交付物清单里）。
  */
 
-import type { CapabilityEntry, ModalityKind } from "../ir/index.js";
-import { capabilityKey } from "../ir/index.js";
+import type { CapabilityEntry, ModalityKind } from '../ir/index.js';
+import { capabilityKey } from '../ir/index.js';
 
 export interface CapabilityRegistry {
   register(entry: CapabilityEntry): void;
@@ -36,6 +36,6 @@ export class InMemoryCapabilityRegistry implements CapabilityRegistry {
   }
 
   isImplemented(accessPath: string, model: string, modality: ModalityKind): boolean {
-    return this.find(accessPath, model, modality)?.status === "implemented";
+    return this.find(accessPath, model, modality)?.status === 'implemented';
   }
 }

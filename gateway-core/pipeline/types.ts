@@ -17,22 +17,22 @@ import type {
   FormatId,
   ModalityKind,
   RequestTrace,
-} from "../../ir/index.js";
-import type { RequestEnvelopeShallow } from "../../adaptors/types.js";
-import type { ClientSink } from "./sink.js";
-import type { IncrementalUsageSniffer } from "./usage-sniffer.js";
-import type { Adaptor, EncodedRequest } from "../../adaptors/types.js";
-import type { AdaptorRegistry } from "../../adaptors/types.js";
-import type { MutableRequestContext } from "../context.js";
-import type { FastPathAdmission } from "./fast-path.js";
-import type { LazyRequest } from "./lazy-decode.js";
-import type { Router } from "../router.js";
-import type { Transport, UpstreamResponse } from "../transport.js";
-import type { PluginHost } from "../../plugins/host.js";
-import type { UsageEmitter } from "../../metering/emitter.js";
-import type { CredentialResolver } from "../../credentials/resolver.js";
-import type { CapabilityRegistry } from "../../credentials/capability-registry.js";
-import type { Clock, GatewayConfig, IdGenerator, Logger, Metrics } from "../../di/ports.js";
+} from '../../ir/index.js';
+import type { RequestEnvelopeShallow } from '../../adaptors/types.js';
+import type { ClientSink } from './sink.js';
+import type { IncrementalUsageSniffer } from './usage-sniffer.js';
+import type { Adaptor, EncodedRequest } from '../../adaptors/types.js';
+import type { AdaptorRegistry } from '../../adaptors/types.js';
+import type { MutableRequestContext } from '../context.js';
+import type { FastPathAdmission } from './fast-path.js';
+import type { LazyRequest } from './lazy-decode.js';
+import type { Router } from '../router.js';
+import type { Transport, UpstreamResponse } from '../transport.js';
+import type { PluginHost } from '../../plugins/host.js';
+import type { UsageEmitter } from '../../metering/emitter.js';
+import type { CredentialResolver } from '../../credentials/resolver.js';
+import type { CapabilityRegistry } from '../../credentials/capability-registry.js';
+import type { Clock, GatewayConfig, IdGenerator, Logger, Metrics } from '../../di/ports.js';
 
 /** 一次请求的全部注入依赖。测试里可整体替换任一依赖。 */
 export interface PipelineDeps {
@@ -58,7 +58,7 @@ export interface PipelineDeps {
 }
 
 /** Runner 构造时注入的服务（不含 per-request 的 sink）。 */
-export type PipelineServices = Omit<PipelineDeps, "sink">;
+export type PipelineServices = Omit<PipelineDeps, 'sink'>;
 
 export interface PipelineInput {
   /** S0 识别出的客户端格式。 */
@@ -91,7 +91,7 @@ export interface PipelineState {
   canonical?: CanonicalRequestEnvelope;
   /** 插件短路（S3） */
   short_circuit_response?: CanonicalResponseEnvelope;
-  short_circuit_error?: import("../../ir/index.js").CanonicalError;
+  short_circuit_error?: import('../../ir/index.js').CanonicalError;
 
   /** S4 */
   encoded?: EncodedRequest;
@@ -135,7 +135,7 @@ export interface PipelineState {
   /** 是否已物化完整 canonical（D-fastpath-1 的代价观测）。 */
   materialized: boolean;
   /** 最终状态（S10 用）。 */
-  status?: "success" | "error" | "short_circuit";
+  status?: 'success' | 'error' | 'short_circuit';
   /** 阶段失败时携带的错误。 */
   error?: CanonicalError;
 
@@ -161,7 +161,7 @@ export interface PipelineOutcome {
   materialized: boolean;
   trace: RequestTrace;
   usage?: CanonicalUsage;
-  error?: import("../../ir/index.js").CanonicalError;
+  error?: import('../../ir/index.js').CanonicalError;
   short_circuit: boolean;
   turns: number;
 }

@@ -20,18 +20,18 @@ import type {
   FormatId,
   ModalityKind,
   RequestContext,
-} from "../../ir/index.js";
-import type { Adaptor, RequestEnvelopeShallow } from "../../adaptors/types.js";
-import { CTX_STATE_KEYS } from "../../ir/index.js";
+} from '../../ir/index.js';
+import type { Adaptor, RequestEnvelopeShallow } from '../../adaptors/types.js';
+import { CTX_STATE_KEYS } from '../../ir/index.js';
 
 /** 路由必需集：S1 浅解析**必须**产出的字段（D-fastpath-1 明确列出）。 */
 export const ROUTING_REQUIRED_FIELDS = [
-  "source_format", // 客户端格式识别
-  "model", // 别名解析
-  "access_path_hint", // 由别名表推，不是从 body 读
-  "stream", // 是否流式（决定 S5/S6/S8 的形态）
-  "request_bytes", // 请求体字节长度（限额与观测）
-  "usage_locations", // 响应侧 usage 信封位置（fast path 嗅探器用）
+  'source_format', // 客户端格式识别
+  'model', // 别名解析
+  'access_path_hint', // 由别名表推，不是从 body 读
+  'stream', // 是否流式（决定 S5/S6/S8 的形态）
+  'request_bytes', // 请求体字节长度（限额与观测）
+  'usage_locations', // 响应侧 usage 信封位置（fast path 嗅探器用）
 ] as const;
 
 export type RoutingRequiredField = (typeof ROUTING_REQUIRED_FIELDS)[number];
@@ -39,9 +39,9 @@ export type RoutingRequiredField = (typeof ROUTING_REQUIRED_FIELDS)[number];
 /** 物化档位。 */
 export type MaterializationLevel =
   /** 只做信封级浅解析；完整 canonical 永不物化（除非后续阶段要求）。 */
-  | "envelope"
+  | 'envelope'
   /** 完整 canonical 已物化（或即将物化）。 */
-  | "full";
+  | 'full';
 
 export class LazyRequest {
   private materialized: CanonicalRequestEnvelope | undefined;
@@ -64,7 +64,7 @@ export class LazyRequest {
   }
 
   get level(): MaterializationLevel {
-    return this.materialized === undefined ? "envelope" : "full";
+    return this.materialized === undefined ? 'envelope' : 'full';
   }
 
   /**
@@ -79,7 +79,7 @@ export class LazyRequest {
    */
   full(): CanonicalRequestEnvelope {
     if (this.materialized === undefined) {
-      const parsed: unknown = JSON.parse(this.rawBody.toString("utf8"));
+      const parsed: unknown = JSON.parse(this.rawBody.toString('utf8'));
       this.materialized = this.adaptor.decode(parsed, this.ctx);
       this.ctx.state[CTX_STATE_KEYS.LAZY_ENVELOPE] = this.materialized;
     }
@@ -106,27 +106,30 @@ export function shallowDecode(
   if (adaptor.decodeEnvelope !== undefined) {
     let parsed: unknown;
     try {
-      parsed = JSON.parse(rawBody.toString("utf8"));
+      parsed = JSON.parse(rawBody.toString('utf8'));
     } catch {
-      throw new Error("请求体不是合法 JSON（S1 浅解析阶段即失败，避免无谓解码）");
+      throw new Error('请求体不是合法 JSON（S1 浅解析阶段即失败，避免无谓解码）');
     }
     return adaptor.decodeEnvelope(parsed, ctx);
   }
   // 退化路径：通用字段抽取（openai.chat / anthropic.messages / openai.responses 同形）
   let parsed: unknown;
   try {
-    parsed = JSON.parse(rawBody.toString("utf8"));
+    parsed = JSON.parse(rawBody.toString('utf8'));
   } catch {
-    throw new Error("请求体不是合法 JSON");
+    throw new Error('请求体不是合法 JSON');
   }
-  const obj = (typeof parsed === "object" && parsed !== null ? parsed : {}) as Record<string, unknown>;
+  const obj = (typeof parsed === 'object' && parsed !== null ? parsed : {}) as Record<
+    string,
+    unknown
+  >;
   return {
     source_format: adaptor.format as FormatId,
     kind,
-    model: typeof obj["model"] === "string" ? (obj["model"] as string) : "",
-    stream: obj["stream"] === true,
+    model: typeof obj['model'] === 'string' ? (obj['model'] as string) : '',
+    stream: obj['stream'] === true,
     bytes: rawBody.byteLength,
     unmapped: {},
-    default_path: "/v1/chat/completions",
+    default_path: '/v1/chat/completions',
   };
 }

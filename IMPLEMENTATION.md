@@ -47,19 +47,19 @@ Phase 1 只实现了 chat 相关的 `/v1/chat/completions` 与 `/v1/messages` �
 
 目录命名以 [`docs/design/00-overview.md`](docs/design/00-overview.md) §4.2 的模块表为唯一事实来源。
 
-| 目录 | 职责 |
-|---|---|
-| `ir/` | **AG-IR canonical 类型**（唯一中间表示）+ JSON Schema + canonical 夹具。按模态拆文件：`envelope` / `chat` / `decision` / `tts` / `asr` / `image` / `embedding` / `rerank` / `moderation` / `video` / `stream` / `usage` / `capability` / `credential` / `plugin` / `context` / `trace` / `guards` |
-| `di/` | DI 容器 + 跨切面基础设施端口（Clock / Logger / Metrics / IdGenerator / Config） + **全仓库唯一读 `process.env` 的 `config.ts`** |
-| `adaptors/` | 每 (格式, 模态) 一对 mapper。`types.ts` 是 `Adaptor` 契约，`registry.ts` 是注册表，`index.ts` 是**集中显式注册处**；`openai-chat/` 与 `anthropic-messages/` 是 Phase 1 写透的两个 codec |
-| `gateway-core/` | `pipeline/`（S0–S10 共 11 个阶段 + fast path + 惰性解码 + 重试/fallback + 工具循环 + usage 嗅探）、`context.ts`、`router.ts`（S2 路由）、`transport.ts`（传输抽象） |
-| `plugins/` | `host.ts`：5 个 hook 的调度 + 故障隔离 |
-| `metering/` | `usage-record.ts`（UsageRecord 数据模型）、`emitter.ts`（接口）、`memory-emitter.ts`（有界队列 + 微批下沉） |
-| `credentials/` | `resolver.ts`（上游凭据解析，Phase 1 只允许 env/keyring）、`capability-registry.ts`（能力矩阵） |
-| `http/` | `server.ts`：最小 HTTP ingress（S0 可跑起来） |
-| `composition-root.ts` | **组合根**：全仓库唯一的装配处 |
-| `tests/` | vitest 测试 |
-| `scripts/` | `check-json-schema.mjs`（ajv 校验）、`e2e-demo.mjs`（端到端演示） |
+| 目录                  | 职责                                                                                                                                                                                                                                                                                              |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ir/`                 | **AG-IR canonical 类型**（唯一中间表示）+ JSON Schema + canonical 夹具。按模态拆文件：`envelope` / `chat` / `decision` / `tts` / `asr` / `image` / `embedding` / `rerank` / `moderation` / `video` / `stream` / `usage` / `capability` / `credential` / `plugin` / `context` / `trace` / `guards` |
+| `di/`                 | DI 容器 + 跨切面基础设施端口（Clock / Logger / Metrics / IdGenerator / Config） + **全仓库唯一读 `process.env` 的 `config.ts`**                                                                                                                                                                   |
+| `adaptors/`           | 每 (格式, 模态) 一对 mapper。`types.ts` 是 `Adaptor` 契约，`registry.ts` 是注册表，`index.ts` 是**集中显式注册处**；`openai-chat/` 与 `anthropic-messages/` 是 Phase 1 写透的两个 codec                                                                                                           |
+| `gateway-core/`       | `pipeline/`（S0–S10 共 11 个阶段 + fast path + 惰性解码 + 重试/fallback + 工具循环 + usage 嗅探）、`context.ts`、`router.ts`（S2 路由）、`transport.ts`（传输抽象）                                                                                                                               |
+| `plugins/`            | `host.ts`：5 个 hook 的调度 + 故障隔离                                                                                                                                                                                                                                                            |
+| `metering/`           | `usage-record.ts`（UsageRecord 数据模型）、`emitter.ts`（接口）、`memory-emitter.ts`（有界队列 + 微批下沉）                                                                                                                                                                                       |
+| `credentials/`        | `resolver.ts`（上游凭据解析，Phase 1 只允许 env/keyring）、`capability-registry.ts`（能力矩阵）                                                                                                                                                                                                   |
+| `http/`               | `server.ts`：最小 HTTP ingress（S0 可跑起来）                                                                                                                                                                                                                                                     |
+| `composition-root.ts` | **组合根**：全仓库唯一的装配处                                                                                                                                                                                                                                                                    |
+| `tests/`              | vitest 测试                                                                                                                                                                                                                                                                                       |
+| `scripts/`            | `check-json-schema.mjs`（ajv 校验）、`e2e-demo.mjs`（端到端演示）                                                                                                                                                                                                                                 |
 
 > `di/` 与 `http/` 不在 00 §4.2 的模块表里——那张表列的是**领域模块**，这两个是横切基础设施。
 > 已在本文件与实现注释里标明，未改文档。
@@ -86,14 +86,14 @@ npx vitest run tests/<file>       # 单文件
 
 当前覆盖：
 
-| 文件 | 覆盖 |
-|---|---|
-| `tests/di.test.ts` | 容器：单例/多例/替身注入/循环依赖检测/子容器派生 |
-| `tests/fast-path.test.ts` | **D-fastpath-1**（S1 浅解析不物化、路由必需集、首字节后禁改状态码）与 **D-fastpath-2**（fast path 准入、缓存失效重算） |
-| `tests/ir-schema.test.ts` | ajv 校验全部 canonical 夹具 + 「未知≠0」「免费≠未知」「未建模字段必须进 raw.unmapped」「BuiltinTool.name 只用稳定名」+ **TS ↔ schema 字段级 parity（防漂移）** |
-| `tests/metering.test.ts` | 异步非阻塞发射器、drop 策略、可重放、UsageRecord 绝不含 header 原值/凭据/客户端 IP |
-| `tests/plugin-host.test.ts` | 5 hook 调度顺序、ShortCircuit 语义、故障隔离、超时、注册期校验 |
-| `adaptors/*/codec.test.ts` | 两个 codec 的 round-trip（40 §1.5 的 6 条断言 + 格式专属不变量） |
+| 文件                        | 覆盖                                                                                                                                                           |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tests/di.test.ts`          | 容器：单例/多例/替身注入/循环依赖检测/子容器派生                                                                                                               |
+| `tests/fast-path.test.ts`   | **D-fastpath-1**（S1 浅解析不物化、路由必需集、首字节后禁改状态码）与 **D-fastpath-2**（fast path 准入、缓存失效重算）                                         |
+| `tests/ir-schema.test.ts`   | ajv 校验全部 canonical 夹具 + 「未知≠0」「免费≠未知」「未建模字段必须进 raw.unmapped」「BuiltinTool.name 只用稳定名」+ **TS ↔ schema 字段级 parity（防漂移）** |
+| `tests/metering.test.ts`    | 异步非阻塞发射器、drop 策略、可重放、UsageRecord 绝不含 header 原值/凭据/客户端 IP                                                                             |
+| `tests/plugin-host.test.ts` | 5 hook 调度顺序、ShortCircuit 语义、故障隔离、超时、注册期校验                                                                                                 |
+| `adaptors/*/codec.test.ts`  | 两个 codec 的 round-trip（40 §1.5 的 6 条断言 + 格式专属不变量）                                                                                               |
 
 ## 环境变量
 

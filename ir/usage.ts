@@ -11,9 +11,9 @@
  */
 
 /** 各细分的计价状态。缺省视为 "billed"。 */
-export type PricingState = "billed" | "free" | "included" | "unpriced";
+export type PricingState = 'billed' | 'free' | 'included' | 'unpriced';
 
-export type PricingSlot = "input" | "output" | "cache_read" | "cache_write" | "reasoning";
+export type PricingSlot = 'input' | 'output' | 'cache_read' | 'cache_write' | 'reasoning';
 
 export interface TokenUsage {
   input_tokens: number;
@@ -53,9 +53,9 @@ export interface UsageUnits {
 }
 
 /** usage 的来源。 */
-export type UsageSource = "provider" | "provider_floor" | "estimated";
+export type UsageSource = 'provider' | 'provider_floor' | 'estimated';
 
-export type UsagePrecision = "exact" | "approx" | "low";
+export type UsagePrecision = 'exact' | 'approx' | 'low';
 
 export interface CanonicalUsage {
   /** 各计量单位，未用到的单位**省略**（不是 0）。 */
@@ -73,7 +73,7 @@ export interface CanonicalUsage {
 }
 
 /** 构造一个"完全未知"的 usage：units 为空对象 + source estimated。 */
-export function emptyUsage(source: UsageSource = "provider"): CanonicalUsage {
+export function emptyUsage(source: UsageSource = 'provider'): CanonicalUsage {
   return { units: {}, source };
 }
 

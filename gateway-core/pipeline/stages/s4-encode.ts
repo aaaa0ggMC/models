@@ -15,24 +15,24 @@
  * fast path 时**不物化**——直接用 S1 保留的原始字节透传。
  */
 
-import type { PipelineDeps, PipelineState, Stage } from "../types.js";
-import type { EncodedRequest } from "../../../adaptors/types.js";
-import { createCanonicalError } from "../../../ir/index.js";
+import type { PipelineDeps, PipelineState, Stage } from '../types.js';
+import type { EncodedRequest } from '../../../adaptors/types.js';
+import { createCanonicalError } from '../../../ir/index.js';
 
 export class S4Encode implements Stage {
-  readonly id = "S4";
-  readonly name = "Encode";
+  readonly id = 'S4';
+  readonly name = 'Encode';
 
   async execute(state: PipelineState, deps: PipelineDeps): Promise<void> {
     const started = deps.clock.now();
     const { ctx } = state;
     const lazy = state.lazy;
-    if (lazy === undefined) throw new Error("S4 需要 S1 的惰性请求句柄");
+    if (lazy === undefined) throw new Error('S4 需要 S1 的惰性请求句柄');
 
     const providerAdaptor = deps.adaptors.find(ctx.provider_format, state.modality);
     if (providerAdaptor === undefined) {
       throw createCanonicalError(
-        "capability_unsupported",
+        'capability_unsupported',
         `上游格式 ${ctx.provider_format} 没有适配 ${state.modality} 模态的 adaptor`,
         ctx.request_id,
       );
@@ -46,11 +46,16 @@ export class S4Encode implements Stage {
         body: undefined,
         raw_bytes: rawBytes,
         fast_path: true,
-        path: state.shallow?.default_path ?? "/v1/chat/completions",
+        path: state.shallow?.default_path ?? '/v1/chat/completions',
       };
       state.encoded = encoded;
-      ctx.recordStage(this.id, deps.clock.now() - started, "fast_path:passthrough", rawBytes.byteLength);
-      deps.metrics.increment("pipeline.stage", 1, { stage: this.id, mode: "fast_path" });
+      ctx.recordStage(
+        this.id,
+        deps.clock.now() - started,
+        'fast_path:passthrough',
+        rawBytes.byteLength,
+      );
+      deps.metrics.increment('pipeline.stage', 1, { stage: this.id, mode: 'fast_path' });
       return;
     }
 
@@ -74,6 +79,6 @@ export class S4Encode implements Stage {
       deps.clock.now() - started,
       `slow:${ctx.client_format}->${ctx.provider_format}`,
     );
-    deps.metrics.increment("pipeline.stage", 1, { stage: this.id, mode: "slow" });
+    deps.metrics.increment('pipeline.stage', 1, { stage: this.id, mode: 'slow' });
   }
 }

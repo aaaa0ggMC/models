@@ -20,8 +20,8 @@
  *   Gemini        usageMetadata 每 chunk 都可能带，取最后一次非空
  */
 
-import type { CanonicalUsage, TokenUsage } from "../../ir/index.js";
-import { mergeTokenUsage } from "../../ir/index.js";
+import type { CanonicalUsage, TokenUsage } from '../../ir/index.js';
+import { mergeTokenUsage } from '../../ir/index.js';
 
 export interface UsageSnifferResult {
   usage: CanonicalUsage;
@@ -34,7 +34,7 @@ export interface UsageSnifferResult {
 export interface UsageSnifferOptions {
   max_bytes: number;
   /** 按 provider 形态选择抽取规则。 */
-  flavor: "openai_chat" | "openai_responses" | "anthropic" | "gemini" | "generic";
+  flavor: 'openai_chat' | 'openai_responses' | 'anthropic' | 'gemini' | 'generic';
 }
 
 /**
@@ -63,11 +63,11 @@ export class IncrementalUsageSniffer {
   constructor(private readonly opts: UsageSnifferOptions) {}
 
   /** 未成形的 SSE 事件残片（真实网络里一个 JSON 负载可能被 TCP 分片切断）。 */
-  private pending = "";
+  private pending = '';
 
   /** 喂一个上游 chunk（SSE 文本片段）。返回是否已超限。 */
   push(chunk: string): boolean {
-    this.bytes += Buffer.byteLength(chunk, "utf8");
+    this.bytes += Buffer.byteLength(chunk, 'utf8');
     if (this.bytes > this.opts.max_bytes) {
       // 超限：**不得把未知 token 记成 0**——标 truncated 让双路计量兜底（20 §4.2）
       this.truncated = true;
@@ -75,7 +75,7 @@ export class IncrementalUsageSniffer {
     }
     // SSE 事件以空行分隔；跨 chunk 的半帧先攒着，等完整了再解析
     this.pending += chunk;
-    const boundary = this.pending.lastIndexOf("\n\n");
+    const boundary = this.pending.lastIndexOf('\n\n');
     if (boundary === -1) return true;
     const complete = this.pending.slice(0, boundary + 2);
     this.pending = this.pending.slice(boundary + 2);
@@ -86,20 +86,18 @@ export class IncrementalUsageSniffer {
   /** 解析一段**完整**的 SSE 事件序列（已按空行切好）。 */
   private consume(sseText: string): void {
     switch (this.opts.flavor) {
-      case "openai_chat":
-        this.lastOpenAiUsage = lastUsageFromSse(
-          sseText,
-          this.lastOpenAiUsage,
-          (o) => asRecord(o["usage"]),
+      case 'openai_chat':
+        this.lastOpenAiUsage = lastUsageFromSse(sseText, this.lastOpenAiUsage, (o) =>
+          asRecord(o['usage']),
         );
         break;
-      case "openai_responses":
+      case 'openai_responses':
         this.lastOpenAiUsage = lastUsageFromSse(sseText, this.lastOpenAiUsage, (o) => {
-          const r = asRecord(o["response"]);
-          return r === undefined ? undefined : asRecord(r["usage"]);
+          const r = asRecord(o['response']);
+          return r === undefined ? undefined : asRecord(r['usage']);
         });
         break;
-      case "anthropic":
+      case 'anthropic':
         for (const u of allUsagesFromSse(sseText)) {
           this.anthropicRaw = u;
           const t = tokenFromAnthropic(u);
@@ -107,74 +105,84 @@ export class IncrementalUsageSniffer {
             this.anthropicMerged === undefined ? t : mergeTokenUsage(this.anthropicMerged, t);
         }
         break;
-      case "gemini":
-        this.lastGeminiUsage = lastUsageFromSse(
-          sseText,
-          this.lastGeminiUsage,
-          (o) => asRecord(o["usageMetadata"]),
+      case 'gemini':
+        this.lastGeminiUsage = lastUsageFromSse(sseText, this.lastGeminiUsage, (o) =>
+          asRecord(o['usageMetadata']),
         );
         break;
-      case "generic":
+      case 'generic':
         break;
     }
   }
 
   /** 流结束；冲刷残片并产出归一 usage。 */
   finish(): UsageSnifferResult {
-    if (this.pending.trim() !== "") {
+    if (this.pending.trim() !== '') {
       const rest = this.pending;
-      this.pending = "";
+      this.pending = '';
       this.consume(rest);
     }
     switch (this.opts.flavor) {
-      case "openai_chat":
-      case "openai_responses": {
+      case 'openai_chat':
+      case 'openai_responses': {
         if (this.lastOpenAiUsage === undefined) {
-          return { usage: { units: {}, source: "provider" }, truncated: this.truncated, empty: true };
+          return {
+            usage: { units: {}, source: 'provider' },
+            truncated: this.truncated,
+            empty: true,
+          };
         }
         this.found = 1;
         return {
           usage: {
             units: { tokens: tokenFromOpenAi(this.lastOpenAiUsage) },
             raw: this.lastOpenAiUsage,
-            source: "provider",
+            source: 'provider',
           },
           truncated: this.truncated,
           empty: false,
         };
       }
-      case "anthropic": {
+      case 'anthropic': {
         if (this.anthropicMerged === undefined) {
-          return { usage: { units: {}, source: "provider" }, truncated: this.truncated, empty: true };
+          return {
+            usage: { units: {}, source: 'provider' },
+            truncated: this.truncated,
+            empty: true,
+          };
         }
         this.found = 1;
         return {
           usage: {
             units: { tokens: this.anthropicMerged },
             ...(this.anthropicRaw === undefined ? {} : { raw: this.anthropicRaw }),
-            source: "provider",
+            source: 'provider',
           },
           truncated: this.truncated,
           empty: false,
         };
       }
-      case "gemini": {
+      case 'gemini': {
         if (this.lastGeminiUsage === undefined) {
-          return { usage: { units: {}, source: "provider" }, truncated: this.truncated, empty: true };
+          return {
+            usage: { units: {}, source: 'provider' },
+            truncated: this.truncated,
+            empty: true,
+          };
         }
         this.found = 1;
         return {
           usage: {
             units: { tokens: tokenFromGemini(this.lastGeminiUsage) },
             raw: this.lastGeminiUsage,
-            source: "provider",
+            source: 'provider',
           },
           truncated: this.truncated,
           empty: false,
         };
       }
-      case "generic":
-        return { usage: { units: {}, source: "provider" }, truncated: this.truncated, empty: true };
+      case 'generic':
+        return { usage: { units: {}, source: 'provider' }, truncated: this.truncated, empty: true };
     }
   }
 
@@ -212,10 +220,10 @@ function allUsagesFromSse(sseText: string): Array<Record<string, unknown>> {
   for (const ev of parseSseEvents(sseText)) {
     const obj = asRecord(jsonOf(ev));
     if (obj === undefined) continue;
-    const message = asRecord(obj["message"]);
-    const fromMessage = message === undefined ? undefined : asRecord(message["usage"]);
+    const message = asRecord(obj['message']);
+    const fromMessage = message === undefined ? undefined : asRecord(message['usage']);
     if (fromMessage !== undefined) out.push(fromMessage);
-    const top = asRecord(obj["usage"]);
+    const top = asRecord(obj['usage']);
     if (top !== undefined) out.push(top);
   }
   return out;
@@ -240,22 +248,25 @@ export function sniffUsageFromSseChunks(
 }
 
 /** 按 flavor 从 SSE 文本里抽 usage。解析失败一律返回空 usage，不影响转发。 */
-export function extractUsage(sseText: string, flavor: UsageSnifferOptions["flavor"]): CanonicalUsage {
+export function extractUsage(
+  sseText: string,
+  flavor: UsageSnifferOptions['flavor'],
+): CanonicalUsage {
   try {
     switch (flavor) {
-      case "openai_chat":
+      case 'openai_chat':
         return extractOpenAiChat(sseText);
-      case "openai_responses":
+      case 'openai_responses':
         return extractOpenAiResponses(sseText);
-      case "anthropic":
+      case 'anthropic':
         return extractAnthropic(sseText);
-      case "gemini":
+      case 'gemini':
         return extractGemini(sseText);
-      case "generic":
-        return { units: {}, source: "provider" };
+      case 'generic':
+        return { units: {}, source: 'provider' };
     }
   } catch {
-    return { units: {}, source: "provider" };
+    return { units: {}, source: 'provider' };
   }
 }
 
@@ -268,16 +279,16 @@ interface SseEvent {
 export function parseSseEvents(sseText: string): SseEvent[] {
   const out: SseEvent[] = [];
   for (const block of sseText.split(/\n\n/)) {
-    if (block.trim() === "") continue;
+    if (block.trim() === '') continue;
     let event: string | undefined;
     const dataLines: string[] = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) event = line.slice(6).trim();
-      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
     }
     if (dataLines.length === 0) continue;
-    const data = dataLines.join("\n");
-    if (data === "[DONE]") continue;
+    const data = dataLines.join('\n');
+    if (data === '[DONE]') continue;
     out.push({ ...(event === undefined ? {} : { event }), data });
   }
   return out;
@@ -292,11 +303,11 @@ function jsonOf(ev: SseEvent): unknown {
 }
 
 function asRecord(v: unknown): Record<string, unknown> | undefined {
-  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : undefined;
+  return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : undefined;
 }
 
 function num(v: unknown): number | undefined {
-  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
 /** OpenAI Chat：末 chunk 的 usage。 */
@@ -304,14 +315,14 @@ function extractOpenAiChat(sseText: string): CanonicalUsage {
   let found: Record<string, unknown> | undefined;
   for (const ev of parseSseEvents(sseText)) {
     const obj = asRecord(jsonOf(ev));
-    const usage = obj === undefined ? undefined : asRecord(obj["usage"]);
+    const usage = obj === undefined ? undefined : asRecord(obj['usage']);
     if (usage !== undefined) found = usage; // 取最后一个非空
   }
-  if (found === undefined) return { units: {}, source: "provider" };
+  if (found === undefined) return { units: {}, source: 'provider' };
   return {
     units: { tokens: tokenFromOpenAi(found) },
     raw: found,
-    source: "provider",
+    source: 'provider',
   };
 }
 
@@ -319,17 +330,17 @@ function extractOpenAiChat(sseText: string): CanonicalUsage {
 function extractOpenAiResponses(sseText: string): CanonicalUsage {
   let found: Record<string, unknown> | undefined;
   for (const ev of parseSseEvents(sseText)) {
-    if (ev.event !== undefined && ev.event !== "response.completed") continue;
+    if (ev.event !== undefined && ev.event !== 'response.completed') continue;
     const obj = asRecord(jsonOf(ev));
-    const response = obj === undefined ? undefined : asRecord(obj["response"]);
-    const usage = response === undefined ? undefined : asRecord(response["usage"]);
+    const response = obj === undefined ? undefined : asRecord(obj['response']);
+    const usage = response === undefined ? undefined : asRecord(response['usage']);
     if (usage !== undefined) found = usage;
   }
-  if (found === undefined) return { units: {}, source: "provider" };
+  if (found === undefined) return { units: {}, source: 'provider' };
   return {
     units: { tokens: tokenFromOpenAi(found) },
     raw: found,
-    source: "provider",
+    source: 'provider',
   };
 }
 
@@ -340,17 +351,17 @@ function extractAnthropic(sseText: string): CanonicalUsage {
   for (const ev of parseSseEvents(sseText)) {
     const obj = asRecord(jsonOf(ev));
     if (obj === undefined) continue;
-    const usage = asRecord(obj["usage"]);
+    const usage = asRecord(obj['usage']);
     if (usage === undefined) continue;
     raw = usage;
     const t = tokenFromAnthropic(usage);
     merged = merged === undefined ? t : mergeTokenUsage(merged, t);
   }
-  if (merged === undefined) return { units: {}, source: "provider" };
+  if (merged === undefined) return { units: {}, source: 'provider' };
   return {
     units: { tokens: merged },
     ...(raw === undefined ? {} : { raw }),
-    source: "provider",
+    source: 'provider',
   };
 }
 
@@ -360,27 +371,27 @@ function extractGemini(sseText: string): CanonicalUsage {
   for (const ev of parseSseEvents(sseText)) {
     const obj = asRecord(jsonOf(ev));
     if (obj === undefined) continue;
-    const usage = asRecord(obj["usageMetadata"]);
+    const usage = asRecord(obj['usageMetadata']);
     if (usage !== undefined) found = usage;
   }
-  if (found === undefined) return { units: {}, source: "provider" };
+  if (found === undefined) return { units: {}, source: 'provider' };
   return {
     units: { tokens: tokenFromGemini(found) },
     raw: found,
-    source: "provider",
+    source: 'provider',
   };
 }
 
 function tokenFromOpenAi(u: Record<string, unknown>): TokenUsage {
-  const prompt = num(u["prompt_tokens"]) ?? num(u["input_tokens"]) ?? 0;
-  const completion = num(u["completion_tokens"]) ?? num(u["output_tokens"]) ?? 0;
-  const promptDetails = asRecord(u["prompt_tokens_details"]) ?? asRecord(u["input_tokens_details"]);
+  const prompt = num(u['prompt_tokens']) ?? num(u['input_tokens']) ?? 0;
+  const completion = num(u['completion_tokens']) ?? num(u['output_tokens']) ?? 0;
+  const promptDetails = asRecord(u['prompt_tokens_details']) ?? asRecord(u['input_tokens_details']);
   const completionDetails =
-    asRecord(u["completion_tokens_details"]) ?? asRecord(u["output_tokens_details"]);
-  const cacheRead = num(promptDetails?.["cached_tokens"]) ?? 0;
-  const cacheWrite = num(promptDetails?.["cache_write_tokens"]) ?? 0;
-  const reasoning = num(completionDetails?.["reasoning_tokens"]) ?? 0;
-  const total = num(u["total_tokens"]) ?? prompt + completion;
+    asRecord(u['completion_tokens_details']) ?? asRecord(u['output_tokens_details']);
+  const cacheRead = num(promptDetails?.['cached_tokens']) ?? 0;
+  const cacheWrite = num(promptDetails?.['cache_write_tokens']) ?? 0;
+  const reasoning = num(completionDetails?.['reasoning_tokens']) ?? 0;
+  const total = num(u['total_tokens']) ?? prompt + completion;
   return {
     input_tokens: prompt,
     output_tokens: completion,
@@ -392,14 +403,14 @@ function tokenFromOpenAi(u: Record<string, unknown>): TokenUsage {
 }
 
 function tokenFromAnthropic(u: Record<string, unknown>): TokenUsage {
-  const input = num(u["input_tokens"]) ?? 0;
-  const output = num(u["output_tokens"]) ?? 0;
-  const cacheRead = num(u["cache_read_input_tokens"]) ?? 0;
-  const cacheWrite = num(u["cache_creation_input_tokens"]) ?? 0;
-  const outputDetails = asRecord(u["output_tokens_details"]);
-  const reasoning = num(outputDetails?.["thinking_tokens"]) ?? 0;
+  const input = num(u['input_tokens']) ?? 0;
+  const output = num(u['output_tokens']) ?? 0;
+  const cacheRead = num(u['cache_read_input_tokens']) ?? 0;
+  const cacheWrite = num(u['cache_creation_input_tokens']) ?? 0;
+  const outputDetails = asRecord(u['output_tokens_details']);
+  const reasoning = num(outputDetails?.['thinking_tokens']) ?? 0;
   // 40 §2.2：Anthropic 的总输入 = input + cache_creation + cache_read（官方口径）
-  const total = num(u["total_tokens"]) ?? input + cacheWrite + cacheRead + output;
+  const total = num(u['total_tokens']) ?? input + cacheWrite + cacheRead + output;
   return {
     input_tokens: input,
     output_tokens: output,
@@ -411,11 +422,11 @@ function tokenFromAnthropic(u: Record<string, unknown>): TokenUsage {
 }
 
 function tokenFromGemini(u: Record<string, unknown>): TokenUsage {
-  const prompt = num(u["promptTokenCount"]) ?? 0;
-  const candidates = num(u["candidatesTokenCount"]) ?? 0;
-  const cacheRead = num(u["cachedContentTokenCount"]) ?? 0;
-  const thoughts = num(u["thoughtsTokenCount"]) ?? 0;
-  const total = num(u["totalTokenCount"]) ?? prompt + candidates;
+  const prompt = num(u['promptTokenCount']) ?? 0;
+  const candidates = num(u['candidatesTokenCount']) ?? 0;
+  const cacheRead = num(u['cachedContentTokenCount']) ?? 0;
+  const thoughts = num(u['thoughtsTokenCount']) ?? 0;
+  const total = num(u['totalTokenCount']) ?? prompt + candidates;
   return {
     input_tokens: prompt,
     output_tokens: candidates,

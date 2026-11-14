@@ -12,26 +12,22 @@
  * 分别由工具循环与本 Runner 的错误路径调用。
  */
 
-import type {
-  CanonicalError,
-  CanonicalResponseEnvelope,
-  RequestTrace,
-} from "../../ir/index.js";
-import { createCanonicalError, createRequestTrace, emptyUsage } from "../../ir/index.js";
-import { CTX_STATE_KEYS } from "../../ir/index.js";
-import type { MutableRequestContext } from "../context.js";
-import { createContext, type S0Options } from "./stages/s0-ingress.js";
-import { S0Ingress } from "./stages/s0-ingress.js";
-import { S1Decode } from "./stages/s1-decode.js";
-import { S2Route } from "./stages/s2-route.js";
-import { S3OnRequest } from "./stages/s3-on-request.js";
-import { S4Encode } from "./stages/s4-encode.js";
-import { S5Upstream } from "./stages/s5-upstream.js";
-import { S6ProviderDecode } from "./stages/s6-provider-decode.js";
-import { S7OnStreamChunk } from "./stages/s7-on-stream-chunk.js";
-import { S8ClientEncode } from "./stages/s8-client-encode.js";
-import { S9OnResponse } from "./stages/s9-on-response.js";
-import { S10UsageEmitter } from "./stages/s10-usage-emitter.js";
+import type { CanonicalError, CanonicalResponseEnvelope, RequestTrace } from '../../ir/index.js';
+import { createCanonicalError, createRequestTrace, emptyUsage } from '../../ir/index.js';
+import { CTX_STATE_KEYS } from '../../ir/index.js';
+import type { MutableRequestContext } from '../context.js';
+import { createContext, type S0Options } from './stages/s0-ingress.js';
+import { S0Ingress } from './stages/s0-ingress.js';
+import { S1Decode } from './stages/s1-decode.js';
+import { S2Route } from './stages/s2-route.js';
+import { S3OnRequest } from './stages/s3-on-request.js';
+import { S4Encode } from './stages/s4-encode.js';
+import { S5Upstream } from './stages/s5-upstream.js';
+import { S6ProviderDecode } from './stages/s6-provider-decode.js';
+import { S7OnStreamChunk } from './stages/s7-on-stream-chunk.js';
+import { S8ClientEncode } from './stages/s8-client-encode.js';
+import { S9OnResponse } from './stages/s9-on-response.js';
+import { S10UsageEmitter } from './stages/s10-usage-emitter.js';
 import type {
   PipelineDeps,
   PipelineInput,
@@ -39,13 +35,13 @@ import type {
   PipelineServices,
   PipelineState,
   Stage,
-} from "./types.js";
-import type { ClientSink } from "./sink.js";
-import { shouldUseGatewayLoop, runToolLoop } from "./tool-loop.js";
+} from './types.js';
+import type { ClientSink } from './sink.js';
+import { shouldUseGatewayLoop, runToolLoop } from './tool-loop.js';
 
 export interface PipelineRunnerOptions {
   /** S0 的鉴权器（Phase 1 默认 permissive；真实 virtual key 在 auth/ 模块）。 */
-  authenticator?: S0Options["authenticator"];
+  authenticator?: S0Options['authenticator'];
 }
 
 export class PipelineRunner {
@@ -80,10 +76,10 @@ export class PipelineRunner {
     const deps: PipelineDeps = { ...this.services, sink };
     const now = this.services.clock.now();
     const requestId = this.services.ids.requestId();
-    const traceId = input.headers["traceparent"];
+    const traceId = input.headers['traceparent'];
 
     const onDisableFastPath = (reason: string) => {
-      this.services.metrics.increment("pipeline.fast_path_disabled", 1, { reason });
+      this.services.metrics.increment('pipeline.fast_path_disabled', 1, { reason });
     };
 
     const ctx: MutableRequestContext = createContext(
@@ -97,7 +93,7 @@ export class PipelineRunner {
     const state: PipelineState = {
       ctx,
       input,
-      modality: "chat",
+      modality: 'chat',
       route_ready: false,
       bytes_written: false,
       trace: createRequestTrace(requestId, input.client_format, input.client_format),
@@ -136,28 +132,31 @@ export class PipelineRunner {
       await stage.execute(state, deps);
       // 观测：哪些阶段触发了完整物化（D-fastpath-1 的代价观测）
       if (!before && state.materialized) {
-        deps.metrics.increment("pipeline.materialize", 1, { stage: stage.id });
+        deps.metrics.increment('pipeline.materialize', 1, { stage: stage.id });
       }
     };
 
     // ---- S0–S3 ----
-    for (const id of ["S0", "S1", "S2", "S3"]) {
+    for (const id of ['S0', 'S1', 'S2', 'S3']) {
       await run(id);
-      if (id === "S3" && (state.short_circuit_response !== undefined || state.short_circuit_error !== undefined)) {
-        state.status = state.short_circuit_error !== undefined ? "error" : "short_circuit";
+      if (
+        id === 'S3' &&
+        (state.short_circuit_response !== undefined || state.short_circuit_error !== undefined)
+      ) {
+        state.status = state.short_circuit_error !== undefined ? 'error' : 'short_circuit';
         state.error = state.short_circuit_error;
         state.final_response = state.short_circuit_response;
         if (state.short_circuit_response !== undefined) {
           state.usage = state.short_circuit_response.usage;
         }
-        await run("S9");
-        await run("S10");
+        await run('S9');
+        await run('S10');
         return;
       }
     }
 
     // ---- S4–S8（第一轮）----
-    for (const id of ["S4", "S5", "S6", "S7", "S8"]) {
+    for (const id of ['S4', 'S5', 'S6', 'S7', 'S8']) {
       await run(id);
     }
 
@@ -181,7 +180,7 @@ export class PipelineRunner {
               if (stage === undefined) throw new Error(`未知阶段: ${id}`);
               await stage.execute(turnState, deps);
             };
-            for (const id of ["S4", "S5", "S6", "S7", "S8"]) {
+            for (const id of ['S4', 'S5', 'S6', 'S7', 'S8']) {
               await turnRun(id);
             }
             // 把这一轮的产物合并回主 state（S9/S10 只跑一次）
@@ -204,13 +203,13 @@ export class PipelineRunner {
       state.turns = loopResult.turns;
       state.response = loopResult.response;
       if (loopResult.exceeded) {
-        ctx.warn("agentic_loop_exceeded", `turns=${loopResult.turns}`);
+        ctx.warn('agentic_loop_exceeded', `turns=${loopResult.turns}`);
       }
     }
 
     // ---- S9 / S10（整个请求只跑一次）----
-    await run("S9");
-    await run("S10");
+    await run('S9');
+    await run('S10');
   }
 
   private successOutcome(state: PipelineState): PipelineOutcome {
@@ -239,7 +238,7 @@ export class PipelineRunner {
     const { ctx } = state;
     const canonical = toCanonicalError(err, ctx.request_id);
     state.error = canonical;
-    state.status = "error";
+    state.status = 'error';
 
     // onError 是横切点：任意阶段出错都会调用，且**不改变控制流**（30 §3）
     await deps.pluginHost.notifyError(canonical, ctx);
@@ -252,8 +251,8 @@ export class PipelineRunner {
           ? { error: { message: canonical.message, type: canonical.code, code: canonical.code } }
           : clientAdaptor.encodeResponse(errorEnvelope(canonical, ctx), ctx);
       deps.sink.start(canonical.http_status, {
-        "content-type": "application/json",
-        "x-request-id": ctx.request_id,
+        'content-type': 'application/json',
+        'x-request-id': ctx.request_id,
       });
       deps.sink.write(JSON.stringify(body));
       state.bytes_written = true;
@@ -268,7 +267,7 @@ export class PipelineRunner {
     }
 
     // S10 仍然要跑：失败也要记账（status = "error"）
-    state.usage = state.usage ?? emptyUsage("provider");
+    state.usage = state.usage ?? emptyUsage('provider');
     try {
       await this.stages[10]!.execute(state, deps);
     } catch {
@@ -281,7 +280,7 @@ export class PipelineRunner {
     state.trace.dropped_capabilities = state.dropped_capabilities;
     state.trace.conversion_chain = state.conversion_chain;
 
-    deps.metrics.increment("pipeline.error", 1, { code: canonical.code });
+    deps.metrics.increment('pipeline.error', 1, { code: canonical.code });
 
     return {
       status: state.bytes_written && state.upstream_status === 200 ? 200 : canonical.http_status,
@@ -298,12 +297,12 @@ export class PipelineRunner {
 
 function errorEnvelope(err: CanonicalError, ctx: MutableRequestContext): CanonicalResponseEnvelope {
   return {
-    ir_version: "ag-ir/1",
-    kind: "chat",
+    ir_version: 'ag-ir/1',
+    kind: 'chat',
     request_id: ctx.request_id,
-    usage: emptyUsage("provider"),
-    finish_reason: "error",
-    payload: { message: { role: "assistant", parts: [{ type: "refusal", reason: err.message }] } },
+    usage: emptyUsage('provider'),
+    finish_reason: 'error',
+    payload: { message: { role: 'assistant', parts: [{ type: 'refusal', reason: err.message }] } },
     warnings: [],
     raw: {},
   };
@@ -311,16 +310,16 @@ function errorEnvelope(err: CanonicalError, ctx: MutableRequestContext): Canonic
 
 function toCanonicalError(err: unknown, requestId: string): CanonicalError {
   if (
-    typeof err === "object" &&
+    typeof err === 'object' &&
     err !== null &&
-    "code" in err &&
-    "http_status" in err &&
-    "request_id" in err
+    'code' in err &&
+    'http_status' in err &&
+    'request_id' in err
   ) {
     return err as CanonicalError;
   }
   const message = err instanceof Error ? err.message : String(err);
-  return createCanonicalError("internal_error", message, requestId);
+  return createCanonicalError('internal_error', message, requestId);
 }
 
 /** 便捷导出：RequestTrace 与 CTX_STATE_KEYS 供外部观测用。 */

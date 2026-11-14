@@ -10,13 +10,13 @@
  * 让审计类插件看到这次请求。
  */
 
-import type { PipelineDeps, PipelineState, Stage } from "../types.js";
-import type { CanonicalResponseEnvelope, ShortCircuit } from "../../../ir/index.js";
-import { emptyUsage } from "../../../ir/index.js";
+import type { PipelineDeps, PipelineState, Stage } from '../types.js';
+import type { CanonicalResponseEnvelope, ShortCircuit } from '../../../ir/index.js';
+import { emptyUsage } from '../../../ir/index.js';
 
 export class S9OnResponse implements Stage {
-  readonly id = "S9";
-  readonly name = "onResponse";
+  readonly id = 'S9';
+  readonly name = 'onResponse';
 
   async execute(state: PipelineState, deps: PipelineDeps): Promise<void> {
     const started = deps.clock.now();
@@ -32,14 +32,17 @@ export class S9OnResponse implements Stage {
       state.final_response = res;
       state.usage = res.usage;
       state.finish_reason = res.finish_reason as typeof state.finish_reason;
-      ctx.recordStage(this.id, deps.clock.now() - started, "short_circuit");
-      deps.metrics.increment("pipeline.stage", 1, { stage: this.id, result: "short_circuit" });
+      ctx.recordStage(this.id, deps.clock.now() - started, 'short_circuit');
+      deps.metrics.increment('pipeline.stage', 1, { stage: this.id, result: 'short_circuit' });
       return;
     }
 
     if (state.short_circuit_error !== undefined) {
-      ctx.recordStage(this.id, deps.clock.now() - started, "short_circuit_error");
-      deps.metrics.increment("pipeline.stage", 1, { stage: this.id, result: "short_circuit_error" });
+      ctx.recordStage(this.id, deps.clock.now() - started, 'short_circuit_error');
+      deps.metrics.increment('pipeline.stage', 1, {
+        stage: this.id,
+        result: 'short_circuit_error',
+      });
       return;
     }
 
@@ -51,7 +54,7 @@ export class S9OnResponse implements Stage {
       const outcome = await deps.pluginHost.runOnResponse(res, ctx);
       if (isShortCircuit(outcome)) {
         // 流式下 ShortCircuit 不允许（25 §7.1）；非流式下视为改写
-        ctx.warn("onResponse_short_circuit_ignored");
+        ctx.warn('onResponse_short_circuit_ignored');
       } else if (outcome !== undefined && outcome !== null) {
         res = outcome as CanonicalResponseEnvelope;
       }
@@ -62,11 +65,11 @@ export class S9OnResponse implements Stage {
       state.usage = res.usage;
       state.finish_reason = res.finish_reason as typeof state.finish_reason;
     } else if (state.usage === undefined) {
-      state.usage = emptyUsage("provider");
+      state.usage = emptyUsage('provider');
     }
 
     ctx.recordStage(this.id, deps.clock.now() - started);
-    deps.metrics.increment("pipeline.stage", 1, { stage: this.id });
+    deps.metrics.increment('pipeline.stage', 1, { stage: this.id });
   }
 }
 
@@ -74,24 +77,24 @@ export class S9OnResponse implements Stage {
 export function synthesizeFromEvents(state: PipelineState): CanonicalResponseEnvelope | undefined {
   const events = state.stream_events;
   if (events === undefined || events.length === 0) return undefined;
-  const lastUsage = [...events].reverse().find((e) => e.type === "usage");
-  const finish = [...events].reverse().find((e) => e.type === "finish");
+  const lastUsage = [...events].reverse().find((e) => e.type === 'usage');
+  const finish = [...events].reverse().find((e) => e.type === 'finish');
   return {
-    ir_version: "ag-ir/1",
-    kind: "chat",
+    ir_version: 'ag-ir/1',
+    kind: 'chat',
     request_id: state.ctx.request_id,
     usage:
-      (finish !== undefined && finish.type === "finish" ? finish.usage : undefined) ??
-      (lastUsage !== undefined && lastUsage.type === "usage" ? lastUsage.usage : undefined) ??
-      emptyUsage("provider"),
+      (finish !== undefined && finish.type === 'finish' ? finish.usage : undefined) ??
+      (lastUsage !== undefined && lastUsage.type === 'usage' ? lastUsage.usage : undefined) ??
+      emptyUsage('provider'),
     finish_reason:
-      (finish !== undefined && finish.type === "finish" ? finish.finish_reason : "stop") ?? "stop",
-    payload: { message: { role: "assistant", parts: [] } },
+      (finish !== undefined && finish.type === 'finish' ? finish.finish_reason : 'stop') ?? 'stop',
+    payload: { message: { role: 'assistant', parts: [] } },
     warnings: [],
     raw: {},
   };
 }
 
 function isShortCircuit(value: unknown): value is ShortCircuit {
-  return typeof value === "object" && value !== null && "short_circuit" in value;
+  return typeof value === 'object' && value !== null && 'short_circuit' in value;
 }

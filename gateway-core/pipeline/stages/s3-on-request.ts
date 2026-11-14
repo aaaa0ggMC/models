@@ -14,18 +14,18 @@
  * canonical"硬约束的直接后果：插件拿不到浅解析产物，只有完整 canonical。
  */
 
-import type { PipelineDeps, PipelineState, Stage } from "../types.js";
-import type { ShortCircuit } from "../../../ir/index.js";
+import type { PipelineDeps, PipelineState, Stage } from '../types.js';
+import type { ShortCircuit } from '../../../ir/index.js';
 
 export class S3OnRequest implements Stage {
-  readonly id = "S3";
-  readonly name = "onRequest";
+  readonly id = 'S3';
+  readonly name = 'onRequest';
 
   async execute(state: PipelineState, deps: PipelineDeps): Promise<void> {
     const started = deps.clock.now();
     const { ctx } = state;
     const lazy = state.lazy;
-    if (lazy === undefined) throw new Error("S3 需要 S1 的惰性请求句柄");
+    if (lazy === undefined) throw new Error('S3 需要 S1 的惰性请求句柄');
 
     // D-fastpath-1：有请求侧插件 → 物化完整 canonical
     let req = lazy.full();
@@ -39,29 +39,33 @@ export class S3OnRequest implements Stage {
       state.short_circuit_response = sc.response;
       state.short_circuit_error = sc.error;
       ctx.recordStage(this.id, deps.clock.now() - started, `short_circuit:${sc.reason}`);
-      deps.metrics.increment("pipeline.stage", 1, { stage: this.id, result: "short_circuit" });
+      deps.metrics.increment('pipeline.stage', 1, { stage: this.id, result: 'short_circuit' });
       return;
     }
 
     // 插件可能改写了 canonical：标记被改写过的路径（10 §7.2 的"未被改动"判定）
     const rewritten = outcome as typeof req;
     if (rewritten !== req) {
-      ctx.state["rewritten_paths"] = [
-        ...((ctx.state["rewritten_paths"] as string[]) ?? []),
-        "messages",
+      ctx.state['rewritten_paths'] = [
+        ...((ctx.state['rewritten_paths'] as string[]) ?? []),
+        'messages',
       ];
       // 插件改写了内容 → 关闭 fast path（20 §4.1 第三条）
-      if (ctx.fast_path) ctx.disableFastPath("plugin rewrote canonical");
+      if (ctx.fast_path) ctx.disableFastPath('plugin rewrote canonical');
       state.canonical = rewritten;
       req = rewritten;
       state.materialized = true;
     }
 
-    ctx.recordStage(this.id, deps.clock.now() - started, `plugins=${deps.pluginHost.requestSide().length}`);
-    deps.metrics.increment("pipeline.stage", 1, { stage: this.id });
+    ctx.recordStage(
+      this.id,
+      deps.clock.now() - started,
+      `plugins=${deps.pluginHost.requestSide().length}`,
+    );
+    deps.metrics.increment('pipeline.stage', 1, { stage: this.id });
   }
 }
 
 function isShortCircuit(value: unknown): value is ShortCircuit {
-  return typeof value === "object" && value !== null && "short_circuit" in value;
+  return typeof value === 'object' && value !== null && 'short_circuit' in value;
 }

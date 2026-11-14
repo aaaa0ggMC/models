@@ -7,10 +7,10 @@
  * `state` 是工具调用循环与插件跨阶段协作的唯一通道（20 §2.1）。
  */
 
-import type { FormatId } from "./format.js";
-import type { CanonicalError } from "./error.js";
-import type { StageMetric } from "./trace.js";
-import type { CanonicalUsage } from "./usage.js";
+import type { FormatId } from './format.js';
+import type { CanonicalError } from './error.js';
+import type { StageMetric } from './trace.js';
+import type { CanonicalUsage } from './usage.js';
 
 /** S2 路由后的解析结果。 */
 export interface ResolvedRoute {
@@ -58,19 +58,19 @@ export interface AuthContext {
 /** 阶段间共享的暂存区里约定俗成的键（集中在这里，避免魔法字符串散落）。 */
 export const CTX_STATE_KEYS = {
   /** 网关工具循环的 tool id 映射表（canonical id ↔ provider 侧 id）。 */
-  TOOL_ID_MAP: "tool_id_map",
+  TOOL_ID_MAP: 'tool_id_map',
   /** 插件改写过的 canonical 路径（用于 raw 回写的"未被改动"判定，10 §7.2）。 */
-  REWRITTEN_PATHS: "rewritten_paths",
+  REWRITTEN_PATHS: 'rewritten_paths',
   /** 关闭 fast path 的原因（20 §4.1）。 */
-  FAST_PATH_DISABLED_REASON: "fast_path_disabled_reason",
+  FAST_PATH_DISABLED_REASON: 'fast_path_disabled_reason',
   /** 压缩插件的记账结果（30 §4.2）。 */
-  COMPACTION: "compaction",
+  COMPACTION: 'compaction',
   /** 网关工具循环的轮次 canonical 摘要。 */
-  TRACE: "trace",
+  TRACE: 'trace',
   /** 惰性解码的请求信封（D-fastpath-1）：S1 只填信封级字段。 */
-  LAZY_ENVELOPE: "lazy_envelope",
+  LAZY_ENVELOPE: 'lazy_envelope',
   /** 客户端原始请求体字节引用（fast path 透传用）。 */
-  RAW_BODY: "raw_body",
+  RAW_BODY: 'raw_body',
 } as const;
 
 export interface RequestContext {

@@ -46,7 +46,10 @@
     "id": { "type": "string", "description": "tool_use：canonical 权威 id，必须是干净 id（D7b）" },
     "name": { "type": "string" },
     "input": { "type": "object", "description": "tool_use：已解析的参数对象（D7）" },
-    "raw_arguments": { "type": "string", "description": "tool_use：上游原始参数串，回写时优先用它（§7.3）" },
+    "raw_arguments": {
+      "type": "string",
+      "description": "tool_use：上游原始参数串，回写时优先用它（§7.3）"
+    },
     "tool_use_id": { "type": "string" },
     "content": {
       "description": "tool_result：结构化 parts 或纯文本",

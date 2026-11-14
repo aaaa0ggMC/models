@@ -23,7 +23,11 @@
             "type": "redacted_thinking",
             "data": "EroWCmNvbXBsZXRlbHk="
           },
-          { "type": "text", "text": "假设根号 2 是有理数…", "cache_control": { "type": "ephemeral" } }
+          {
+            "type": "text",
+            "text": "假设根号 2 是有理数…",
+            "cache_control": { "type": "ephemeral" }
+          }
         ]
       }
     ],

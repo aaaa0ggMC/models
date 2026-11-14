@@ -10,8 +10,8 @@
  *   3. **没有回压路径**：队列满时按 drop_policy 丢弃最旧 + 计数，绝不阻塞请求。
  */
 
-import type { DropPolicy, UsageEmitter, UsageSink } from "./emitter.js";
-import type { UsageRecord } from "./usage-record.js";
+import type { DropPolicy, UsageEmitter, UsageSink } from './emitter.js';
+import type { UsageRecord } from './usage-record.js';
 
 export interface MemoryUsageEmitterOptions {
   /** 队列容量上限（60 §2：默认 10k 条）。 */
@@ -42,7 +42,7 @@ export class MemoryUsageEmitter implements UsageEmitter {
 
   constructor(options: MemoryUsageEmitterOptions = {}) {
     this.capacity = options.capacity ?? 10_000;
-    this.dropPolicy = options.drop_policy ?? "drop_oldest";
+    this.dropPolicy = options.drop_policy ?? 'drop_oldest';
     this.batchSize = options.batchSize ?? 500;
     this.flushIntervalMs = options.flushIntervalMs ?? 2_000;
     if (options.autoFlush ?? true) {
@@ -63,7 +63,7 @@ export class MemoryUsageEmitter implements UsageEmitter {
    */
   emit(record: UsageRecord): void {
     if (this.queue.length >= this.capacity) {
-      if (this.dropPolicy === "drop_newest") {
+      if (this.dropPolicy === 'drop_newest') {
         this.droppedCount += 1;
         return;
       }

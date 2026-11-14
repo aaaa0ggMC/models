@@ -10,36 +10,33 @@
  *   - 不跟随 redirect（3xx 作为 provider error）。
  */
 
-import type { CanonicalError, CanonicalErrorCode } from "../../ir/index.js";
+import type { CanonicalError, CanonicalErrorCode } from '../../ir/index.js';
 
 /** 20 §7.3 的决策矩阵，逐行落地。 */
-const MATRIX: Record<
-  string,
-  { same_attempt: boolean; fallback: boolean; note: string }
-> = {
+const MATRIX: Record<string, { same_attempt: boolean; fallback: boolean; note: string }> = {
   // 连接失败 / DNS
-  connection_failed: { same_attempt: true, fallback: true, note: "网络错误" },
+  connection_failed: { same_attempt: true, fallback: true, note: '网络错误' },
   // 429
-  "429": { same_attempt: true, fallback: true, note: "遵守 retry-after" },
+  '429': { same_attempt: true, fallback: true, note: '遵守 retry-after' },
   // 500 / 502 / 503
-  "500": { same_attempt: true, fallback: true, note: "" },
-  "502": { same_attempt: true, fallback: true, note: "" },
-  "503": { same_attempt: true, fallback: true, note: "" },
+  '500': { same_attempt: true, fallback: true, note: '' },
+  '502': { same_attempt: true, fallback: true, note: '' },
+  '503': { same_attempt: true, fallback: true, note: '' },
   // Anthropic overloaded_error
-  overloaded_error: { same_attempt: true, fallback: true, note: "" },
+  overloaded_error: { same_attempt: true, fallback: true, note: '' },
   // 超时（TTFB）
-  ttfb_timeout: { same_attempt: true, fallback: true, note: "" },
+  ttfb_timeout: { same_attempt: true, fallback: true, note: '' },
   // 流式中途断开
-  stream_broken: { same_attempt: false, fallback: false, note: "已出字节，不可回退" },
+  stream_broken: { same_attempt: false, fallback: false, note: '已出字节，不可回退' },
   // 400 参数错误
-  "400": { same_attempt: false, fallback: false, note: "重试无意义，直接映射为客户端 400" },
+  '400': { same_attempt: false, fallback: false, note: '重试无意义，直接映射为客户端 400' },
   // 401 / 403
-  "401": { same_attempt: false, fallback: true, note: "换 key/provider 可能恢复" },
-  "403": { same_attempt: false, fallback: true, note: "换 key/provider 可能恢复" },
+  '401': { same_attempt: false, fallback: true, note: '换 key/provider 可能恢复' },
+  '403': { same_attempt: false, fallback: true, note: '换 key/provider 可能恢复' },
   // context_length_exceeded
-  context_length_exceeded: { same_attempt: false, fallback: true, note: "换更大上下文的 provider" },
+  context_length_exceeded: { same_attempt: false, fallback: true, note: '换更大上下文的 provider' },
   // content_filtered
-  content_filtered: { same_attempt: false, fallback: true, note: "可配置" },
+  content_filtered: { same_attempt: false, fallback: true, note: '可配置' },
 };
 
 export interface RetryDecision {
@@ -71,7 +68,7 @@ export function decideRetry(
   return {
     same_attempt: row.same_attempt && alreadyRetried < maxRetries,
     fallback: row.fallback,
-    ...(row.note === "" ? {} : { note: row.note }),
+    ...(row.note === '' ? {} : { note: row.note }),
   };
 }
 
@@ -82,8 +79,8 @@ export function signalFromError(err: CanonicalError): string {
   }
   if (MATRIX[err.code] !== undefined) return err.code;
   if (err.http_status >= 500) return String(err.http_status);
-  if (err.http_status === 429) return "429";
-  if (err.http_status === 400) return "400";
+  if (err.http_status === 429) return '429';
+  if (err.http_status === 400) return '400';
   if (err.http_status === 401 || err.http_status === 403) return String(err.http_status);
   return `unknown:${err.code}`;
 }
@@ -118,24 +115,24 @@ export function maybeMarkPromptTooLong(err: CanonicalError, upstreamBody: string
       upstreamBody,
     );
   if (!looksLikeContextWindow) return err;
-  return { ...err, capability_rejected: "prompt_too_long" };
+  return { ...err, capability_rejected: 'prompt_too_long' };
 }
 
 /** 常见错误码 → canonical 错误码（S5 用）。 */
 export function canonicalCodeFromStatus(status: number, providerCode?: string): CanonicalErrorCode {
-  if (providerCode === "overloaded_error") return "provider_unavailable";
+  if (providerCode === 'overloaded_error') return 'provider_unavailable';
   switch (status) {
     case 400:
-      return "capability_unsupported";
+      return 'capability_unsupported';
     case 401:
     case 403:
-      return "auth_failed";
+      return 'auth_failed';
     case 429:
-      return "rate_limited";
+      return 'rate_limited';
     case 408:
     case 504:
-      return "upstream_timeout";
+      return 'upstream_timeout';
     default:
-      return status >= 500 ? "provider_unavailable" : "upstream_error";
+      return status >= 500 ? 'provider_unavailable' : 'upstream_error';
   }
 }

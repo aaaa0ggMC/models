@@ -12,17 +12,17 @@
  * 矩阵三态（40 §5）：已实现 / 计划 / 按需。规则：`planned` 只允许存在于当前 Phase 的交付物清单里。
  */
 
-import type { ModalityKind } from "./modality.js";
-import type { FormatId } from "./format.js";
-import type { UsageUnits } from "./usage.js";
+import type { ModalityKind } from './modality.js';
+import type { FormatId } from './format.js';
+import type { UsageUnits } from './usage.js';
 
-export type CapabilityStatus = "implemented" | "planned" | "on-demand";
+export type CapabilityStatus = 'implemented' | 'planned' | 'on-demand';
 
-export type StreamingMode = "none" | "sse" | "chunked-binary" | "ws-duplex";
+export type StreamingMode = 'none' | 'sse' | 'chunked-binary' | 'ws-duplex';
 
-export type StreamingFraming = "json-sse" | "raw-bytes" | "ws-messages";
+export type StreamingFraming = 'json-sse' | 'raw-bytes' | 'ws-messages';
 
-export type UsageSourceKind = "provider" | "estimated";
+export type UsageSourceKind = 'provider' | 'estimated';
 
 export interface CapabilityEntry {
   /** 主键从 model 改为 (access_path, model)。 */

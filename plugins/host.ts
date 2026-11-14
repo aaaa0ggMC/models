@@ -30,8 +30,8 @@ import type {
   ShortCircuit,
   ToolResultPart,
   ToolUsePart,
-} from "../ir/index.js";
-import { effectivePluginScope, validatePluginManifest } from "../ir/index.js";
+} from '../ir/index.js';
+import { effectivePluginScope, validatePluginManifest } from '../ir/index.js';
 
 export interface PluginRegistration {
   plugin: Plugin;
@@ -42,7 +42,7 @@ export interface PluginRegistration {
 export class PluginRegistrationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "PluginRegistrationError";
+    this.name = 'PluginRegistrationError';
   }
 }
 
@@ -104,7 +104,7 @@ export class DefaultPluginHost implements PluginHost {
   register(plugin: Plugin, config: unknown = {}): void {
     const errors = validatePluginManifest(plugin.manifest);
     if (errors.length > 0) {
-      throw new PluginRegistrationError(`插件 manifest 不合法:\n- ${errors.join("\n- ")}`);
+      throw new PluginRegistrationError(`插件 manifest 不合法:\n- ${errors.join('\n- ')}`);
     }
     const existing = this.registrations.get(plugin.manifest.name);
     if (existing !== undefined) {
@@ -132,7 +132,7 @@ export class DefaultPluginHost implements PluginHost {
     return this.registrations.get(name)?.enabled ?? false;
   }
 
-  private byHook(hook: PluginManifest["hooks"][number]): Plugin[] {
+  private byHook(hook: PluginManifest['hooks'][number]): Plugin[] {
     return [...this.registrations.values()]
       .filter((r) => r.enabled && r.plugin.manifest.hooks.includes(hook))
       .sort((a, b) => (a.plugin.manifest.order ?? 100) - (b.plugin.manifest.order ?? 100))
@@ -140,19 +140,19 @@ export class DefaultPluginHost implements PluginHost {
   }
 
   requestSide(): Plugin[] {
-    return this.byHook("onRequest");
+    return this.byHook('onRequest');
   }
   responseSide(): Plugin[] {
-    return this.byHook("onResponse");
+    return this.byHook('onResponse');
   }
   streamSide(): Plugin[] {
-    return this.byHook("onStreamChunk");
+    return this.byHook('onStreamChunk');
   }
   errorSide(): Plugin[] {
-    return this.byHook("onError");
+    return this.byHook('onError');
   }
   toolSide(): Plugin[] {
-    return this.byHook("onToolCall");
+    return this.byHook('onToolCall');
   }
 
   hasRequestSide(): boolean {
@@ -160,7 +160,7 @@ export class DefaultPluginHost implements PluginHost {
   }
 
   hasFullCanonicalRequestSide(): boolean {
-    return this.requestSide().some((p) => effectivePluginScope(p.manifest) === "full-canonical");
+    return this.requestSide().some((p) => effectivePluginScope(p.manifest) === 'full-canonical');
   }
 
   onChange(listener: () => void): void {
@@ -194,16 +194,16 @@ export class DefaultPluginHost implements PluginHost {
       ]);
       this.services.metrics.timing(`plugin.${hook}.duration_ms`, Date.now() - started, {
         plugin: plugin.manifest.name,
-        result: "ok",
+        result: 'ok',
       });
       return { ok: true, value: result };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      this.services.metrics.increment("plugin.error", 1, {
+      this.services.metrics.increment('plugin.error', 1, {
         plugin: plugin.manifest.name,
         hook,
       });
-      this.services.log.warn("plugin 调用失败，按不改写处理", {
+      this.services.log.warn('plugin 调用失败，按不改写处理', {
         plugin: plugin.manifest.name,
         hook,
         error: message,
@@ -223,14 +223,19 @@ export class DefaultPluginHost implements PluginHost {
     let current = req;
     for (const plugin of this.requestSide()) {
       if (plugin.onRequest === undefined) continue;
-      const res = await this.invoke(plugin, "onRequest", () => plugin.onRequest!(current, ctx), ctx);
+      const res = await this.invoke(
+        plugin,
+        'onRequest',
+        () => plugin.onRequest!(current, ctx),
+        ctx,
+      );
       if (!res.ok) {
         if (plugin.manifest.fatal === true) {
           return {
             short_circuit: true,
             reason: `plugin ${plugin.manifest.name} failed (fatal)`,
             error: {
-              code: "plugin_error",
+              code: 'plugin_error',
               message: `插件 ${plugin.manifest.name} 失败且声明 fatal: true`,
               http_status: 500,
               retryable: false,
@@ -254,14 +259,19 @@ export class DefaultPluginHost implements PluginHost {
     let current = res;
     for (const plugin of this.responseSide()) {
       if (plugin.onResponse === undefined) continue;
-      const out = await this.invoke(plugin, "onResponse", () => plugin.onResponse!(current, ctx), ctx);
+      const out = await this.invoke(
+        plugin,
+        'onResponse',
+        () => plugin.onResponse!(current, ctx),
+        ctx,
+      );
       if (!out.ok) {
         if (plugin.manifest.fatal === true) {
           return {
             short_circuit: true,
             reason: `plugin ${plugin.manifest.name} failed (fatal)`,
             error: {
-              code: "plugin_error",
+              code: 'plugin_error',
               message: `插件 ${plugin.manifest.name} 失败且声明 fatal: true`,
               http_status: 500,
               retryable: false,
@@ -285,11 +295,13 @@ export class DefaultPluginHost implements PluginHost {
     let current: CanonicalStreamEvent | CanonicalStreamEvent[] | null = ev;
     for (const plugin of this.streamSide()) {
       if (plugin.onStreamChunk === undefined) continue;
-      const single: CanonicalStreamEvent | null = Array.isArray(current) ? (current[0] ?? null) : current;
+      const single: CanonicalStreamEvent | null = Array.isArray(current)
+        ? (current[0] ?? null)
+        : current;
       if (single === null) return null;
       const out = await this.invoke<CanonicalStreamEvent | CanonicalStreamEvent[] | null>(
         plugin,
-        "onStreamChunk",
+        'onStreamChunk',
         (): MaybePromise<CanonicalStreamEvent | CanonicalStreamEvent[] | null> =>
           plugin.onStreamChunk!(single, ctx),
         ctx,
@@ -305,19 +317,19 @@ export class DefaultPluginHost implements PluginHost {
     // 覆盖网关默认执行结果。没有插件时由调用方用默认执行器。
     for (const plugin of this.toolSide()) {
       if (plugin.onToolCall === undefined) continue;
-      const out = await this.invoke(plugin, "onToolCall", () => plugin.onToolCall!(call, ctx), ctx);
+      const out = await this.invoke(plugin, 'onToolCall', () => plugin.onToolCall!(call, ctx), ctx);
       if (out.ok) return out.value;
     }
     throw new Error(
       `工具 ${call.name} 没有可用的 onToolCall 插件执行器。` +
-        "网关 agentic loop 里的工具必须由插件或内置执行器提供（30 §2 registerTool）。",
+        '网关 agentic loop 里的工具必须由插件或内置执行器提供（30 §2 registerTool）。',
     );
   }
 
   async notifyError(err: CanonicalError, ctx: RequestContext): Promise<void> {
     for (const plugin of this.errorSide()) {
       if (plugin.onError === undefined) continue;
-      await this.invoke(plugin, "onError", () => plugin.onError!(err, ctx), ctx);
+      await this.invoke(plugin, 'onError', () => plugin.onError!(err, ctx), ctx);
       // onError 的返回值一律忽略：它不改变控制流（30 §3）
     }
   }
@@ -337,5 +349,10 @@ export class DefaultPluginHost implements PluginHost {
 }
 
 function isShortCircuit<T>(value: PluginResult<T>): value is ShortCircuit {
-  return typeof value === "object" && value !== null && "short_circuit" in value && value.short_circuit === true;
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'short_circuit' in value &&
+    value.short_circuit === true
+  );
 }

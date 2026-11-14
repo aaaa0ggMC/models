@@ -10,13 +10,13 @@
  * S6（非 fast path）。浅解析产物见 lazy-decode.ts 的 ROUTING_REQUIRED_FIELDS。
  */
 
-import type { PipelineDeps, PipelineState, Stage } from "../types.js";
-import { createCanonicalError } from "../../../ir/index.js";
-import { LazyRequest, shallowDecode } from "../lazy-decode.js";
+import type { PipelineDeps, PipelineState, Stage } from '../types.js';
+import { createCanonicalError } from '../../../ir/index.js';
+import { LazyRequest, shallowDecode } from '../lazy-decode.js';
 
 export class S1Decode implements Stage {
-  readonly id = "S1";
-  readonly name = "Decode";
+  readonly id = 'S1';
+  readonly name = 'Decode';
 
   async execute(state: PipelineState, deps: PipelineDeps): Promise<void> {
     const started = deps.clock.now();
@@ -25,9 +25,9 @@ export class S1Decode implements Stage {
     const adaptor = deps.adaptors.find(ctx.client_format, state.modality);
     if (adaptor === undefined) {
       throw createCanonicalError(
-        "capability_unsupported",
+        'capability_unsupported',
         `客户端格式 ${ctx.client_format} 没有适配 ${state.modality} 模态的 adaptor。` +
-          "adaptor 按需写（40 §1.0），缺失说明该组合尚未实现。",
+          'adaptor 按需写（40 §1.0），缺失说明该组合尚未实现。',
         ctx.request_id,
       );
     }
@@ -38,27 +38,27 @@ export class S1Decode implements Stage {
       shallow = shallowDecode(adaptor, input.raw_body, ctx, state.modality);
     } catch (err) {
       throw createCanonicalError(
-        "canonical_decode_error",
+        'canonical_decode_error',
         `S1 浅解析失败: ${err instanceof Error ? err.message : String(err)}`,
         ctx.request_id,
-        { field_path: "$" },
+        { field_path: '$' },
       );
     }
     state.shallow = shallow;
 
     // 保留原始字节引用（fast path 判定条件 4：client_raw_body_available）
-    ctx.state["raw_body"] = input.raw_body;
+    ctx.state['raw_body'] = input.raw_body;
 
     state.lazy = new LazyRequest(shallow, input.raw_body, adaptor, ctx);
 
     ctx.recordStage(
       this.id,
       deps.clock.now() - started,
-      adaptor.decodeEnvelope === undefined ? "shallow(generic)" : "shallow(codec)",
+      adaptor.decodeEnvelope === undefined ? 'shallow(generic)' : 'shallow(codec)',
       input.raw_body.byteLength,
     );
-    deps.metrics.increment("pipeline.stage", 1, { stage: this.id });
-    deps.metrics.increment("pipeline.lazy_decode", 1, {
+    deps.metrics.increment('pipeline.stage', 1, { stage: this.id });
+    deps.metrics.increment('pipeline.lazy_decode', 1, {
       codec_shallow: String(adaptor.decodeEnvelope !== undefined),
     });
   }

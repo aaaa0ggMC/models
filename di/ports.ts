@@ -15,8 +15,7 @@ export interface Clock {
   now(): number;
 }
 
-export interface SystemClock extends Clock {}
-
+/** 生产时钟：直接读系统时间。测试注入 fixedClock 替代。 */
 export const systemClock: Clock = { now: () => Date.now() };
 
 /** 可替换的时钟（测试用）。 */
@@ -50,7 +49,7 @@ export interface Metrics {
 
 export interface MetricSample {
   name: string;
-  kind: "counter" | "timing" | "gauge";
+  kind: 'counter' | 'timing' | 'gauge';
   value: number;
   tags: Record<string, string>;
   ts: number;
@@ -83,7 +82,7 @@ export interface GatewayConfig {
   /** usage 嗅探器的字节上限（20 §4.2：默认 256KB/请求）。 */
   usageSnifferMaxBytes: number;
   /** loss policy 默认档。 */
-  lossPolicy: "allow" | "safe" | "strict" | "emulate";
+  lossPolicy: 'allow' | 'safe' | 'strict' | 'emulate';
   /** 响应里是否带 ag_* 调试字段。 */
   debug: boolean;
   /** HTTP ingress 监听端口。 */
@@ -101,57 +100,58 @@ export const DEFAULT_CONFIG: GatewayConfig = {
   maxTurns: 10,
   pluginTimeoutMs: 5_000,
   usageSnifferMaxBytes: 256 * 1024,
-  lossPolicy: "allow",
+  lossPolicy: 'allow',
   debug: false,
   port: 8787,
-  host: "127.0.0.1",
+  host: '127.0.0.1',
 };
 
 /** 内存 Logger：把日志收进数组，测试可断言。 */
 export class MemoryLogger implements Logger {
-  readonly entries: Array<{ level: string; message: string; fields?: Record<string, unknown> }> = [];
+  readonly entries: Array<{ level: string; message: string; fields?: Record<string, unknown> }> =
+    [];
 
   private write(level: string, message: string, fields?: Record<string, unknown>): void {
     this.entries.push({ level, message, ...(fields === undefined ? {} : { fields }) });
   }
 
   debug(message: string, fields?: Record<string, unknown>): void {
-    this.write("debug", message, fields);
+    this.write('debug', message, fields);
   }
   info(message: string, fields?: Record<string, unknown>): void {
-    this.write("info", message, fields);
+    this.write('info', message, fields);
   }
   warn(message: string, fields?: Record<string, unknown>): void {
-    this.write("warn", message, fields);
+    this.write('warn', message, fields);
   }
   error(message: string, fields?: Record<string, unknown>): void {
-    this.write("error", message, fields);
+    this.write('error', message, fields);
   }
 }
 
 /** 控制台 Logger：单行 JSON，便于本地起服务时观测。 */
 export class ConsoleLogger implements Logger {
-  constructor(private readonly minLevel: "debug" | "info" | "warn" | "error" = "info") {}
+  constructor(private readonly minLevel: 'debug' | 'info' | 'warn' | 'error' = 'info') {}
 
   private write(level: string, message: string, fields?: Record<string, unknown>): void {
-    const order = ["debug", "info", "warn", "error"];
+    const order = ['debug', 'info', 'warn', 'error'];
     if (order.indexOf(level) < order.indexOf(this.minLevel)) return;
     const line = JSON.stringify({ level, message, ...(fields ?? {}) });
-    if (level === "error") process.stderr.write(`${line}\n`);
+    if (level === 'error') process.stderr.write(`${line}\n`);
     else process.stdout.write(`${line}\n`);
   }
 
   debug(message: string, fields?: Record<string, unknown>): void {
-    this.write("debug", message, fields);
+    this.write('debug', message, fields);
   }
   info(message: string, fields?: Record<string, unknown>): void {
-    this.write("info", message, fields);
+    this.write('info', message, fields);
   }
   warn(message: string, fields?: Record<string, unknown>): void {
-    this.write("warn", message, fields);
+    this.write('warn', message, fields);
   }
   error(message: string, fields?: Record<string, unknown>): void {
-    this.write("error", message, fields);
+    this.write('error', message, fields);
   }
 }
 
@@ -160,13 +160,13 @@ export class MemoryMetrics implements Metrics {
   private readonly samples: MetricSample[] = [];
 
   increment(name: string, value = 1, tags: Record<string, string> = {}): void {
-    this.samples.push({ name, kind: "counter", value, tags, ts: Date.now() });
+    this.samples.push({ name, kind: 'counter', value, tags, ts: Date.now() });
   }
   timing(name: string, durationMs: number, tags: Record<string, string> = {}): void {
-    this.samples.push({ name, kind: "timing", value: durationMs, tags, ts: Date.now() });
+    this.samples.push({ name, kind: 'timing', value: durationMs, tags, ts: Date.now() });
   }
   gauge(name: string, value: number, tags: Record<string, string> = {}): void {
-    this.samples.push({ name, kind: "gauge", value, tags, ts: Date.now() });
+    this.samples.push({ name, kind: 'gauge', value, tags, ts: Date.now() });
   }
   snapshot(): MetricSample[] {
     return [...this.samples];
@@ -189,11 +189,11 @@ export class SequentialIdGenerator implements IdGenerator {
 
   requestId(): string {
     this.counter += 1;
-    return `req_test_${this.counter.toString().padStart(6, "0")}`;
+    return `req_test_${this.counter.toString().padStart(6, '0')}`;
   }
   toolCallId(): string {
     this.counter += 1;
-    return `call_test_${this.counter.toString().padStart(6, "0")}`;
+    return `call_test_${this.counter.toString().padStart(6, '0')}`;
   }
 }
 
@@ -207,14 +207,14 @@ export class UlidIdGenerator implements IdGenerator {
   }
 }
 
-const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const ULID_TIME_LEN = 10;
 const ULID_RANDOM_LEN = 16;
 
 /** 最小 ulid 实现（26 字符，Cro bford base32，时间戳 48bit）。 */
 export function ulid(now: number = Date.now()): string {
   let time = now;
-  let out = "";
+  let out = '';
   for (let i = 0; i < ULID_TIME_LEN; i += 1) {
     out = ULID_ALPHABET[time % 32] + out;
     time = Math.floor(time / 32);

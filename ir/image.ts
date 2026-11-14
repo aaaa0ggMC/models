@@ -5,8 +5,8 @@
  * 字段映射示例见同文 §9.3（openai.images.generations + edits 写透）。
  */
 
-import type { MediaRef } from "./media.js";
-import type { RawEnvelope } from "./envelope.js";
+import type { MediaRef } from './media.js';
+import type { RawEnvelope } from './envelope.js';
 
 export interface ImagePayload {
   prompt: string;
@@ -19,7 +19,7 @@ export interface ImagePayload {
   /** 生成数量。 */
   n?: number;
 
-  quality?: "low" | "medium" | "high" | "hd" | "auto";
+  quality?: 'low' | 'medium' | 'high' | 'hd' | 'auto';
   /** vivid / natural / style_preset。 */
   style?: string;
   /** 采样参数（Stability / FLUX）。 */
@@ -42,19 +42,19 @@ export interface ImagePayload {
     /** 改动强度 0–1。 */
     strength?: number;
     /** 多参考图。 */
-    reference_images?: Array<{ image: MediaRef; weight?: number; mode?: "style" | "content" }>;
+    reference_images?: Array<{ image: MediaRef; weight?: number; mode?: 'style' | 'content' }>;
   };
 
   output: {
-    format: "png" | "jpeg" | "webp";
+    format: 'png' | 'jpeg' | 'webp';
     /** 响应形态：base64 或 URL。 */
-    response_type: "b64_json" | "url";
+    response_type: 'b64_json' | 'url';
     /** 背景透明（gpt-image-1）。 */
     transparent_background?: boolean;
   };
 
   /** 内容审核强度。 */
-  moderation?: "auto" | "low" | "high";
+  moderation?: 'auto' | 'low' | 'high';
   native?: Record<string, unknown>;
   raw: RawEnvelope;
 }

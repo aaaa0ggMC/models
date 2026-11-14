@@ -10,13 +10,7 @@
  */
 
 export type JSONSchemaType =
-  | "string"
-  | "number"
-  | "integer"
-  | "boolean"
-  | "object"
-  | "array"
-  | "null";
+  'string' | 'number' | 'integer' | 'boolean' | 'object' | 'array' | 'null';
 
 export interface JSONSchema {
   $id?: string;

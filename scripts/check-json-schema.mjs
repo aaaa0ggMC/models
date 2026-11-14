@@ -13,15 +13,15 @@
  * tests/ir-schema.test.ts 里还有一层「TS 接口字段 ↔ schema properties」的字段级 parity 断言。
  */
 
-import { readdir, readFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-import Ajv2020 from "ajv/dist/2020.js";
+import { readdir, readFile } from 'node:fs/promises';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Ajv2020 from 'ajv/dist/2020.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const root = join(here, "..");
-const schemaDir = join(root, "ir", "schema", "ag-ir-1");
-const fixturesDir = join(root, "ir", "fixtures");
+const root = join(here, '..');
+const schemaDir = join(root, 'ir', 'schema', 'ag-ir-1');
+const fixturesDir = join(root, 'ir', 'fixtures');
 
 async function listJsonFiles(dir) {
   const out = [];
@@ -34,7 +34,7 @@ async function listJsonFiles(dir) {
   for (const e of entries) {
     const p = join(dir, e.name);
     if (e.isDirectory()) out.push(...(await listJsonFiles(p)));
-    else if (e.name.endsWith(".json")) out.push(p);
+    else if (e.name.endsWith('.json')) out.push(p);
   }
   return out;
 }
@@ -51,19 +51,19 @@ function main() {
     // 1) 编译全部 schema（互相 $ref，因此必须先全部 addSchema）
     const files = await listJsonFiles(schemaDir);
     if (files.length === 0) {
-      console.error("未找到任何 schema 文件");
+      console.error('未找到任何 schema 文件');
       process.exitCode = 1;
       return;
     }
-    const rootId = "https://agentgateway.local/schema/ag-ir-1/root.schema.json";
+    const rootId = 'https://agentgateway.local/schema/ag-ir-1/root.schema.json';
     let rootSchema;
     for (const f of files) {
-      const raw = JSON.parse(await readFile(f, "utf8"));
-      if (raw["$id"] === rootId) rootSchema = raw;
-      else ajv.addSchema(raw, raw["$id"]);
+      const raw = JSON.parse(await readFile(f, 'utf8'));
+      if (raw['$id'] === rootId) rootSchema = raw;
+      else ajv.addSchema(raw, raw['$id']);
     }
     if (rootSchema === undefined) {
-      console.error("缺少 root.schema.json");
+      console.error('缺少 root.schema.json');
       process.exitCode = 1;
       return;
     }
@@ -73,13 +73,13 @@ function main() {
     // 2) 校验夹具
     const fixtures = await listJsonFiles(fixturesDir);
     if (fixtures.length === 0) {
-      console.error("未找到任何 canonical 夹具（ir/fixtures/）");
+      console.error('未找到任何 canonical 夹具（ir/fixtures/）');
       process.exitCode = 1;
       return;
     }
     let failed = 0;
     for (const f of fixtures) {
-      const data = JSON.parse(await readFile(f, "utf8"));
+      const data = JSON.parse(await readFile(f, 'utf8'));
       const ok = validate(data);
       const rel = f.slice(root.length + 1);
       if (ok) {
@@ -88,7 +88,7 @@ function main() {
         failed += 1;
         console.error(`  FAIL ${rel}`);
         for (const err of validate.errors ?? []) {
-          console.error(`       ${err.instancePath || "(root)"} ${err.message}`);
+          console.error(`       ${err.instancePath || '(root)'} ${err.message}`);
         }
       }
     }

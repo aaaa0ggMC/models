@@ -13,39 +13,39 @@
  * cookie 一律不透传进 trace 或日志。
  */
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { FormatId } from "../ir/index.js";
-import type { PipelineRunner } from "../gateway-core/pipeline/runner.js";
-import type { ClientSink } from "../gateway-core/pipeline/sink.js";
-import { FORMAT_HEADER } from "../gateway-core/pipeline/stages/s0-ingress.js";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { FormatId } from '../ir/index.js';
+import type { PipelineRunner } from '../gateway-core/pipeline/runner.js';
+import type { ClientSink } from '../gateway-core/pipeline/sink.js';
+import { FORMAT_HEADER } from '../gateway-core/pipeline/stages/s0-ingress.js';
 
 /** 脱敏：只保留白名单头，其余丢弃（含鉴权头）。 */
 const ALLOWED_HEADERS = new Set([
-  "content-type",
-  "content-length",
-  "accept",
-  "x-agentgateway-format",
-  "traceparent",
-  "user-agent",
+  'content-type',
+  'content-length',
+  'accept',
+  'x-agentgateway-format',
+  'traceparent',
+  'user-agent',
 ]);
 
-export function sanitizeHeaders(raw: IncomingMessage["headers"]): Record<string, string> {
+export function sanitizeHeaders(raw: IncomingMessage['headers']): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(raw)) {
     if (!ALLOWED_HEADERS.has(k.toLowerCase())) continue;
-    if (typeof v === "string") out[k.toLowerCase()] = v;
-    else if (Array.isArray(v)) out[k.toLowerCase()] = v.join(", ");
+    if (typeof v === 'string') out[k.toLowerCase()] = v;
+    else if (Array.isArray(v)) out[k.toLowerCase()] = v.join(', ');
   }
   return out;
 }
 
 /** 路径签名 → 客户端格式（00 §4.3 的端点形态）。 */
 const ROUTES: Array<{ pattern: RegExp; format: FormatId }> = [
-  { pattern: /^\/v1\/chat\/completions$/, format: "openai.chat" },
-  { pattern: /^\/v1\/responses$/, format: "openai.responses" },
-  { pattern: /^\/v1\/messages$/, format: "anthropic.messages" },
-  { pattern: /^\/v1beta\/models\/[^:]+:generateContent$/, format: "gemini.generateContent" },
-  { pattern: /^\/v1beta\/models\/[^:]+:streamGenerateContent$/, format: "gemini.generateContent" },
+  { pattern: /^\/v1\/chat\/completions$/, format: 'openai.chat' },
+  { pattern: /^\/v1\/responses$/, format: 'openai.responses' },
+  { pattern: /^\/v1\/messages$/, format: 'anthropic.messages' },
+  { pattern: /^\/v1beta\/models\/[^:]+:generateContent$/, format: 'gemini.generateContent' },
+  { pattern: /^\/v1beta\/models\/[^:]+:streamGenerateContent$/, format: 'gemini.generateContent' },
 ];
 
 export interface HttpServerOptions {
@@ -62,7 +62,7 @@ class NodeResponseSink implements ClientSink {
   private _closed = false;
 
   constructor(private readonly res: ServerResponse) {
-    res.on("close", () => {
+    res.on('close', () => {
       this._closed = true;
     });
   }
@@ -75,7 +75,7 @@ class NodeResponseSink implements ClientSink {
   }
 
   start(status: number, headers: Record<string, string>): void {
-    if (this._started) throw new Error("ClientSink.start 重复调用：首字节后不能改状态码（20 §S8）");
+    if (this._started) throw new Error('ClientSink.start 重复调用：首字节后不能改状态码（20 §S8）');
     this._started = true;
     this.res.writeHead(status, headers);
   }
@@ -97,7 +97,7 @@ class NodeResponseSink implements ClientSink {
 
 export function createHttpServer(options: HttpServerOptions): Server {
   const { port: _port, host: _host, runner } = options;
-  const healthPath = options.healthPath ?? "/health";
+  const healthPath = options.healthPath ?? '/health';
 
   return createServer((req, res) => {
     void handleRequest(req, res, runner, healthPath);
@@ -110,25 +110,25 @@ async function handleRequest(
   runner: PipelineRunner,
   healthPath: string,
 ): Promise<void> {
-  const url = new URL(req.url ?? "/", "http://localhost");
+  const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
 
-  if (req.method === "GET" && path === healthPath) {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "ok" }));
+  if (req.method === 'GET' && path === healthPath) {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
     return;
   }
 
   const route = ROUTES.find((r) => r.pattern.test(path));
   if (route === undefined) {
-    res.writeHead(404, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { message: `未知端点: ${path}`, type: "not_found" } }));
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: `未知端点: ${path}`, type: 'not_found' } }));
     return;
   }
 
-  if (req.method !== "POST") {
-    res.writeHead(405, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { message: "只支持 POST", type: "method_not_allowed" } }));
+  if (req.method !== 'POST') {
+    res.writeHead(405, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: '只支持 POST', type: 'method_not_allowed' } }));
     return;
   }
 
@@ -153,12 +153,12 @@ async function handleRequest(
   } catch (err) {
     // PipelineRunner 承诺不抛；这里只是双保险
     if (!sink.started) {
-      res.writeHead(500, { "content-type": "application/json" });
+      res.writeHead(500, { 'content-type': 'application/json' });
       res.end(
         JSON.stringify({
           error: {
-            message: err instanceof Error ? err.message : "internal error",
-            type: "internal_error",
+            message: err instanceof Error ? err.message : 'internal error',
+            type: 'internal_error',
           },
         }),
       );

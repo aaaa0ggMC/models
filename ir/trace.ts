@@ -5,9 +5,9 @@
  * RequestTrace 是 dog-fooding agent 的主要数据面之一（60-billing-and-dogfooding.md §6）。
  */
 
-import type { FormatId } from "./format.js";
-import type { NormalizedFinishReason } from "./error.js";
-import type { CanonicalUsage } from "./usage.js";
+import type { FormatId } from './format.js';
+import type { NormalizedFinishReason } from './error.js';
+import type { CanonicalUsage } from './usage.js';
 
 export interface StageMetric {
   stage: string;
@@ -71,8 +71,8 @@ export function createRequestTrace(
     fast_path: false,
     attempts: [],
     stages: [],
-    usage: { units: {}, source: "provider" },
-    finish_reason: "stop",
+    usage: { units: {}, source: 'provider' },
+    finish_reason: 'stop',
     plugin_log: [],
     dropped_capabilities: [],
     warnings: [],

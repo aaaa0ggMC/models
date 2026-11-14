@@ -5,7 +5,7 @@
  * 这里只放 schema 占位 + raw 透传；等第一个 rerank adaptor 开工时再按 40 §1.6 检查清单校准字段。
  */
 
-import type { RawEnvelope } from "./envelope.js";
+import type { RawEnvelope } from './envelope.js';
 
 export interface RerankPayload {
   /** 查询。 */

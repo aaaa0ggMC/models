@@ -11,44 +11,44 @@
 
 /** 归一化完成原因。是四家枚举的**超集**，不是交集（10 §9.3 注意 1）。 */
 export type NormalizedFinishReason =
-  | "stop"
-  | "length"
-  | "tool_use"
-  | "content_filter"
-  | "stop_sequence"
-  | "error"
-  | "pause_turn"
-  | "recitation"
-  | "context_exceeded"
-  | "missing_thought_signature"
-  | "other";
+  | 'stop'
+  | 'length'
+  | 'tool_use'
+  | 'content_filter'
+  | 'stop_sequence'
+  | 'error'
+  | 'pause_turn'
+  | 'recitation'
+  | 'context_exceeded'
+  | 'missing_thought_signature'
+  | 'other';
 
 /** 流式结束帧用的哨兵值：ASR 等"自然结束"语义（25-streaming.md §2.1 EndData）。 */
-export type FinalFinishReason = "final";
+export type FinalFinishReason = 'final';
 
 export type FinishReason = NormalizedFinishReason | FinalFinishReason;
 
 export type CanonicalErrorCode =
-  | "unsupported_format"
-  | "canonical_decode_error"
-  | "canonical_encode_error"
-  | "auth_failed"
-  | "rate_limited"
-  | "quota_exceeded"
-  | "no_available_provider"
-  | "provider_unavailable"
-  | "upstream_timeout"
-  | "upstream_error"
-  | "content_filtered"
-  | "capability_unsupported"
-  | "context_length_exceeded"
-  | "agentic_loop_exceeded"
-  | "plugin_error"
-  | "streaming_mode_unsupported"
-  | "internal_error";
+  | 'unsupported_format'
+  | 'canonical_decode_error'
+  | 'canonical_encode_error'
+  | 'auth_failed'
+  | 'rate_limited'
+  | 'quota_exceeded'
+  | 'no_available_provider'
+  | 'provider_unavailable'
+  | 'upstream_timeout'
+  | 'upstream_error'
+  | 'content_filtered'
+  | 'capability_unsupported'
+  | 'context_length_exceeded'
+  | 'agentic_loop_exceeded'
+  | 'plugin_error'
+  | 'streaming_mode_unsupported'
+  | 'internal_error';
 
 /** 机器可读的能力拒绝标记（20 §7.3 末尾约定，agentgateway 已验证的约定）。 */
-export type CapabilityRejection = "prompt_too_long";
+export type CapabilityRejection = 'prompt_too_long';
 
 export interface CanonicalError {
   code: CanonicalErrorCode;
@@ -76,7 +76,7 @@ export function createCanonicalError(
   code: CanonicalErrorCode,
   message: string,
   requestId: string,
-  overrides: Partial<Omit<CanonicalError, "code" | "message" | "request_id">> = {},
+  overrides: Partial<Omit<CanonicalError, 'code' | 'message' | 'request_id'>> = {},
 ): CanonicalError {
   const defaults: Record<CanonicalErrorCode, { http_status: number; retryable: boolean }> = {
     unsupported_format: { http_status: 400, retryable: false },

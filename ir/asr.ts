@@ -6,9 +6,9 @@
  * 按 revision 覆盖，**不是 append**。
  */
 
-import type { MediaRef } from "./media.js";
-import type { StreamOptions } from "./envelope.js";
-import type { RawEnvelope } from "./envelope.js";
+import type { MediaRef } from './media.js';
+import type { StreamOptions } from './envelope.js';
+import type { RawEnvelope } from './envelope.js';
 
 export interface AsrPayload {
   /** 音频输入。 */
@@ -19,7 +19,7 @@ export interface AsrPayload {
   prompt?: string;
   keywords?: string[];
   /** 输出粒度。 */
-  granularity?: ("word" | "segment" | "utterance")[];
+  granularity?: ('word' | 'segment' | 'utterance')[];
   /** 说话人分离。 */
   diarization?: {
     enabled: boolean;

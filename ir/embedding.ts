@@ -5,15 +5,15 @@
  * 计费单位：`usage.units.tokens`。Gemini 的 `taskType` 进 `native.gemini.task_type`。
  */
 
-import type { MediaRef } from "./media.js";
-import type { RawEnvelope } from "./envelope.js";
+import type { MediaRef } from './media.js';
+import type { RawEnvelope } from './envelope.js';
 
 export interface EmbeddingPayload {
   /** 文本或多模态 embedding。 */
   input: string | string[] | MediaRef[];
   /** 截断维度（OpenAI dimensions）。 */
   dimensions?: number;
-  encoding_format?: "float" | "base64";
+  encoding_format?: 'float' | 'base64';
   user?: string;
   native?: Record<string, unknown>;
   raw: RawEnvelope;

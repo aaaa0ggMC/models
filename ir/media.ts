@@ -25,13 +25,13 @@ export interface MediaBase {
 }
 
 export interface InlineMedia extends MediaBase {
-  kind: "inline";
+  kind: 'inline';
   /** base64，**不含** data: 前缀。 */
   data: string;
 }
 
 export interface UriMedia extends MediaBase {
-  kind: "uri";
+  kind: 'uri';
   /** 公网 URL，或网关内部的 asset:// URL。 */
   uri: string;
   /** 是否需要网关代取（内网/需鉴权时）。 */
@@ -41,7 +41,7 @@ export interface UriMedia extends MediaBase {
 }
 
 export interface AssetMedia extends MediaBase {
-  kind: "asset";
+  kind: 'asset';
   /** 网关媒体库 id。 */
   asset_id: string;
 }
@@ -51,7 +51,7 @@ export interface AssetMedia extends MediaBase {
  * 与 MediaRef 的区别：分片是 append-only 的传输单元，不带三态寻址。
  */
 export interface MediaChunk {
-  encoding: "base64" | "raw";
+  encoding: 'base64' | 'raw';
   mime: string;
   data: string;
   byte_length?: number;

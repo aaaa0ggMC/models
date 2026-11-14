@@ -9,8 +9,8 @@
  *    streaming_mode_unsupported（25-streaming.md §1 的 reject 档）。
  */
 
-import type { MediaRef } from "./media.js";
-import type { RawEnvelope } from "./envelope.js";
+import type { MediaRef } from './media.js';
+import type { RawEnvelope } from './envelope.js';
 
 export interface DecisionPayload {
   /** 被判断的内容。复用媒体引用三态（inline / uri / asset）。 */
@@ -48,11 +48,11 @@ export interface DecisionContent {
  * （Gemini/Jev: noul|choice|score|box；OpenAI: predicate|choice|score）。
  */
 export type DecisionQuestionType =
-  | "binary" // 是非判断（yes/no）↔ Gemini/Jev noul、OpenAI predicate
-  | "choice" // 定集选择（从 options 里选）
-  | "scale" // 固定量表评分（离散档）↔ 三家 score
-  | "rubric" // rubric 评估。⚠️ 三家均无对应原语，映射为 choice 或 scale + criteria
-  | "box"; // 边界框（Jev 专有）。⚠️ 仅 Jev 实现，其余 adaptor 会 drop + warn
+  | 'binary' // 是非判断（yes/no）↔ Gemini/Jev noul、OpenAI predicate
+  | 'choice' // 定集选择（从 options 里选）
+  | 'scale' // 固定量表评分（离散档）↔ 三家 score
+  | 'rubric' // rubric 评估。⚠️ 三家均无对应原语，映射为 choice 或 scale + criteria
+  | 'box'; // 边界框（Jev 专有）。⚠️ 仅 Jev 实现，其余 adaptor 会 drop + warn
 
 export interface DecisionQuestion {
   /** 问题稳定 id，响应按它回填。 */
@@ -130,7 +130,7 @@ export interface DecisionAnswer {
 /** 40 §6.3：decision 降级策略。 */
 export interface DecisionDegradationPolicy {
   /** 何时启用降级。默认 "on_missing_upstream"。 */
-  mode: "never" | "on_missing_upstream" | "always";
+  mode: 'never' | 'on_missing_upstream' | 'always';
   /** 降级用的 chat 模型（access path + model）。 */
   fallback_model?: string;
   /** 是否允许把"高风险判断"降级（策略检查、stop 决策默认不允许）。 */
@@ -138,6 +138,6 @@ export interface DecisionDegradationPolicy {
 }
 
 export const DEFAULT_DECISION_DEGRADATION_POLICY: DecisionDegradationPolicy = {
-  mode: "on_missing_upstream",
+  mode: 'on_missing_upstream',
   allow_degrade_high_stakes: false,
 };

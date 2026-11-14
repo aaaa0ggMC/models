@@ -8,9 +8,9 @@
  * 硬建模 SSML 会让 canonical 爆炸。给了 ssml 就走 Azure 路线，结构化字段忽略并 warnings。
  */
 
-import type { MediaRef } from "./media.js";
-import type { StreamOptions } from "./envelope.js";
-import type { RawEnvelope } from "./envelope.js";
+import type { MediaRef } from './media.js';
+import type { StreamOptions } from './envelope.js';
+import type { RawEnvelope } from './envelope.js';
 
 export interface TtsPayload {
   /** 要合成的文本。 */
@@ -36,7 +36,7 @@ export interface VoiceSpec {
   /** 上游 voice id（alloy / nova / 21m00Tcm4TlvDq8ikWAM / ...）。 */
   voice_id: string;
   /** 声音性别/年龄等元信息（仅记录，不映射）。 */
-  gender?: "male" | "female" | "neutral";
+  gender?: 'male' | 'female' | 'neutral';
   /** 参考音频（声音克隆）——三态引用。 */
   reference_audio?: MediaRef;
   /** 相似度/稳定性等（ElevenLabs voice_settings）。 */
@@ -57,7 +57,7 @@ export interface AudioOutputSpec {
   /** kbps。 */
   bitrate?: number;
   /** 一次性 or 流式。 */
-  mode: "once" | "stream";
+  mode: 'once' | 'stream';
 }
 
 export interface ProsodySpec {

@@ -27,9 +27,9 @@ import type {
   RequestContext,
   ToolResultPart,
   ToolUsePart,
-} from "../../ir/index.js";
-import { CTX_STATE_KEYS, asChatPayload, asChatResponsePayload } from "../../ir/index.js";
-import type { PluginHost } from "../../plugins/host.js";
+} from '../../ir/index.js';
+import { CTX_STATE_KEYS, asChatPayload, asChatResponsePayload } from '../../ir/index.js';
+import type { PluginHost } from '../../plugins/host.js';
 
 /** 工具执行器：插件（onToolCall）或内置执行器。 */
 export interface ToolExecutor {
@@ -50,10 +50,7 @@ export interface ToolLoopResult {
 export interface ToolLoopDeps {
   pluginHost: PluginHost;
   /** 发一轮请求（S4→S8 的一次完整执行），由 Runner 提供。 */
-  runTurn(
-    req: CanonicalRequestEnvelope,
-    ctx: RequestContext,
-  ): Promise<CanonicalResponseEnvelope>;
+  runTurn(req: CanonicalRequestEnvelope, ctx: RequestContext): Promise<CanonicalResponseEnvelope>;
   /** 没有 onToolCall 插件时的兜底执行器（可缺省）。 */
   fallbackExecutor?: ToolExecutor;
 }
@@ -62,7 +59,7 @@ export interface ToolLoopDeps {
 export function collectToolUses(res: CanonicalResponseEnvelope): ToolUsePart[] {
   const payload = asChatResponsePayload(res);
   if (payload === undefined) return [];
-  return payload.message.parts.filter((p): p is ToolUsePart => p.type === "tool_use");
+  return payload.message.parts.filter((p): p is ToolUsePart => p.type === 'tool_use');
 }
 
 /** 把 assistant 回合与 tool_result 回合追加进 canonical.messages（APPEND_TURN）。 */
@@ -74,7 +71,7 @@ export function appendTurn(
   const payload = asChatPayload(req);
   if (payload === undefined) return req;
   const toolMessage: CanonicalMessage = {
-    role: "tool",
+    role: 'tool',
     parts: results,
   };
   return {
@@ -123,10 +120,9 @@ export async function runToolLoop(
 
     // EXECUTE_TOOLS：每个 tool_use 产出 tool_result part
     const results: ToolResultPart[] = [];
-    const executor: ToolExecutor =
-      deps.fallbackExecutor ?? {
-        execute: async (call, c) => deps.pluginHost.runOnToolCall(call, c),
-      };
+    const executor: ToolExecutor = deps.fallbackExecutor ?? {
+      execute: async (call, c) => deps.pluginHost.runOnToolCall(call, c),
+    };
 
     for (const call of toolUses) {
       const started = Date.now();
@@ -137,7 +133,7 @@ export async function runToolLoop(
       } catch (err) {
         ok = false;
         result = {
-          type: "tool_result",
+          type: 'tool_result',
           tool_use_id: call.id,
           content: `工具 ${call.name} 执行失败: ${err instanceof Error ? err.message : String(err)}`,
           is_error: true,
@@ -202,5 +198,5 @@ export function toolIdMapFrom(ctx: RequestContext): ToolIdMap {
 
 /** 判断 part 是否为工具调用（供 runner 统计 tool_calls）。 */
 export function isToolUse(part: Part): part is ToolUsePart {
-  return part.type === "tool_use";
+  return part.type === 'tool_use';
 }

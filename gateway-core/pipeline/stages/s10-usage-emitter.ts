@@ -11,20 +11,21 @@
  * 本阶段同时把 RequestTrace 补齐（20 §8），它是 dog-fooding agent 的主要数据面之一。
  */
 
-import type { PipelineDeps, PipelineState, Stage } from "../types.js";
-import { createUsageRecord, type ToolCallUsage } from "../../../metering/usage-record.js";
-import type { UsageRecord } from "../../../metering/usage-record.js";
+import type { PipelineDeps, PipelineState, Stage } from '../types.js';
+import { createUsageRecord, type ToolCallUsage } from '../../../metering/usage-record.js';
+import type { UsageRecord } from '../../../metering/usage-record.js';
 
 export class S10UsageEmitter implements Stage {
-  readonly id = "S10";
-  readonly name = "UsageEmitter";
+  readonly id = 'S10';
+  readonly name = 'UsageEmitter';
 
   async execute(state: PipelineState, deps: PipelineDeps): Promise<void> {
     const started = deps.clock.now();
     const { ctx } = state;
 
     const toolCalls: ToolCallUsage[] = [];
-    const traceTools = (ctx.state["trace"] as Array<{ tool: string; duration_ms: number; ok: boolean }>) ?? [];
+    const traceTools =
+      (ctx.state['trace'] as Array<{ tool: string; duration_ms: number; ok: boolean }>) ?? [];
     for (const t of traceTools) {
       toolCalls.push({ name: t.tool, ok: t.ok, duration_ms: t.duration_ms });
     }
@@ -48,7 +49,7 @@ export class S10UsageEmitter implements Stage {
       stream: state.shallow?.stream === true,
       ttfb_ms: state.ttfb_ms ?? 0,
       total_ms: deps.clock.now() - ctx.started_at,
-      status: state.status ?? "success",
+      status: state.status ?? 'success',
       finish_reason: state.finish_reason,
       usage: state.usage,
       usage_raw: state.usage?.raw,
@@ -73,7 +74,8 @@ export class S10UsageEmitter implements Stage {
     ];
     state.trace.stages = ctx.metrics;
     state.trace.usage = state.usage ?? record.usage;
-    state.trace.finish_reason = state.finish_reason === "final" ? "stop" : (state.finish_reason ?? "stop");
+    state.trace.finish_reason =
+      state.finish_reason === 'final' ? 'stop' : (state.finish_reason ?? 'stop');
     state.trace.warnings = ctx.warnings;
     state.trace.dropped_capabilities = state.dropped_capabilities;
     state.trace.conversion_chain = state.conversion_chain;
@@ -84,10 +86,10 @@ export class S10UsageEmitter implements Stage {
     deps.usageEmitter.emit(record);
 
     ctx.recordStage(this.id, deps.clock.now() - started, `depth=${deps.usageEmitter.depth()}`);
-    deps.metrics.increment("pipeline.stage", 1, { stage: this.id });
-    deps.metrics.gauge("metering.queue_depth", deps.usageEmitter.depth());
+    deps.metrics.increment('pipeline.stage', 1, { stage: this.id });
+    deps.metrics.gauge('metering.queue_depth', deps.usageEmitter.depth());
     if (deps.usageEmitter.dropped() > 0) {
-      deps.metrics.increment("metering.dropped", deps.usageEmitter.dropped());
+      deps.metrics.increment('metering.dropped', deps.usageEmitter.dropped());
     }
   }
 }

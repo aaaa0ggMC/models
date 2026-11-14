@@ -19,9 +19,9 @@ import type {
   FinishReason,
   FormatId,
   NormalizedFinishReason,
-} from "../ir/index.js";
+} from '../ir/index.js';
 
-export type UsageRecordStatus = "success" | "error" | "short_circuit";
+export type UsageRecordStatus = 'success' | 'error' | 'short_circuit';
 
 export interface ToolCallUsage {
   name: string;
@@ -55,7 +55,7 @@ export interface ControlPlaneCost {
   /** 输出是否免费（decision 的典型定价形态）。 */
   output_free: boolean;
   cash_micros: number;
-  calibration: "native" | "degraded" | "skipped";
+  calibration: 'native' | 'degraded' | 'skipped';
 }
 
 export interface DegradationEvent {
@@ -178,9 +178,9 @@ export function createUsageRecord(init: UsageRecordInit): UsageRecord {
     ...(init.model_alias === undefined ? {} : { model_alias: init.model_alias }),
     fast_path: init.fast_path,
     attempts: init.attempts,
-    usage: init.usage ?? { units: {}, source: "provider" },
+    usage: init.usage ?? { units: {}, source: 'provider' },
     ...(init.usage_raw === undefined ? {} : { usage_raw: init.usage_raw }),
-    finish_reason: init.finish_reason ?? (init.status === "error" ? "error" : "stop"),
+    finish_reason: init.finish_reason ?? (init.status === 'error' ? 'error' : 'stop'),
     stream: init.stream,
     ttfb_ms: init.ttfb_ms,
     total_ms: init.total_ms,
@@ -194,11 +194,11 @@ export function createUsageRecord(init: UsageRecordInit): UsageRecord {
     warnings: init.warnings ?? [],
     dropped_capabilities: init.dropped_capabilities ?? [],
     // Phase 1：persistence.messages 默认 off（70 §2），因此 body_ref 恒不出现
-    redaction_profile: "phase1-none",
+    redaction_profile: 'phase1-none',
   };
 }
 
 /** 归一化 finish_reason 的窄化辅助（UsageRecord 用的是 FinishReason 超集）。 */
 export function asNormalizedFinishReason(r: FinishReason): NormalizedFinishReason {
-  return r === "final" ? "stop" : r;
+  return r === 'final' ? 'stop' : r;
 }

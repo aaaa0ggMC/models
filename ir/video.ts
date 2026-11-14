@@ -6,7 +6,7 @@
  * 因此这里只有**空占位 + raw**——刻意不留任何猜测字段，等真实上游样本再按 40 §1.4 校准。
  */
 
-import type { RawEnvelope } from "./envelope.js";
+import type { RawEnvelope } from './envelope.js';
 
 export interface VideoPayload {
   native?: Record<string, unknown>;

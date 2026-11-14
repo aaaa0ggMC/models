@@ -12,16 +12,16 @@
  * 跑法：`npm run build && npm run demo`
  */
 
-import { createGateway } from "../dist/composition-root.js";
-import { startHttpServer } from "../dist/http/server.js";
-import { MemoryClientSink } from "../dist/gateway-core/pipeline/sink.js";
+import { createGateway } from '../dist/composition-root.js';
+import { startHttpServer } from '../dist/http/server.js';
+import { MemoryClientSink } from '../dist/gateway-core/pipeline/sink.js';
 
-const PORT = Number(process.env["AG_PORT"] ?? 8787);
-const HOST = process.env["AG_HOST"] ?? "127.0.0.1";
+const PORT = Number(process.env['AG_PORT'] ?? 8787);
+const HOST = process.env['AG_HOST'] ?? '127.0.0.1';
 
 /** 打印一小段分隔标题。 */
 function section(title) {
-  process.stdout.write(`\n${"=".repeat(72)}\n${title}\n${"=".repeat(72)}\n`);
+  process.stdout.write(`\n${'='.repeat(72)}\n${title}\n${'='.repeat(72)}\n`);
 }
 
 /**
@@ -29,23 +29,23 @@ function section(title) {
  * 客户端发 OpenAI Chat 格式，路由到 openai access path（同格式 → fast path）。
  */
 async function demoHttpOpenAiChat() {
-  section("演示 A · HTTP ingress：客户端 OpenAI Chat 格式 → canonical → mock 上游 → 回程");
+  section('演示 A · HTTP ingress：客户端 OpenAI Chat 格式 → canonical → mock 上游 → 回程');
 
   // ScriptedTransport 的脚本按请求顺序消费；这里给两条，第二条留作演示 B
-  const { ScriptedTransport } = await import("../dist/gateway-core/transport.js");
+  const { ScriptedTransport } = await import('../dist/gateway-core/transport.js');
   const transport = new ScriptedTransport([
     {
       status: 200,
       body: JSON.stringify({
-        id: "chatcmpl-demo0001",
-        object: "chat.completion",
+        id: 'chatcmpl-demo0001',
+        object: 'chat.completion',
         created: 1_700_000_000,
-        model: "gpt-test-1",
+        model: 'gpt-test-1',
         choices: [
           {
             index: 0,
-            message: { role: "assistant", content: "端到端跑通了：这是 mock 上游的回复。" },
-            finish_reason: "stop",
+            message: { role: 'assistant', content: '端到端跑通了：这是 mock 上游的回复。' },
+            finish_reason: 'stop',
           },
         ],
         usage: {
@@ -60,7 +60,7 @@ async function demoHttpOpenAiChat() {
   ]);
 
   const gateway = createGateway({
-    mode: "production",
+    mode: 'production',
     transport,
     config: { port: PORT, host: HOST },
   });
@@ -73,26 +73,28 @@ async function demoHttpOpenAiChat() {
   process.stdout.write(`ingress 已启动: http://${HOST}:${PORT}\n`);
 
   const clientRequest = {
-    model: "mock-gpt",
+    model: 'mock-gpt',
     messages: [
-      { role: "system", content: "你是一个简洁的助手。" },
-      { role: "user", content: "用一句话说明网关做了什么。" },
+      { role: 'system', content: '你是一个简洁的助手。' },
+      { role: 'user', content: '用一句话说明网关做了什么。' },
     ],
     max_tokens: 256,
     temperature: 0.7,
     stream: false,
   };
 
-  process.stdout.write(`\n→ POST /v1/chat/completions\n${JSON.stringify(clientRequest, null, 2)}\n`);
+  process.stdout.write(
+    `\n→ POST /v1/chat/completions\n${JSON.stringify(clientRequest, null, 2)}\n`,
+  );
 
   const res = await fetch(`http://${HOST}:${PORT}/v1/chat/completions`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify(clientRequest),
   });
 
   const body = await res.text();
-  process.stdout.write(`\n← HTTP ${res.status} ${res.headers.get("content-type")}\n${body}\n`);
+  process.stdout.write(`\n← HTTP ${res.status} ${res.headers.get('content-type')}\n${body}\n`);
 
   // 观测：UsageRecord 与 RequestTrace
   await gateway.usageEmitter.flush();
@@ -109,22 +111,24 @@ async function demoHttpOpenAiChat() {
  * 这条走的是「客户端格式 ≠ 上游格式」的慢路径（anthropic.messages → openai.chat）。
  */
 async function demoRunnerAnthropicToOpenAi() {
-  section("演示 B · PipelineRunner 直跑：客户端 Anthropic Messages → canonical → 上游 OpenAI Chat → 回程");
+  section(
+    '演示 B · PipelineRunner 直跑：客户端 Anthropic Messages → canonical → 上游 OpenAI Chat → 回程',
+  );
 
-  const { ScriptedTransport } = await import("../dist/gateway-core/transport.js");
+  const { ScriptedTransport } = await import('../dist/gateway-core/transport.js');
   const transport = new ScriptedTransport([
     {
       status: 200,
       body: JSON.stringify({
-        id: "chatcmpl-demo0002",
-        object: "chat.completion",
+        id: 'chatcmpl-demo0002',
+        object: 'chat.completion',
         created: 1_700_000_000,
-        model: "gpt-test-1",
+        model: 'gpt-test-1',
         choices: [
           {
             index: 0,
-            message: { role: "assistant", content: "跨格式转换跑通了。" },
-            finish_reason: "stop",
+            message: { role: 'assistant', content: '跨格式转换跑通了。' },
+            finish_reason: 'stop',
           },
         ],
         usage: {
@@ -139,38 +143,40 @@ async function demoRunnerAnthropicToOpenAi() {
   ]);
 
   const gateway = createGateway({
-    mode: "test",
+    mode: 'test',
     transport,
     routeTable: {
       aliases: {
-        "mock-claude": {
-          targets: [{ access_path: "openai", provider: "openai", model: "gpt-test-1" }],
+        'mock-claude': {
+          targets: [{ access_path: 'openai', provider: 'openai', model: 'gpt-test-1' }],
         },
       },
     },
   });
 
   const anthropicRequest = {
-    model: "mock-claude",
-    system: "你是一个简洁的助手。",
+    model: 'mock-claude',
+    system: '你是一个简洁的助手。',
     max_tokens: 256,
     messages: [
       {
-        role: "user",
-        content: [{ type: "text", text: "用一句话说明网关做了什么。" }],
+        role: 'user',
+        content: [{ type: 'text', text: '用一句话说明网关做了什么。' }],
       },
     ],
   };
 
   const sink = new MemoryClientSink();
-  process.stdout.write(`\n→ 客户端 Anthropic Messages 格式\n${JSON.stringify(anthropicRequest, null, 2)}\n`);
+  process.stdout.write(
+    `\n→ 客户端 Anthropic Messages 格式\n${JSON.stringify(anthropicRequest, null, 2)}\n`,
+  );
 
   const outcome = await gateway.runner.run(
     {
-      client_format: "anthropic.messages",
+      client_format: 'anthropic.messages',
       raw_body: Buffer.from(JSON.stringify(anthropicRequest)),
-      headers: { "content-type": "application/json" },
-      path: "/v1/messages",
+      headers: { 'content-type': 'application/json' },
+      path: '/v1/messages',
       query: {},
     },
     sink,
@@ -206,7 +212,7 @@ const results = [];
 results.push(await demoHttpOpenAiChat());
 results.push(await demoRunnerAnthropicToOpenAi());
 
-section("演示完成");
+section('演示完成');
 process.stdout.write(
   `两次往返都跑通了：\n` +
     `  A. HTTP ingress（OpenAI Chat 客户端 → 同格式上游，fast path）\n` +

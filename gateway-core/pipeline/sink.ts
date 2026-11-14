@@ -5,7 +5,7 @@
  * 因此所有错误都必须在首字节前转成 200 + SSE error 事件，或直接非 2xx。
  */
 
-import type { StreamFrame } from "../../ir/index.js";
+import type { StreamFrame } from '../../ir/index.js';
 
 export interface ClientSink {
   /** 首字节前调用一次。重复调用抛错（用于把"写了字节就不能改状态码"变成硬失败）。 */
@@ -39,7 +39,7 @@ export class MemoryClientSink implements ClientSink {
   }
 
   start(status: number, headers: Record<string, string>): void {
-    if (this._started) throw new Error("ClientSink.start 重复调用：首字节后不能改状态码（20 §S8）");
+    if (this._started) throw new Error('ClientSink.start 重复调用：首字节后不能改状态码（20 §S8）');
     this._started = true;
     this.startStatus = status;
     this.startHeaders = headers;
@@ -51,7 +51,7 @@ export class MemoryClientSink implements ClientSink {
   }
 
   writeFrame(frame: StreamFrame): void {
-    if (!this._started) this.start(200, { "content-type": "text/event-stream" });
+    if (!this._started) this.start(200, { 'content-type': 'text/event-stream' });
     this.frames.push(frame);
   }
 
@@ -61,6 +61,6 @@ export class MemoryClientSink implements ClientSink {
 
   /** 取出全部输出（字符串形式）。 */
   text(): string {
-    return this.chunks.map((c) => (typeof c === "string" ? c : c.toString("utf8"))).join("");
+    return this.chunks.map((c) => (typeof c === 'string' ? c : c.toString('utf8'))).join('');
   }
 }

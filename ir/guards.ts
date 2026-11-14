@@ -14,19 +14,19 @@ import type {
   ChatResponsePayload,
   DecisionPayload,
   DecisionResponsePayload,
-} from "./index.js";
+} from './index.js';
 
 function hasMessageShape(v: unknown): v is { messages: unknown } {
-  return typeof v === "object" && v !== null && "messages" in v;
+  return typeof v === 'object' && v !== null && 'messages' in v;
 }
 
 function hasAssistantShape(v: unknown): v is { message: unknown } {
-  return typeof v === "object" && v !== null && "message" in v;
+  return typeof v === 'object' && v !== null && 'message' in v;
 }
 
 /** 把请求信封收窄成 chat payload；不是 chat 模态时返回 undefined。 */
 export function asChatPayload(env: CanonicalRequestEnvelope): ChatPayload | undefined {
-  if (env.kind !== "chat") return undefined;
+  if (env.kind !== 'chat') return undefined;
   if (!hasMessageShape(env.payload)) return undefined;
   return env.payload as ChatPayload;
 }
@@ -35,16 +35,16 @@ export function asChatPayload(env: CanonicalRequestEnvelope): ChatPayload | unde
 export function asChatResponsePayload(
   env: CanonicalResponseEnvelope,
 ): ChatResponsePayload | undefined {
-  if (env.kind !== "chat") return undefined;
+  if (env.kind !== 'chat') return undefined;
   if (!hasAssistantShape(env.payload)) return undefined;
   return env.payload as ChatResponsePayload;
 }
 
 /** 把请求信封收窄成 decision payload。 */
 export function asDecisionPayload(env: CanonicalRequestEnvelope): DecisionPayload | undefined {
-  if (env.kind !== "decision") return undefined;
-  if (typeof env.payload !== "object" || env.payload === null) return undefined;
-  if (!("questions" in env.payload)) return undefined;
+  if (env.kind !== 'decision') return undefined;
+  if (typeof env.payload !== 'object' || env.payload === null) return undefined;
+  if (!('questions' in env.payload)) return undefined;
   return env.payload as DecisionPayload;
 }
 
@@ -52,8 +52,8 @@ export function asDecisionPayload(env: CanonicalRequestEnvelope): DecisionPayloa
 export function asDecisionResponsePayload(
   env: CanonicalResponseEnvelope,
 ): DecisionResponsePayload | undefined {
-  if (env.kind !== "decision") return undefined;
-  if (typeof env.payload !== "object" || env.payload === null) return undefined;
-  if (!("answers" in env.payload)) return undefined;
+  if (env.kind !== 'decision') return undefined;
+  if (typeof env.payload !== 'object' || env.payload === null) return undefined;
+  if (!('answers' in env.payload)) return undefined;
   return env.payload as DecisionResponsePayload;
 }

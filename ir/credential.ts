@@ -11,16 +11,16 @@
  * `session_cookie` 是明确非目标（00 §2.2 第 2 条），只在 schema 留位。
  */
 
-import type { ModalityKind } from "./modality.js";
+import type { ModalityKind } from './modality.js';
 
 export type CredentialType =
-  | "api_key"
-  | "oauth_device_code"
-  | "oauth_browser"
-  | "session_cookie" // experimental，v1 不实现，仅 schema 留位
-  | "cloud_iam"
-  | "local"
-  | "upstream_proxy";
+  | 'api_key'
+  | 'oauth_device_code'
+  | 'oauth_browser'
+  | 'session_cookie' // experimental，v1 不实现，仅 schema 留位
+  | 'cloud_iam'
+  | 'local'
+  | 'upstream_proxy';
 
 export interface RateLimitSpec {
   /** 请求/分钟。 */
@@ -33,11 +33,11 @@ export interface RateLimitSpec {
 
 export interface RefreshPolicy {
   /** 静态 key：永不过期。 */
-  kind: "static" | "auto" | "manual";
+  kind: 'static' | 'auto' | 'manual';
   /** 过期前多久预警（秒）。 */
   warn_before_seconds?: number;
   /** 刷新失败后的行为。 */
-  on_refresh_failure: "deactivate" | "degrade" | "alert_only";
+  on_refresh_failure: 'deactivate' | 'degrade' | 'alert_only';
 }
 
 export interface CredentialStorage {
@@ -45,7 +45,7 @@ export interface CredentialStorage {
    * 明文 env 变量名 / 加密库记录 id / OS keyring 条目。
    * Phase 1 只允许 "env" 与 "keyring"（70-roadmap §2 末尾：禁止 "vault"）。
    */
-  location: "env" | "vault" | "keyring" | "file";
+  location: 'env' | 'vault' | 'keyring' | 'file';
   /** 例如 "AG_OPENAI_API_KEY" 或 "cred:abc123"。**绝不存明文值**。 */
   ref: string;
   /** 是否已加密入库（persistence 开关约束）。 */
@@ -53,12 +53,7 @@ export interface CredentialStorage {
 }
 
 export type CredentialHealthStatus =
-  | "ok"
-  | "expiring"
-  | "expired"
-  | "forbidden"
-  | "quota_exhausted"
-  | "unknown";
+  'ok' | 'expiring' | 'expired' | 'forbidden' | 'quota_exhausted' | 'unknown';
 
 export interface CredentialHealth {
   status: CredentialHealthStatus;
@@ -99,7 +94,7 @@ export interface AccessPath {
   /** 默认 wire 格式（S2 判 fast path 时用）。 */
   format: string;
   /** 该路径的计量口径：订阅路径多数无 usage API → estimated。 */
-  usage_source: "provider" | "estimated";
+  usage_source: 'provider' | 'estimated';
   /** 该路径上的模型命名空间。 */
   model_namespaces: string[];
   /** 是否需要凭据（local 路径不需要）。 */

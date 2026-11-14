@@ -6,7 +6,10 @@
   "stream": { "enabled": false, "mode": "none", "on_mismatch": "reject" },
   "payload": {
     "content": [
-      { "text": "用户在 30 分钟内第 4 次请求同一个问题，前三次的回答都被标记为不满意。", "role": "context" },
+      {
+        "text": "用户在 30 分钟内第 4 次请求同一个问题，前三次的回答都被标记为不满意。",
+        "role": "context"
+      },
       {
         "media": {
           "kind": "inline",

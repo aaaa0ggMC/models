@@ -14,8 +14,8 @@
  * transport，任何情况下不得被序列化落盘。
  */
 
-import type { FormatId, RequestContext, UpstreamCredential } from "../ir/index.js";
-import type { AccessPath } from "../ir/index.js";
+import type { FormatId, RequestContext, UpstreamCredential } from '../ir/index.js';
+import type { AccessPath } from '../ir/index.js';
 
 export interface ResolvedHeaders {
   headers: Record<string, string>;
@@ -39,41 +39,41 @@ export interface CredentialResolver {
 /** 默认 access path 注册表（Phase 1：openai / anthropic 两条，加一个 local mock）。 */
 export const DEFAULT_ACCESS_PATHS: AccessPath[] = [
   {
-    id: "openai",
-    label: "OpenAI (API key)",
-    format: "openai.chat",
-    usage_source: "provider",
-    model_namespaces: ["openai"],
+    id: 'openai',
+    label: 'OpenAI (API key)',
+    format: 'openai.chat',
+    usage_source: 'provider',
+    model_namespaces: ['openai'],
     requires_credential: true,
   },
   {
-    id: "anthropic",
-    label: "Anthropic (API key)",
-    format: "anthropic.messages",
-    usage_source: "provider",
-    model_namespaces: ["anthropic"],
+    id: 'anthropic',
+    label: 'Anthropic (API key)',
+    format: 'anthropic.messages',
+    usage_source: 'provider',
+    model_namespaces: ['anthropic'],
     requires_credential: true,
   },
   {
-    id: "mock",
-    label: "Mock upstream (本地测试)",
-    format: "openai.chat",
-    usage_source: "provider",
-    model_namespaces: ["mock"],
+    id: 'mock',
+    label: 'Mock upstream (本地测试)',
+    format: 'openai.chat',
+    usage_source: 'provider',
+    model_namespaces: ['mock'],
     requires_credential: false,
   },
 ];
 
 /** 上游 key 的**环境变量名**（不是值）。仓库里只出现变量名（AGENTS.md 约束）。 */
 const KEY_ENV_BY_ACCESS_PATH: Record<string, string> = {
-  openai: "AG_OPENAI_API_KEY",
-  anthropic: "AG_ANTHROPIC_API_KEY",
+  openai: 'AG_OPENAI_API_KEY',
+  anthropic: 'AG_ANTHROPIC_API_KEY',
 };
 
 const BASE_URL_BY_ACCESS_PATH: Record<string, string> = {
-  openai: "https://api.openai.com",
-  anthropic: "https://api.anthropic.com",
-  mock: "http://127.0.0.1:1",
+  openai: 'https://api.openai.com',
+  anthropic: 'https://api.anthropic.com',
+  mock: 'http://127.0.0.1:1',
 };
 
 /**
@@ -109,11 +109,11 @@ export class EnvCredentialResolver implements CredentialResolver {
   }
 
   formatFor(accessPath: string): FormatId {
-    return (this.paths.get(accessPath)?.format ?? "openai.chat") as FormatId;
+    return (this.paths.get(accessPath)?.format ?? 'openai.chat') as FormatId;
   }
 
   baseUrlFor(accessPath: string): string {
-    return BASE_URL_BY_ACCESS_PATH[accessPath] ?? "http://127.0.0.1:1";
+    return BASE_URL_BY_ACCESS_PATH[accessPath] ?? 'http://127.0.0.1:1';
   }
 
   accessPath(accessPath: string): AccessPath | undefined {
@@ -135,8 +135,8 @@ export class EnvCredentialResolver implements CredentialResolver {
     const secret = cred === undefined ? undefined : await this.readSecret(cred);
     if (secret === undefined) {
       throw new Error(
-        `access path ${accessPath} 没有可用凭据。请设置环境变量 ${KEY_ENV_BY_ACCESS_PATH[accessPath] ?? "(未登记)"}` +
-          "（Phase 1 只支持 env / keyring 两档，禁止 vault）",
+        `access path ${accessPath} 没有可用凭据。请设置环境变量 ${KEY_ENV_BY_ACCESS_PATH[accessPath] ?? '(未登记)'}` +
+          '（Phase 1 只支持 env / keyring 两档，禁止 vault）',
       );
     }
     return {
@@ -146,22 +146,22 @@ export class EnvCredentialResolver implements CredentialResolver {
   }
 
   private async readSecret(cred: UpstreamCredential): Promise<string | undefined> {
-    if (cred.storage.location === "env") {
+    if (cred.storage.location === 'env') {
       return this.env[cred.storage.ref];
     }
-    if (cred.storage.location === "keyring") {
+    if (cred.storage.location === 'keyring') {
       if (this.keyring === undefined) {
         // Phase 1 没有原生 keyring reader：降级并让调用方看到明确错误，不静默
         throw new Error(
           `凭据 ${cred.id} 声明 storage.location="keyring"，但未注入 KeyringReader` +
-            "（Phase 1 不引原生 keyring 依赖，接口已预留）",
+            '（Phase 1 不引原生 keyring 依赖，接口已预留）',
         );
       }
       return this.keyring.read(cred.storage.ref);
     }
     throw new Error(
       `凭据 ${cred.id} 声明 storage.location="${cred.storage.location}"，Phase 1 不支持` +
-        "（70-roadmap §2：只允许 env / keyring）",
+        '（70-roadmap §2：只允许 env / keyring）',
     );
   }
 }
@@ -169,9 +169,9 @@ export class EnvCredentialResolver implements CredentialResolver {
 /** 各 access path 的鉴权头形态。 Anthropic 用 x-api-key，OpenAI 系用 Bearer。 */
 export function authHeadersFor(accessPath: string, secret: string): Record<string, string> {
   switch (accessPath) {
-    case "anthropic":
-      return { "x-api-key": secret, "anthropic-version": "2026-10-21" };
-    case "openai":
+    case 'anthropic':
+      return { 'x-api-key': secret, 'anthropic-version': '2026-10-21' };
+    case 'openai':
       return { authorization: `Bearer ${secret}` };
     default:
       return { authorization: `Bearer ${secret}` };

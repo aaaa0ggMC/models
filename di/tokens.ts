@@ -23,39 +23,38 @@ export function createToken<T>(key: string): Token<T> {
 /** 全仓库的依赖键集中在这里，避免魔法字符串散落。 */
 export const TOKENS = {
   // ---- 跨切面基础设施 ----
-  Config: createToken<import("./ports.js").GatewayConfig>("Config"),
-  Clock: createToken<import("./ports.js").Clock>("Clock"),
-  Logger: createToken<import("./ports.js").Logger>("Logger"),
-  Metrics: createToken<import("./ports.js").Metrics>("Metrics"),
-  IdGenerator: createToken<import("./ports.js").IdGenerator>("IdGenerator"),
+  Config: createToken<import('./ports.js').GatewayConfig>('Config'),
+  Clock: createToken<import('./ports.js').Clock>('Clock'),
+  Logger: createToken<import('./ports.js').Logger>('Logger'),
+  Metrics: createToken<import('./ports.js').Metrics>('Metrics'),
+  IdGenerator: createToken<import('./ports.js').IdGenerator>('IdGenerator'),
 
   // ---- 传输与上游 ----
-  Transport: createToken<import("../gateway-core/transport.js").Transport>("Transport"),
+  Transport: createToken<import('../gateway-core/transport.js').Transport>('Transport'),
 
   // ---- 编解码 ----
-  AdaptorRegistry: createToken<import("../adaptors/types.js").AdaptorRegistry>("AdaptorRegistry"),
+  AdaptorRegistry: createToken<import('../adaptors/types.js').AdaptorRegistry>('AdaptorRegistry'),
 
   // ---- 插件 ----
-  PluginHost: createToken<import("../plugins/host.js").PluginHost>("PluginHost"),
+  PluginHost: createToken<import('../plugins/host.js').PluginHost>('PluginHost'),
 
   // ---- 计量 ----
-  UsageEmitter: createToken<import("../metering/emitter.js").UsageEmitter>("UsageEmitter"),
+  UsageEmitter: createToken<import('../metering/emitter.js').UsageEmitter>('UsageEmitter'),
 
   // ---- 凭据与能力矩阵 ----
-  CredentialResolver: createToken<import("../credentials/resolver.js").CredentialResolver>(
-    "CredentialResolver",
-  ),
-  CapabilityRegistry: createToken<
-    import("../credentials/capability-registry.js").CapabilityRegistry
-  >("CapabilityRegistry"),
+  CredentialResolver:
+    createToken<import('../credentials/resolver.js').CredentialResolver>('CredentialResolver'),
+  CapabilityRegistry:
+    createToken<import('../credentials/capability-registry.js').CapabilityRegistry>(
+      'CapabilityRegistry',
+    ),
 
   // ---- 路由 ----
-  Router: createToken<import("../gateway-core/router.js").Router>("Router"),
+  Router: createToken<import('../gateway-core/router.js').Router>('Router'),
 
   // ---- 编排 ----
-  PipelineRunner: createToken<import("../gateway-core/pipeline/runner.js").PipelineRunner>(
-    "PipelineRunner",
-  ),
+  PipelineRunner:
+    createToken<import('../gateway-core/pipeline/runner.js').PipelineRunner>('PipelineRunner'),
 } as const;
 
 export type TokenKey = (typeof TOKENS)[keyof typeof TOKENS];

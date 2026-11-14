@@ -22,9 +22,9 @@
  *   4. ctx.client_raw_body_available（保留了原始字节）
  */
 
-import type { PluginHost } from "../../plugins/host.js";
-import type { RequestContext } from "../../ir/index.js";
-import type { ResolvedRoute } from "../../ir/index.js";
+import type { PluginHost } from '../../plugins/host.js';
+import type { RequestContext } from '../../ir/index.js';
+import type { ResolvedRoute } from '../../ir/index.js';
 
 /** fast path 准入判定器。结果被缓存，插件增减时失效重算（D-fastpath-2）。 */
 export interface FastPathAdmission {
@@ -55,11 +55,11 @@ export function createFastPathAdmission(pluginHost: PluginHost): FastPathAdmissi
     }
     const blockers = pluginHost
       .requestSide()
-      .filter((p) => (p.manifest.scope ?? "full-canonical") === "full-canonical")
+      .filter((p) => (p.manifest.scope ?? 'full-canonical') === 'full-canonical')
       .map((p) => p.manifest.name);
     return {
       allowed: false,
-      reason: `请求侧插件需要完整 canonical: ${blockers.join(", ")}`,
+      reason: `请求侧插件需要完整 canonical: ${blockers.join(', ')}`,
     };
   };
 
@@ -93,21 +93,21 @@ export function isFastPathEligible(
   if (!admission.allowed()) return false; // D-fastpath-2：插件准入
   if (ctx.client_format !== route.provider_format) return false; // 条件 1：格式同一
   if (!route.fast_path_eligible) return false; // 条件 2：参考实现/显式声明兼容
-  if (ctx.state["requires_structural_change"] === true) return false; // 条件 3：无结构改写
+  if (ctx.state['requires_structural_change'] === true) return false; // 条件 3：无结构改写
   if (!rawBodyAvailable) return false; // 条件 4：保留了原始字节
   return true;
 }
 
 /** fast path 下**做**的三件事（20 §4.2 表格）：finish_reason 别名、tool id 补全、usage 口径。 */
 export const FAST_PATH_NORMALIZATIONS = [
-  "finish_reason", // 响应侧只改这一个字符串字段，或仅在 usage record 里记录规范化值
-  "tool_call_id", // 生成 call_<ulid>，维护 tool_use_id → call_id 映射
-  "usage", // 口径修正只写 UsageRecord，不动响应体
+  'finish_reason', // 响应侧只改这一个字符串字段，或仅在 usage record 里记录规范化值
+  'tool_call_id', // 生成 call_<ulid>，维护 tool_use_id → call_id 映射
+  'usage', // 口径修正只写 UsageRecord，不动响应体
 ] as const;
 
 /** fast path 下**不做**的事（20 §4.2）：任何结构转换、字段重命名、类型强转。 */
 export const FAST_PATH_FORBIDDEN = [
-  "structural_conversion",
-  "field_rename",
-  "type_coercion",
+  'structural_conversion',
+  'field_rename',
+  'type_coercion',
 ] as const;

@@ -18,9 +18,9 @@ import type {
   ModalityKind,
   ResolvedRoute,
   RequestContext,
-} from "../ir/index.js";
-import type { CapabilityRegistry } from "../credentials/capability-registry.js";
-import type { CredentialResolver } from "../credentials/resolver.js";
+} from '../ir/index.js';
+import type { CapabilityRegistry } from '../credentials/capability-registry.js';
+import type { CredentialResolver } from '../credentials/resolver.js';
 
 /** 别名 → 候选 attempt 的静态表。部署时配置，运行中可变（热更新用）。 */
 export interface RouteAlias {
@@ -42,7 +42,7 @@ export interface RouteRequest {
   /** 客户端传了的、目标 provider 可能不支持的参数名（预检用，20 §S2 第 6 步）。 */
   requested_params?: string[];
   /** on_unsupported 策略：error 时直接拒绝，不进 fallback。 */
-  on_unsupported?: "error" | "allow";
+  on_unsupported?: 'error' | 'allow';
 }
 
 export interface RouteHooks {
@@ -86,7 +86,7 @@ export class StaticRouter implements Router {
       return {
         ok: false,
         error: {
-          code: "no_available_provider",
+          code: 'no_available_provider',
           message: `未知模型别名: ${req.model}`,
           http_status: 400,
           retryable: false,
@@ -108,7 +108,7 @@ export class StaticRouter implements Router {
       return {
         ok: false,
         error: {
-          code: "no_available_provider",
+          code: 'no_available_provider',
           message: `模型 ${req.model} 的所有候选 attempt 都被过滤掉了（健康检查/熔断/key 额度）`,
           http_status: 503,
           retryable: true,
@@ -121,7 +121,11 @@ export class StaticRouter implements Router {
     const capability = this.capabilityRegistry.find(chosen.access_path, chosen.model, req.modality);
 
     // 参数兼容性预检（20 §S2 第 6 步）：on_unsupported === "error" 时直接拒绝，不进 fallback。
-    if (capability !== undefined && req.on_unsupported === "error" && req.requested_params !== undefined) {
+    if (
+      capability !== undefined &&
+      req.on_unsupported === 'error' &&
+      req.requested_params !== undefined
+    ) {
       const unsupported = (capability.unsupported_fields ?? []).filter((f) =>
         (req.requested_params ?? []).includes(f),
       );
@@ -129,10 +133,10 @@ export class StaticRouter implements Router {
         return {
           ok: false,
           error: {
-            code: "capability_unsupported",
+            code: 'capability_unsupported',
             message:
-              `目标 ${chosen.access_path}/${chosen.model} 不支持参数: ${unsupported.join(", ")}。` +
-              "静默丢参数比失败更危险（20 §S2 第 6 步）",
+              `目标 ${chosen.access_path}/${chosen.model} 不支持参数: ${unsupported.join(', ')}。` +
+              '静默丢参数比失败更危险（20 §S2 第 6 步）',
             http_status: 400,
             retryable: false,
             request_id: ctx.request_id,
@@ -143,11 +147,11 @@ export class StaticRouter implements Router {
     }
 
     // 流式能力预检（25 §9）：上游 mode 为 none 而客户端要流式 → 拒绝，不静默降级。
-    if (req.stream && capability?.streaming !== undefined && capability.streaming.mode === "none") {
+    if (req.stream && capability?.streaming !== undefined && capability.streaming.mode === 'none') {
       return {
         ok: false,
         error: {
-          code: "streaming_mode_unsupported",
+          code: 'streaming_mode_unsupported',
           message: `${chosen.access_path}/${chosen.model} 的 ${req.modality} 模态不支持流式`,
           http_status: 400,
           retryable: false,
@@ -158,7 +162,7 @@ export class StaticRouter implements Router {
 
     const fastPathEligible =
       capability !== undefined &&
-      capability.streaming?.mode !== "none" &&
+      capability.streaming?.mode !== 'none' &&
       this.credentialResolver.formatFor(chosen.access_path) === ctx.client_format;
 
     const route: ResolvedRoute = {
@@ -167,11 +171,15 @@ export class StaticRouter implements Router {
       provider_format: this.credentialResolver.formatFor(chosen.access_path) as FormatId,
       model: chosen.model,
       full_model_id: `${chosen.access_path}/${chosen.model}`,
-      attempt_plan: attempts.map((a) => ({ ...a, fast_path_eligible: a.fast_path_eligible || fastPathEligible })),
+      attempt_plan: attempts.map((a) => ({
+        ...a,
+        fast_path_eligible: a.fast_path_eligible || fastPathEligible,
+      })),
       fast_path_eligible: fastPathEligible,
-      model_meta: alias.max_context_tokens === undefined
-        ? undefined
-        : { max_context_tokens: alias.max_context_tokens },
+      model_meta:
+        alias.max_context_tokens === undefined
+          ? undefined
+          : { max_context_tokens: alias.max_context_tokens },
     };
 
     const sessionKey = this.hooks.sessionKey?.(req, ctx);

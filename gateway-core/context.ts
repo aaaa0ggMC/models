@@ -5,24 +5,19 @@
  * 这里只放"怎么改它"的实现。`state` 是工具调用循环与插件跨阶段协作的唯一通道（20 §2.1）。
  */
 
-import type {
-  AuthContext,
-  RequestContext,
-  ResolvedRoute,
-  StageMetric,
-} from "../ir/index.js";
-import { CTX_STATE_KEYS } from "../ir/index.js";
+import type { AuthContext, RequestContext, ResolvedRoute, StageMetric } from '../ir/index.js';
+import { CTX_STATE_KEYS } from '../ir/index.js';
 
 export class MutableRequestContext implements RequestContext {
   request_id: string;
   trace_id?: string;
   started_at: number;
   deadline: number;
-  client_format: RequestContext["client_format"];
+  client_format: RequestContext['client_format'];
   client_raw_headers: Record<string, string>;
   auth: AuthContext;
   route!: ResolvedRoute;
-  provider_format: RequestContext["provider_format"];
+  provider_format: RequestContext['provider_format'];
   fast_path: boolean;
   state: Record<string, unknown> = {};
   metrics: StageMetric[] = [];
@@ -39,7 +34,7 @@ export class MutableRequestContext implements RequestContext {
     request_id: string;
     started_at: number;
     deadline: number;
-    client_format: RequestContext["client_format"];
+    client_format: RequestContext['client_format'];
     client_raw_headers: Record<string, string>;
     auth: AuthContext;
     trace_id?: string;
