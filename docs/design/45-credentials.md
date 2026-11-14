@@ -285,6 +285,10 @@ interface AccessPreference {
   1. 路由摘除该凭据；
   2. WebUI 看板标红；
   3. 通知（可选，走 [66-auth.md](./66-auth.md) 的通知通道，**内容不含 secret**）。
+- **低余额也是路由信号**：DeepSeek 用同一 API key 即可查余额，余额低于阈值时按 Plan 感知路由转向订阅路径
+  （并在请求前预检，避免必然失败的调用占用超时预算）。余额同时是计费**真值对账**的事实来源，见
+  [60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §4.2「真值对账」——注意赠送余额优先扣，
+  余额差不等于现金支出。
 - `on_refresh_failure`：`deactivate`（默认，摘除）/ `degrade`（切 fallback 并继续尝试刷新）/ `alert_only`。
 
 ### 5.3 密钥处理硬规则
@@ -370,6 +374,12 @@ interface CostBreakdown {
 ```
 
 **理由**：只看现金成本会把"用订阅额度跑掉 10 亿 token"显示成 $0，掩盖真实资源消耗；只看摊销会让"本来可以免费用订阅却付了 API 费"看不出来。两个口径都记，看板可切换。
+
+> **口径已按 60 §4.2 收敛**：双口径在 `UsageRecord` 里落成 `cost.cash_micros`（实际现金，订阅路径为 0）与
+> `cost.as_api_micros`（等值 API 计费，永远尝试计算），**分开存储、不合并**，且必须用同一次
+> `resolvePrice(ts)` 的解析结果。**订阅摊销不再写进单条记录**——它依赖预估额度（易变量），与"历史记录绝不
+> 被重算"的快照原则冲突，改为查询时的**可选派生指标**（`amortization_basis` 保留为派生计算的输入，
+> 不进 `UsageRecord`）。价格表含时段窗口（错峰折扣）时的解析规则见 60 §4.2。
 
 ---
 

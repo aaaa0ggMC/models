@@ -405,6 +405,9 @@ system prompt 与工具定义在多个会话间也高度重复。用**内容定�
 | `export.format` | 加密 JSONL + zstd | 手动导出 |
 
 - 清理是**物理删除**（非软删），在 `retention_log` 记一条"删了哪个时间区间的多少条"（只记统计，不记内容）。
+- **`price_snapshot` 随 usage 明细长期保留，不参与 rollup 聚合删除**——它是"当时用什么价格算的"的唯一证据，
+  对账与审计都要逐笔复现（原则见 [60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §4.2：
+  历史记录绝不被重算）。体积可忽略（每条几十字节）。
 - **加密导出**：XChaCha20-Poly1305 + Argon2id 派生密钥（与 §3 同一套 KDF 参数），导出文件含版本头与 KDF 参数，便于跨机恢复。
 - **备份**：SQLite 单文件 + WAL；备份时用 `VACUUM INTO`（一致性快照）而不是裸拷。备份文件本身是密文，可安全外传。
 
