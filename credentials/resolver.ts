@@ -36,7 +36,20 @@ export interface CredentialResolver {
   headersFor(accessPath: string, ctx: RequestContext): Promise<ResolvedHeaders>;
 }
 
-/** 默认 access path 注册表（Phase 1：openai / anthropic 两条，加一个 local mock）。 */
+/**
+ * 默认 access path 注册表（Phase 1：openai / anthropic 两条 + 一个 local mock，
+ * 加 DeepSeek 的**两个 dialect**）。
+ *
+ * DeepSeek 同时提供 OpenAI 兼容与 Anthropic 兼容两套接口，因此登记**两条**
+ * access path（45 §3：access path = 上游端点 + 凭据 + wire 格式的组合）：
+ *   - `deepseek.openai-chat`：`POST https://api.deepseek.com/chat/completions`
+ *     （注意官方文档的路径**没有 /v1**，与 OpenAI 本家不同；Bearer 鉴权）；
+ *   - `deepseek.anthropic-messages`：`POST https://api.deepseek.com/anthropic/v1/messages`
+ *     （x-api-key 或 Bearer；anthropic-version 被服务端忽略）。
+ * 两条共用同一个 key 环境变量 `DEEPSEEK_API_KEY`（AGENTS.md：key 只走环境变量）。
+ * 端点路径的 dialect 差异不在 base URL 里拼接（避免「base URL 带魔法后缀」），
+ * 而由 provider profile 的 `endpointPath` 表达，见 providers/deepseek/profile.ts。
+ */
 export const DEFAULT_ACCESS_PATHS: AccessPath[] = [
   {
     id: 'openai',
@@ -55,6 +68,22 @@ export const DEFAULT_ACCESS_PATHS: AccessPath[] = [
     requires_credential: true,
   },
   {
+    id: 'deepseek.openai-chat',
+    label: 'DeepSeek (OpenAI 兼容)',
+    format: 'openai.chat',
+    usage_source: 'provider',
+    model_namespaces: ['deepseek'],
+    requires_credential: true,
+  },
+  {
+    id: 'deepseek.anthropic-messages',
+    label: 'DeepSeek (Anthropic 兼容)',
+    format: 'anthropic.messages',
+    usage_source: 'provider',
+    model_namespaces: ['deepseek'],
+    requires_credential: true,
+  },
+  {
     id: 'mock',
     label: 'Mock upstream (本地测试)',
     format: 'openai.chat',
@@ -68,11 +97,20 @@ export const DEFAULT_ACCESS_PATHS: AccessPath[] = [
 const KEY_ENV_BY_ACCESS_PATH: Record<string, string> = {
   openai: 'AG_OPENAI_API_KEY',
   anthropic: 'AG_ANTHROPIC_API_KEY',
+  // DeepSeek 两个 dialect 共用同一个 key（同一账号、同一套计费）
+  'deepseek.openai-chat': 'DEEPSEEK_API_KEY',
+  'deepseek.anthropic-messages': 'DEEPSEEK_API_KEY',
 };
 
-const BASE_URL_BY_ACCESS_PATH: Record<string, string> = {
+/**
+ * 各 access path 的默认上游 base URL（**不含路径**，路径由 codec / provider
+ * profile 给）。DeepSeek 两 dialect 同 base：`https://api.deepseek.com`。
+ */
+export const DEFAULT_BASE_URL_BY_ACCESS_PATH: Record<string, string> = {
   openai: 'https://api.openai.com',
   anthropic: 'https://api.anthropic.com',
+  'deepseek.openai-chat': 'https://api.deepseek.com',
+  'deepseek.anthropic-messages': 'https://api.deepseek.com',
   mock: 'http://127.0.0.1:1',
 };
 
@@ -91,13 +129,17 @@ export interface KeyringReader {
 export class EnvCredentialResolver implements CredentialResolver {
   private readonly paths = new Map<string, AccessPath>();
   private readonly credentials = new Map<string, UpstreamCredential[]>();
+  /** base URL 覆盖（DI 注入；默认空 = 用 DEFAULT_BASE_URL_BY_ACCESS_PATH）。 */
+  private readonly baseUrlOverrides: Record<string, string>;
 
   constructor(
     accessPaths: AccessPath[] = DEFAULT_ACCESS_PATHS,
     private readonly keyring?: KeyringReader,
     private readonly env: Record<string, string | undefined> = process.env,
+    baseUrlOverrides: Record<string, string> = {},
   ) {
     for (const p of accessPaths) this.paths.set(p.id, p);
+    this.baseUrlOverrides = { ...baseUrlOverrides };
     this.registerEnvCredentials();
   }
 
@@ -140,7 +182,11 @@ export class EnvCredentialResolver implements CredentialResolver {
   }
 
   baseUrlFor(accessPath: string): string {
-    return BASE_URL_BY_ACCESS_PATH[accessPath] ?? 'http://127.0.0.1:1';
+    return (
+      this.baseUrlOverrides[accessPath] ??
+      DEFAULT_BASE_URL_BY_ACCESS_PATH[accessPath] ??
+      'http://127.0.0.1:1'
+    );
   }
 
   accessPath(accessPath: string): AccessPath | undefined {
@@ -193,11 +239,23 @@ export class EnvCredentialResolver implements CredentialResolver {
   }
 }
 
-/** 各 access path 的鉴权头形态。 Anthropic 用 x-api-key，OpenAI 系用 Bearer。 */
+/**
+ * 各 access path 的鉴权头形态。 Anthropic 用 x-api-key，OpenAI 系用 Bearer。
+ *
+ * DeepSeek 两个 dialect（官方文档 https://api-docs.deepseek.com/guides/anthropic_api ）：
+ *   - OpenAI 兼容面：`Authorization: Bearer <key>`；
+ *   - Anthropic 兼容面：`x-api-key` **或** `Authorization: Bearer`（两者都传时
+ *     Bearer 优先），且 `anthropic-version` 被服务端**忽略**——这里仍按
+ *     Anthropic SDK 的默认值发 `2023-06-01`，保证 SDK 客户端行为一致。
+ */
 export function authHeadersFor(accessPath: string, secret: string): Record<string, string> {
   switch (accessPath) {
     case 'anthropic':
       return { 'x-api-key': secret, 'anthropic-version': '2026-10-21' };
+    case 'deepseek.anthropic-messages':
+      return { 'x-api-key': secret, 'anthropic-version': '2023-06-01' };
+    case 'deepseek.openai-chat':
+      return { authorization: `Bearer ${secret}` };
     case 'openai':
       return { authorization: `Bearer ${secret}` };
     default:

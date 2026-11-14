@@ -1,0 +1,5 @@
+{
+  "title": "AgentGateway 架构总览（示例文档）",
+  "content": "# AgentGateway 架构总览\n\n本页为测试夹具内容（example.com 假数据）。\n\n## canonical\n\nAG-IR 是唯一事实来源。\n",
+  "future_top_level_field": "未知顶层键必须活着进 raw"
+}

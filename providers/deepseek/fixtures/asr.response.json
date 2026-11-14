@@ -1,0 +1,6 @@
+{
+  "request_id": "asr-fixture-req-0001",
+  "text": "这是一段用于测试的示例转写文本，内容全部是假数据。",
+  "duration_ms": 7530,
+  "future_top_level_field": "未知顶层键必须活着进 raw"
+}

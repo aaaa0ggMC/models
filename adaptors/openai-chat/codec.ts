@@ -29,6 +29,7 @@
 
 import type {
   AudioPart,
+  BuiltinTool,
   CanonicalMessage,
   CanonicalRequestEnvelope,
   CanonicalResponseEnvelope,
@@ -57,6 +58,7 @@ import type {
   SystemBlock,
   TextPart,
   ThinkingConfig,
+  ThinkingPart,
   ToolChoice,
   ToolResultPart,
   ToolUsePart,
@@ -66,6 +68,7 @@ import type {
 } from '../../ir/index.js';
 import { CTX_STATE_KEYS, IR_VERSION } from '../../ir/index.js';
 import type { Adaptor, AdaptorMeta, EncodedRequest, RequestEnvelopeShallow } from '../types.js';
+import type { ProviderProfile, ProviderProfileRegistry } from '../../di/ports.js';
 
 /** 本 codec 的格式 id、模态与默认端点（20 §S0 路径签名表）。 */
 const FORMAT: FormatId = 'openai.chat';
@@ -132,6 +135,10 @@ const MODELLED_MESSAGE_KEYS: readonly string[] = [
   'tool_call_id',
   'name',
   'refusal',
+  // DeepSeek 思考内容的 wire 字段名（非流式 message / 流式 delta 都有）。
+  // 建模它而不是走「未建模键原样拷回」：回写时要能区分「原文照抄」与
+  // 「canonical thinking part 重新生成」，两者在跨格式转换时来源不同。
+  'reasoning_content',
 ];
 
 /** canonical 认得的消息角色（用于判断 wire 角色是否需要原样还原）。 */
@@ -244,6 +251,18 @@ export { PART_FRAME_NOTE_KEY, FINISH_FRAME_NOTE_KEY };
 export interface OpenAIChatCodecDeps {
   clock: Clock;
   logger?: Logger;
+  /**
+   * provider profile 注册表（可选）。
+   *
+   * 注入后本 codec 在**按 access path 查到 profile** 时启用三类 provider 专有映射
+   * （见 di/ports.ts 的 ProviderProfile）：
+   *   1. 端点路径（DeepSeek 是 `/chat/completions` 而非 `/v1/chat/completions`）；
+   *   2. builtin tool 的厂商专有形态（DeepSeek `deepseek_web_search` 等）；
+   *   3. thinking 开关的厂商专有形态（DeepSeek `thinking:{type}` 对象）。
+   * 查不到 profile（openai / mock 等）时行为与本文件历史版本完全一致——
+   * 一个 codec 实例服务所有同 dialect 的 access path，provider 差异必须可插拔。
+   */
+  providerProfiles?: ProviderProfileRegistry;
 }
 
 /** 把一个 SSE chunk 序列折叠成 canonical 帧时的累加器。 */
@@ -266,12 +285,33 @@ export class OpenAIChatCodec implements Adaptor {
 
   private readonly clock: Clock;
   private readonly logger: Logger | undefined;
+  private readonly providerProfiles: ProviderProfileRegistry | undefined;
   /** 实例内单调的帧序号（25 §2：从 0 开始；不放模块级，避免跨实例共享状态）。 */
   private seqCounter = 0;
 
   constructor(deps: OpenAIChatCodecDeps) {
     this.clock = deps.clock;
     this.logger = deps.logger;
+    this.providerProfiles = deps.providerProfiles;
+  }
+
+  /**
+   * 按本次请求的 access path 取 provider profile（没有则 undefined）。
+   *
+   * 判据只用 `ctx.route.access_path`：路由（S2）之后 ctx.route 一定存在；
+   * 直调 codec 的测试/工具没有 route 时返回 undefined，退回 dialect 默认行为。
+   */
+  private profileFor(ctx: RequestContext): ProviderProfile | undefined {
+    const accessPath = ctx.route?.access_path;
+    if (accessPath === undefined || this.providerProfiles === undefined) return undefined;
+    return this.providerProfiles.forAccessPath(accessPath);
+  }
+
+  /** 上游端点路径：profile 覆盖优先，否则用 OpenAI 本家的默认路径。 */
+  private endpointPathFor(ctx: RequestContext): string {
+    const profile = this.profileFor(ctx);
+    if (profile === undefined) return DEFAULT_PATH;
+    return profile.endpointPath?.(ctx.route?.access_path ?? '') ?? DEFAULT_PATH;
   }
 
   // ===========================================================================
@@ -312,7 +352,7 @@ export class OpenAIChatCodec implements Adaptor {
       }
     }
 
-    const tools = this.decodeTools(obj, warnings, nodes);
+    const tools = this.decodeTools(obj, warnings, nodes, this.profileFor(ctx));
     const toolChoice = this.decodeToolChoice(obj, warnings, nodes);
     const params = this.decodeParams(obj, warnings);
     const stream = this.decodeStreamOptions(obj);
@@ -508,11 +548,21 @@ export class OpenAIChatCodec implements Adaptor {
     };
   }
 
-  /** tools[] → CanonicalTool[]（10 §9.1：`function.parameters` 原样透传）。 */
+  /**
+   * tools[] → CanonicalTool[]（10 §9.1：`function.parameters` 原样透传）。
+   *
+   * 三种形态：
+   *   1. `{type:"function", function:{...}}` → FunctionTool（OpenAI 本家标准形态）；
+   *   2. **provider 专有 server tool**（如 DeepSeek 的 `deepseek_web_search` /
+   *      `deepseek_read_url`，见 50-builtin-search.md §3.1 模式 A）→ BuiltinTool，
+   *      厂商类型串进 `native.provider_tool_type`，canonical 名保持稳定名；
+   *   3. 其它未建模类型 → raw.nodes 保留 + warning（不猜也不丢）。
+   */
   private decodeTools(
     obj: Record<string, unknown>,
     warnings: string[],
     nodes: Record<string, unknown>,
+    profile: ProviderProfile | undefined,
   ): CanonicalTool[] {
     const raw = obj['tools'];
     if (!Array.isArray(raw)) return [];
@@ -537,6 +587,13 @@ export class OpenAIChatCodec implements Adaptor {
         toolIndex += 1;
         continue;
       }
+      // provider 专有 server tool → canonical BuiltinTool（上游原生执行，executor=provider）
+      const builtin = this.decodeBuiltinTool(type, t, profile);
+      if (builtin !== undefined) {
+        tools.push(builtin);
+        toolIndex += 1;
+        continue;
+      }
       // 非 function 工具（builtin / 未来类型）：canonical 只有 FunctionTool | BuiltinTool
       // 两种，未知类型**不猜也不丢**——进 raw.nodes，回写时原样还原（10 §7.1 节点级 raw）
       warnings.push(`unknown_tool_type:${type}`);
@@ -545,6 +602,36 @@ export class OpenAIChatCodec implements Adaptor {
       this.logger?.warn('openai.chat: 未建模的 tool 类型，进 raw.nodes 保留', { tool_type: type });
     }
     return tools;
+  }
+
+  /**
+   * provider 专有 server tool 类型 → canonical `BuiltinTool`（认不出返回 undefined）。
+   *
+   * 只有**当前 access path 的 profile 认识**的类型才归一——同一个 codec 实例服务
+   * 所有 openai.chat dialect 的 access path，不能把某一家 provider 的工具名当成
+   * dialect 通用语义（例如 `deepseek_web_search` 对 OpenAI 本家毫无意义）。
+   */
+  private decodeBuiltinTool(
+    vendorType: string,
+    rec: Record<string, unknown>,
+    profile: ProviderProfile | undefined,
+  ): BuiltinTool | undefined {
+    if (profile?.builtinToolCanonicalName === undefined) return undefined;
+    const name = profile.builtinToolCanonicalName(vendorType);
+    if (name === undefined) return undefined;
+    const config: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rec)) {
+      if (k === 'type' || k === 'name') continue;
+      config[k] = v;
+    }
+    return {
+      type: 'builtin',
+      name,
+      config,
+      native: { provider_tool_type: vendorType },
+      executor: 'provider',
+      _raw: rec,
+    };
   }
 
   /**
@@ -700,7 +787,7 @@ export class OpenAIChatCodec implements Adaptor {
         body: undefined,
         raw_bytes: this.ensureIncludeUsage(rawBody),
         fast_path: true,
-        path: DEFAULT_PATH,
+        path: this.endpointPathFor(ctx),
         dropped: [],
         warnings: [],
         diagnostics: [],
@@ -735,12 +822,13 @@ export class OpenAIChatCodec implements Adaptor {
     };
 
     if (payload.tools !== undefined && payload.tools.length > 0) {
-      body['tools'] = payload.tools.map((tool) => this.encodeTool(tool, warn));
+      const profile = this.profileFor(ctx);
+      body['tools'] = payload.tools.map((tool) => this.encodeTool(tool, warn, profile));
     }
     const toolChoice = this.encodeToolChoice(payload.tool_choice, req.raw.nodes);
     if (toolChoice !== undefined) body['tool_choice'] = toolChoice;
 
-    if (params !== undefined) this.encodeParams(params, body, warn);
+    if (params !== undefined) this.encodeParams(params, body, warn, this.profileFor(ctx));
 
     if (req.stream !== undefined) {
       body['stream'] = req.stream.enabled;
@@ -772,7 +860,14 @@ export class OpenAIChatCodec implements Adaptor {
       ];
     }
 
-    return { body, fast_path: false, path: DEFAULT_PATH, dropped, warnings, diagnostics };
+    return {
+      body,
+      fast_path: false,
+      path: this.endpointPathFor(ctx),
+      dropped,
+      warnings,
+      diagnostics,
+    };
   }
 
   /**
@@ -895,11 +990,19 @@ export class OpenAIChatCodec implements Adaptor {
     }
     if (refusal !== undefined) entry['refusal'] = refusal.reason;
 
+    // thinking part → reasoning_content（DeepSeek 的 wire 字段名，与 decodeResponse 对称）。
+    // 这不是可选的礼貌：DeepSeek 官方文档明确「带 tools 的请求必须在后续每一轮完整
+    // 回传 reasoning_content，否则 400」——多轮工具循环丢掉它，第二次上游调用就炸。
+    const thinkingText = message.parts
+      .filter((p): p is ThinkingPart => p.type === 'thinking')
+      .map((p) => p.thinking)
+      .join('');
+    if (thinkingText !== '') entry['reasoning_content'] = thinkingText;
+
     for (const part of message.parts) {
       switch (part.type) {
-        case 'thinking':
         case 'redacted_thinking':
-          // 10 §9.1：OpenAI Chat 对思考块「无对应 → drop」
+          // thinking 已映射到 reasoning_content；redacted（加密块）在 OpenAI Chat 无对应
           warn(
             'thinking_unsupported',
             `parts.${part.type}`,
@@ -998,10 +1101,32 @@ export class OpenAIChatCodec implements Adaptor {
   private encodeTool(
     tool: CanonicalTool,
     warn: (code: string, fieldPath: string, message: string) => void,
+    profile: ProviderProfile | undefined,
   ): unknown {
     if (tool.type === 'builtin') {
-      // canonical builtin → OpenAI 原生工具名（50-builtin-search.md §2.2）
-      return { type: tool.name, ...tool.config };
+      // 50 §3.1 模式 A：上游原生支持 → 透传成厂商专有 server tool 声明。
+      // 认不出（没有 profile 或 profile 不覆盖该 canonical 名）→ 丢弃 + 告警，
+      // 不猜一个 OpenAI 专有类型名（猜错会让上游 400 或静默失效）。
+      const wire = profile?.builtinToolWire?.(tool.name, FORMAT);
+      if (wire === undefined) {
+        warn(
+          'builtin_tool_unsupported',
+          `tools.${tool.name}`,
+          `canonical 内置工具 ${tool.name} 在目标 provider 无原生对应，已丢弃`,
+        );
+        return { type: 'function', function: { name: tool.name, parameters: {} } };
+      }
+      // provider 明确不吃配置字段时（DeepSeek 的 web 工具是裸开关，带配置上游 400）
+      // 丢弃 + 告警，不静默发过去。
+      const acceptsConfig = profile?.builtinToolAcceptsConfig?.(tool.name) ?? true;
+      if (!acceptsConfig && Object.keys(tool.config).length > 0) {
+        warn(
+          'builtin_tool_config_unsupported',
+          `tools.${tool.name}.config`,
+          `上游不接受内置工具 ${tool.name} 的配置字段，已丢弃`,
+        );
+      }
+      return { ...wire, ...(acceptsConfig ? tool.config : {}) };
     }
     if (tool.cache_control !== undefined) {
       warn(
@@ -1039,6 +1164,7 @@ export class OpenAIChatCodec implements Adaptor {
     params: ChatParams,
     body: Record<string, unknown>,
     warn: (code: string, fieldPath: string, message: string) => void,
+    profile: ProviderProfile | undefined,
   ): void {
     if (params.max_output_tokens !== undefined) {
       body['max_completion_tokens'] = params.max_output_tokens;
@@ -1062,7 +1188,14 @@ export class OpenAIChatCodec implements Adaptor {
     if (params.response_format !== undefined) body['response_format'] = params.response_format;
 
     if (params.thinking !== undefined) {
-      if (params.thinking.effort !== undefined) {
+      // provider 专有形态优先（DeepSeek：thinking:{type:enabled/disabled} 对象 +
+      // 归一后的 reasoning_effort 枚举）。没有 profile 时走 OpenAI 本家默认映射。
+      // 为什么必须让 provider 显式表达「关推理」：DeepSeek 省略 thinking 字段时
+      // **默认开启**推理，静默省略会把客户端的 enabled:false 吞掉（语义反转）。
+      const wire = profile?.thinkingWire?.(params.thinking);
+      if (wire !== undefined) {
+        Object.assign(body, wire);
+      } else if (params.thinking.effort !== undefined) {
         body['reasoning_effort'] = params.thinking.effort;
       }
       if (params.thinking.budget_tokens !== undefined) {
@@ -1107,6 +1240,14 @@ export class OpenAIChatCodec implements Adaptor {
 
     const parts: Part[] = [];
     if (message !== undefined) {
+      // reasoning_content（DeepSeek 思考内容的 wire 字段名，与流式 delta 的同名字段对齐）
+      // 排在 content 之前：它在 wire 上就是「最终答案之前」的那段推理。
+      // 为什么非流式也要收：流式路径早就读 delta.reasoning_content（见 foldChunk），
+      // 非流式不收会造成同一 dialect 两条路径的 canonical 不一致。
+      const reasoning = message['reasoning_content'] ?? message['reasoning'];
+      if (typeof reasoning === 'string' && reasoning !== '') {
+        parts.push({ type: 'thinking', thinking: reasoning });
+      }
       parts.push(...this.decodeParts(message['content'], warnings));
       const refusal = message['refusal'];
       if (typeof refusal === 'string') parts.push({ type: 'refusal', reason: refusal });
@@ -1222,6 +1363,11 @@ export class OpenAIChatCodec implements Adaptor {
       .join('');
     const toolCalls = message.parts.filter((p): p is ToolUsePart => p.type === 'tool_use');
     const refusal = message.parts.find((p): p is RefusalPart => p.type === 'refusal');
+    // thinking part → reasoning_content（与 decodeResponse 对称；DeepSeek 的字段名）
+    const reasoning = message.parts
+      .filter((p): p is ThinkingPart => p.type === 'thinking')
+      .map((p) => p.thinking)
+      .join('');
 
     const out: Record<string, unknown> = {
       id: res.request_id,
@@ -1235,6 +1381,7 @@ export class OpenAIChatCodec implements Adaptor {
             role: 'assistant',
             // OpenAI 在没有文本内容时把 content 置 null（有 tool_calls 或 refusal 时）
             content: text === '' && (toolCalls.length > 0 || refusal !== undefined) ? null : text,
+            ...(reasoning === '' ? {} : { reasoning_content: reasoning }),
             ...(toolCalls.length > 0
               ? {
                   tool_calls: toolCalls.map((call) => ({
@@ -2135,7 +2282,6 @@ export function openAIChatAdaptorMeta(): AdaptorMeta {
       'params.thinking.budget_tokens',
       'params.thinking.include_summary',
       'cache_control',
-      'parts.thinking',
       'parts.redacted_thinking',
       'parts.search_result',
     ],
@@ -2143,6 +2289,7 @@ export function openAIChatAdaptorMeta(): AdaptorMeta {
       "system 是 messages[{role:'system'}] 而非顶层字段；developer 角色折叠进 system，多 system 必须全部保留（40 §7.2，llm-bridge 的真实缺陷）",
       'max_tokens 已由 max_completion_tokens 取代（40 §2.2b），编码统一发新名',
       'reasoning_effort 是离散档位，没有连续 budget_tokens（40 §3.1）',
+      'reasoning_content 是思考内容的 wire 字段名（DeepSeek 用法）：非流式 message 与流式 delta 都认，双向映射到 canonical thinking part；带 tools 的多轮必须回传否则上游 400',
       'stream_options.include_usage 必须显式打开才有流式 usage（40 §2.3），网关在 S4 自动补',
       'tool_call arguments 是 JSON 字符串，解析失败时 raw_arguments 保留原串（10 §7.3）',
       'function_call finish_reason 已弃用，归一为 other（10 §9.3）',

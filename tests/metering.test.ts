@@ -13,6 +13,7 @@ import {
   MemoryUsageSink,
   NullUsageSink,
   createUsageRecord,
+  zeroCost,
 } from '../metering/index.js';
 import { emptyUsage, mergeTokenUsage } from '../ir/index.js';
 
@@ -169,10 +170,16 @@ describe('UsageRecord 结构（60 §3）', () => {
     const r = makeRecord('req_x');
     expect('trace_id' in r).toBe(false);
     expect('model_alias' in r).toBe(false);
+    expect('access_path' in r).toBe(false);
     expect('usage_raw' in r).toBe(false);
     expect('error_code' in r).toBe(false);
     expect('compaction' in r).toBe(false);
     expect('control_plane_cost' in r).toBe(false);
+    // 定价相关：未接定价时快照缺省（不是 null——null 是"请求时拿不到价格"）
+    expect('price_snapshot' in r).toBe(false);
+    expect('estimate_method' in r).toBe(false);
+    expect('backfilled_at' in r).toBe(false);
+    expect('backfill_price_table_version' in r).toBe(false);
   });
 
   it('status=error 时 error_code 与 finish_reason=error', () => {
@@ -197,18 +204,16 @@ describe('UsageRecord 结构（60 §3）', () => {
     expect(r.finish_reason).toBe('error');
   });
 
-  it('cost 全零（Phase 1 未接定价表，60 §4.1 是 Phase 2）', () => {
+  it('cost 双口径全零 + unpriced（Phase 1 未接定价表，60 §4.1 是 Phase 2）', () => {
     const r = makeRecord('req_x');
     expect(r.cost).toEqual({
-      input: 0,
-      output: 0,
-      cache_read: 0,
-      cache_write: 0,
-      reasoning: 0,
-      builtin_tools: 0,
-      external: 0,
-      total: 0,
+      cash: zeroCost(),
+      as_api: zeroCost(),
+      status: 'unpriced',
     });
+    // unpriced 不等于"免费"：没接定价就是没算钱，两个口径都是 0（R5 的立场）
+    expect(r.cost.cash.total).toBe(0);
+    expect(r.cost.as_api.total).toBe(0);
   });
 });
 

@@ -49,6 +49,9 @@ export const TOKENS = {
       'CapabilityRegistry',
     ),
 
+  // ---- provider profile（provider 专有知识：端点路径 / usage 归一 / builtin tool 映射）----
+  ProviderProfiles: createToken<import('./ports.js').ProviderProfileRegistry>('ProviderProfiles'),
+
   // ---- 路由 ----
   Router: createToken<import('../gateway-core/router.js').Router>('Router'),
 

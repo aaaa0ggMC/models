@@ -127,6 +127,12 @@ export function canonicalCodeFromStatus(status: number, providerCode?: string): 
     case 401:
     case 403:
       return 'auth_failed';
+    // 402 = 余额不足（DeepSeek 官方错误码表「402 - Insufficient Balance」，
+    // https://api-docs.deepseek.com/quick_start/error_codes ）。单独映射而不是落进
+    // upstream_error：计费类失败要让 UsageRecord.error_code 可统计，并让客户端面的
+    // OpenAI 错误体落到 insufficient_quota（40 §2.1 反向表）。
+    case 402:
+      return 'quota_exceeded';
     case 429:
       return 'rate_limited';
     case 408:
