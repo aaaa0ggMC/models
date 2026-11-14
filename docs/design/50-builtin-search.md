@@ -21,8 +21,11 @@
 /** 内置工具：由网关或上游执行，客户端只需声明"我要用" */
 interface BuiltinTool {
   type: "builtin";
-  /** 稳定标识，跨格式映射的键 */
-  name: "web_search" | "web_search_20250305" | "google_search" | "url_context";
+  /** 稳定标识，跨格式映射的键。canonical 只用稳定名（见 §2.2 的归一化规则）；
+   *  完整 canonical 枚举见 10-canonical-schema.md §4.3 的 BuiltinTool（唯一事实来源）。 */
+  name: "web_search";
+  /** 上游专有工具名/版本串（web_search_20250305、googleSearch…）存这里，映射时还原 */
+  provider_tool_type?: string;
   /** 展示名（映射到上游时按需改写） */
   display_name?: string;
   description?: string;

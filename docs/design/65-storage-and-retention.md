@@ -2,7 +2,6 @@
 
 > 版本：v1.0-draft ｜ 日期：2026-11-14 ｜ 状态：**draft（待 review）**
 > 上游依赖：[10-canonical-schema.md](./10-canonical-schema.md)、[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md)
-> 下游被引用于：[70-roadmap.md](./70-roadmap.md)
 
 ---
 
@@ -17,10 +16,14 @@
 ### 决策 S1：SQLite 单文件 + 整库加密 + payload 列应用层信封加密（双层）
 
 **决策**：
+
 - **第一层（整库）**：SQLite + `better-sqlite3-multiple-ciphers`，`PRAGMA cipher='chacha20'`（sqleet/AEAD，官方推荐默认）。
-- **第二层（列级）**：payload 列（消息内容、媒体二进制）额外用应用层 AES-256-GCM 加密，AAD 绑定 `request_id` + schema 版本。
+- **第二层（列级）**：payload 列（消息内容、媒体二进制）额外用应用层 AES-256-GCM 加密，**AAD 绑定 `request_id + ir_version`**。
+
+> **AAD 写法已全文统一（review #2(a)）**：00 §7.4 原写"记录 id"、60 §6 原写"request_id"、本节 §3.1 原写"request_id + ir_version"、60 §7.5 原写"id + session_key + turn_index"——四种写法并存。现统一为 **`request_id + ir_version`**；轮次维度的防重放在 §5.5 第 4 条以"在其上再加 `session_key + turn_index`"的方式表达，不再另起一套。
 
 **理由**：
+
 1. 整库加密覆盖"数据库文件被拷走"的全部场景（含 WAL、临时表、索引泄漏的元数据）；
 2. 列级信封加密覆盖"整库密钥不得不常驻内存"的残余风险——即使库被打开，敏感列仍解不开；同时让**备份/迁移可以只导密文**，以及支持将来换算法而不重写整库；
 3. SQLite 单文件对"单机私有用例"是运维成本最低解：无额外服务、无连接池、备份就是拷文件。
@@ -68,6 +71,7 @@
 | 结论 | **推荐** | 备选（保守） | ❌ | ❌ | 仅归档层 |
 
 **实测数据**（调研样机，Node v26.13.0）：
+
 - Argon2id（`crypto.argon2Sync`，OWASP 最低档 m=19456 KiB, t=2, p=1）≈ **102 ms**；m=47104 KiB/t=1/p=1 ≈ 163 ms；m=64 MiB/t=3/p=4 ≈ 198 ms。
 - ⚠️ **`argon2Sync` 阻塞 event loop**，只能在启动路径用；请求路径必须用异步 `crypto.argon2()` 或完全避开（见 §3.2）。
 - zstd：同分布训练字典 **6.43×**（400 条 × 125 KB 样本）vs 无字典 1.25×；**跨分布字典反而变差（1.25× → 1.08×）**——字典必须按真实数据分布训练并版本化。
@@ -80,20 +84,35 @@
 
 ### 3.1 密钥层次
 
-```
+```text
 用户口令 (passphrase)  ──Argon2id──▶  KEK (Key Encryption Key)
                                           │
                                           ▼
-                              per-session DEK = HKDF(KEK, salt=session_id,
-                                                     info="agentgateway/payload/v1")
+                          per-session DEK = 随机生成（crypto.randomBytes(32)）
+                                          │
+                                          ▼
+                    DEK 用 KEK 包裹（AES-256-KW）后存入密钥表（按 session 一行）
                                           │
                                           ▼
                               每条记录的 AES-256-GCM 密文
-                              nonce = session 内单调计数器
+                              nonce = 随机 96-bit（备选：XChaCha20-Poly1305）
                               AAD   = request_id + ir_version
 ```
 
-**为什么 per-session DEK**：nonce 管理与密钥轮换一起解决——轮换 KEK 只需重包 DEK，不必重加密全部数据；session 内单调计数器保证 nonce 不重复（GCM 的硬要求）。
+**为什么 per-session DEK**：nonce 管理与密钥轮换一起解决——轮换 KEK 只需**重包 DEK**，不必重加密全部数据；per-session 隔离让单个 DEK 的加密次数可控。
+
+> ⚠️ **设计风险 1（review #8.1，待作者拍板——本文只写建议解法，不擅自定稿）**
+> 原方案写 `DEK = HKDF(KEK, salt=session_id, …)`，即 DEK 由 KEK **派生**；但同一节又说"轮换 KEK 只需重包 DEK，不必重加密全部数据"。
+> **这两句互相矛盾**：HKDF 派生下换 KEK 会让所有 DEK 全部改变，必须把全部数据重新加密，"只重包"并不成立。
+> **建议解法**：DEK **随机生成**，用 KEK **包裹**（AES-256-KW / RFC 3394，备选：AES-256-GCM + AAD=session_id）后存入密钥表；轮换 KEK 时只重包密钥表里的 DEK，数据密文不动。
+> **代价与待拍板点**：① 密钥表成为新的单点——丢了 DEK 就丢了数据，备份/导出流程（§7）必须覆盖它；② 解锁时要把该 session 的 DEK 解出来（可启动时批量解到内存，或首次访问时惰性解）；③ 是否接受"密钥表 + 数据库必须一起备份"这个运维约束。
+> ⚠️ **设计风险 2（review #8.2，待作者拍板）**：原方案 nonce = "session 内单调计数器"。进程重启、多 worker、多进程写同一个 session 时，
+> 计数器若未持久化或未按 (session, worker) 分片，就会**重用 AES-GCM 的 nonce**——这对 GCM 是灾难性的，会同时破坏机密性与认证性。
+> 计数器方案还要求"写路径串行化"，与异步写入冲突。
+> **建议解法（二选一）**：
+> ① **随机 96-bit nonce** + 单密钥加密次数上限（NIST SP 800-38D 建议随机 nonce 时最多 2^32 次；保守取 2^24 次就轮换 DEK）——实现最简单，无需持久化计数器；
+> ② **XChaCha20-Poly1305**（192-bit 随机 nonce）或 **AES-GCM-SIV**（nonce 误用也不泄密）——对"可能出错的多进程部署"更宽容。
+> **待拍板点**：选 ① 还是 ②；若选 ①，轮换阈值的具体数值与"达到阈值后如何平滑轮换（新记录用新 DEK，旧记录留旧 DEK）"要写进实现。
 
 ### 3.2 三档来源
 
@@ -119,12 +138,14 @@
 | 无人值守自动重启 | ❌ | ✅ | ✅ |
 
 **设计上的处置**（不掩盖，写进部署文档）：
+
 1. 部署文档必须明确告知用户这个边界，并给出"A 档更安全但网关不能自动重启"的显式选择；
 2. 提供**内存最小化**手段：解锁后从内存擦除口令原文（只保留 KEK）；DEK 按 session 派生、session 结束即弃；不开 swap，或对持有密钥的内存页 `mlock`；
 3. **不把 B 档说成"安全"**，只说成"在无人值守前提下，比 C 档多一层（依赖 OS 凭据存储的访问控制）"；
 4. 若将来威胁模型变为"多用户同机"或"运行账号可能被攻陷"，再上 TPM/KMS 并重新评估——现在不做，是因为调研样机无 TPM 且单用户私用不需要。
 
 **工具链**：
+
 - `keytar` **已归档 deprecated**；替代 `@napi-rs/keyring`（MIT，Secret Service → keyutils 回退；注意 keyutils 仅内存后端）。
 - systemd `LoadCredentialEncrypted=` + `systemd-creds decrypt`（调研样机已确认可用）——**无 keyring 的 Linux 上的首选**。
 - Docker secrets / 环境变量（`AG_KEK_PATH` 指向文件）。
@@ -133,7 +154,7 @@
 
 ### 3.3 启动解锁时序
 
-```
+```text
 1. 读 KEK 来源（B/C 档）或提示口令（A 档）
 2. Argon2id 派生（~100–200 ms，阻塞，可接受；用进度日志告知用户"正在解锁"）
 3. 打开 SQLite，`PRAGMA cipher=...; PRAGMA key='...'`
@@ -157,7 +178,7 @@
 
 ### 4.2 开关语义
 
-```
+```text
 persistence.messages ∈ { off, on }     # 默认 off
 persistence.media    ∈ { off, on }     # 默认 off，二进制落地
 persistence.usage    ∈ { on }          # 不可关
@@ -206,7 +227,36 @@ CREATE TABLE usage_rollup_monthly ( ... );
 CREATE TABLE retention_log ( ... );
 ```
 
+```typescript
+/** Tier-2 的读取视图（解密 + 回放 delta 链后的形态）。
+ *  这是该类型的唯一定义处——60-billing-and-dogfooding.md 的 dog-fooding 工具只引用它。 */
+interface StoredConversation {
+  id: string;                        // = request_id
+  session_key: string;               // 长会话分组键（用于前缀压缩）
+  turn_index: number;
+  ts: number;
+  client_format: FormatId;
+  provider_format: FormatId;
+  model: string;
+  /** 完整 canonical 请求（压缩前） */
+  request: CanonicalRequestEnvelope;
+  /** 完整 canonical 响应（聚合后） */
+  response: CanonicalResponseEnvelope;
+  /** 网关 agentic loop 的每一轮中间 canonical */
+  turns?: Array<{ request: CanonicalRequestEnvelope; response: CanonicalResponseEnvelope }>;
+  usage: CanonicalUsage;
+  trace: RequestTrace;               // 见 20-pipeline.md §8
+  redaction_profile: string;
+}
+```
+
+> **命名统一（review #3）**：原 60 §5.3 用的字段名是 `CanonicalRequest` / `CanonicalResponse`，而 10 只定义了
+> `CanonicalRequestEnvelope` / `CanonicalResponseEnvelope`，00 术语表用的也是后者。这里统一为 **`…Envelope`**
+> （[00-overview.md](./00-overview.md) §5 术语表的"envelope"一条即此）。20/30/60 正文里出现的 `CanonicalRequest` /
+> `CanonicalResponse` 一律按此理解；**在类型抽取成代码文件时统一改名，作者拍板前本文只做说明、不改其他文档的正文措辞。**
+
 **检索约束**：`payload` 是密文，**不能** `WHERE payload LIKE ...`。因此：
+
 - 会话维度检索走 `session_key` / `turn_index`（明文索引）；
 - 全文检索（dog-fooding 的 `conversation_search`）走**解密后过滤**——先按 `session_key`/时间范围取候选（有上限，默认 200 条），解密后在内存里匹配。这是有意的设计：宁可慢，不把明文索引落盘。
 - `sha256` 明文存，用于去重（§5.2）与完整性校验。
@@ -221,7 +271,7 @@ CREATE TABLE retention_log ( ... );
 
 ### 5.2 方案：会话 delta 链 + zstd 共享字典
 
-```
+```text
 session_key = S
   turn 0:  BASE     ── 完整 canonical（zstd + 加密）
   turn 1:  DELTA    ── diff(BASE, canonical_1)
@@ -235,9 +285,19 @@ session_key = S
 **编码**：每条 delta 单独 zstd（level 3）；同一 `session_key` 的所有 delta 共用一个**训练字典**。
 
 **字典**：
+
 - 用 zstd `--train` 从该会话前若干轮的 canonical 序列化文本训练，`--maxdict` 默认 112 KB；
 - 存进 `zstd_dicts` 表（**加密**），按 `(session_key, trained_at)` 版本化；
 - 字典未命中（新会话、样本不足 100 条）→ 退化为无字典压缩；
+
+> ⚠️ **设计风险 3（review #8.5，待作者拍板）**：per-session 字典与 `zstd --train` 的**样本数要求**冲突——`--train` 需要 **> 100 个样本**
+> （[docs/sources.md](../sources.md) §4 实测记录），而一个会话在攒到 100 轮之前往往就已经结束，多数会话根本训不出字典，只能退化成无字典压缩；
+> 且 §2 的本机实测显示**跨分布字典反而更差（1.25x → 1.08x）**，说明"随便一个字典"比"没有字典"更糟。
+> **建议解法**：改为**全局字典 / 按客户端类型（client_format × provider_format）分组训练**，字典带**版本号**
+> （`dict_id = hash(训练样本集 + zstd 版本 + maxdict)`），压缩 payload 头部记下用的是哪个 `dict_id`，解压时按号取字典；
+> 离线定期重训（如每月），线上只读不写。这样每个字典都有足够样本、可复现、可回滚。
+> **待拍板点**：① 分组粒度（全局一个 vs 按 client_format × provider 分）；② 重训频率与"新旧字典并存期"多长；③ per-session 字典是否彻底取消（建议取消，只保留全局/分组）。
+
 - `--long` window（默认 windowLog 27，64-bit 最大 31）用于长前缀；解压端 windowLog > 27 时也必须传 `--long`。
 
 **读取**：`BASE → 回放 delta 链 → 目标轮`。回放成本 O(轮数)，所以有 snapshot。快照本身也压缩。
@@ -263,7 +323,7 @@ system prompt 与工具定义在多个会话间也高度重复。用**内容定�
 1. **先压缩后加密**（见 S4）。
 2. **字典与数据同级加密**——字典从该会话明文训练而来，本身会泄漏前缀特征，不是非敏感资产。
 3. **回放性能**：单请求最多触发一次回放；需要随机访问时以 snapshot 为入口，不做随机访问优化。
-4. **AAD 绑定**：每条密文 AAD 绑 `id + session_key + turn_index`，防密文块被换位/重放。
+4. **AAD 绑定**：每条密文 AAD 绑 `request_id + ir_version + session_key + turn_index`——在 S1 的记录级绑定（`request_id + ir_version`）之上再加轮次维度，防密文块被换位/重放。
 5. **压缩失败兜底**：zstd 失败（如字典不匹配）→ 存未压缩密文并置 `compressed: false`，读时按标记解。
 
 ---

@@ -1,8 +1,8 @@
 # AgentGateway
 
-> **私有仓库 · WIP（work in progress）** —— 当前只有定位说明与骨架，尚无可用代码。
+> **私有仓库 · WIP（work in progress）** —— 当前只有设计文档与协作约定，尚无可用代码。
 >
-> 架构与详细设计见 [`docs/design/`](docs/design/)（撰写中）。
+> 架构与详细设计见 [`docs/design/`](docs/design/)（全套 v1.0-draft，**待 review**）。
 > 在定稿前，本文件描述的是设计意图，不是已实现的行为。
 
 ## 项目定位
@@ -46,7 +46,7 @@
 
 ### 3. 插件系统
 
-- **generic hook**：`onRequest` / `onResponse` / `onStreamChunk`，
+- **generic hook（5 个）**：`onRequest` / `onResponse` / `onStreamChunk` / `onError` / `onToolCall`，
   只操作 canonical，不接触具体厂商格式——插件作者不需要懂所有 provider。
 - **adaptor 模式**：外部能力通过 adaptor 接入，而不是把逻辑硬编码进网关。
 - 首个计划接入：[billion-context](https://github.com/ranxianglei/billion-context)
@@ -67,8 +67,8 @@
 - 规范化 usage：统一 token 口径、缓存命中、计费档位，兼容各 provider 的差异。
 - **dog-fooding**：提供 **agent 接口**，让 AI 自己查询/分析用量数据
   （例如"上个月哪个模型花了最多钱""哪些请求触发了压缩"）。
-- **WebUI**：复用现成 Agent 前端（Open WebUI / LibreChat 等，选型中），
-  **不从零画**。
+- **WebUI**：fork [LibreChat](https://github.com/LibreChat-AI/LibreChat)（纯 MIT）改造，
+  自建 gateway 管理模块补上它没有的 virtual key / provider / routing 管理；**不从零画**。
 
 ### 6. 显式 Pipeline 请求生命周期
 
@@ -87,21 +87,37 @@
 models/
 ├── README.md              # 本文件
 ├── AGENTS.md              # 项目级协作约定
+├── CONTRIBUTING.md        # 面向人类协作者的提交/隐私约定
+├── CHANGELOG.md           # 变更记录
 ├── LICENSE                # MIT
 ├── .gitignore
 ├── docs/
-│   └── design/            # 详细设计文档（撰写中）
-├── src/
-│   ├── canonical/         # canonical 中间格式：类型定义、校验、默认值、raw passthrough
-│   ├── adaptors/          # 客户端格式 ↔ 上游 provider 格式互转（含 fast path）
-│   ├── pipeline/          # 显式请求生命周期阶段编排（SSE、工具调用多轮循环）
-│   ├── plugins/           # 插件系统：generic hook + adaptor 接入外部能力
-│   ├── builtin/           # 内置能力：web_search 等 built-in tool
-│   ├── upstream/          # 上游 provider 客户端、连接管理、重试
-│   ├── usage/             # usage 归一化、统计与计费管道（异步）
-│   ├── agentapi/          # dog-fooding：供 AI 查询/分析用量的接口
-│   └── server/            # HTTP/SSE 入口、路由、鉴权、限流
-├── webui/                 # 前端：复用现成 Agent 前端，不从零画
+│   ├── design/            # 详细设计文档（00–70，v1.0-draft 待 review）
+│   └── sources.md         # 全部调研来源与结论
+├── .github/
+│   └── workflows/
+│       └── docs.yml       # 文档 CI：markdownlint / 外链 / 围栏与引用 / 术语
+├── scripts/
+│   └── check-docs.mjs     #  docs.yml 里跑的围栏奇偶 + §N 引用 + 节号校验脚本
+├── ir/                    # AG-IR canonical：类型定义 + JSON Schema + round-trip 校验
+│                            （= 00 §4.2 的 `ir` 模块；原 README 写的 src/canonical/、70 写的 schema/ 已统一）
+├── gateway-core/          # PipelineRunner、11 个阶段（S0–S10）、RequestContext、错误模型
+├── adaptors/              # 客户端格式 ↔ 上游 provider 格式互转（含 fast path）
+├── pipeline/              # 阶段编排（并入 gateway-core；保留目录仅为可读性）
+├── plugins/               # 插件系统：5 个 generic hook + adaptor 接入外部能力
+├── streaming/             # 统一流式帧信封、三种上游形态桥接、WS 双路径
+├── modalities/            # TTS/ASR/Image/Embedding 的 payload 与 mapper
+├── decision/              # control-plane 判断：decision 模态 adaptor + 降级路径 + 攒批
+├── search/                # built-in tool 建模、两种执行模式、后端抽象
+├── builtin/               # 内置能力：web_search 等 built-in tool 的执行面
+├── credentials/           # 上游侧凭据、access path、Plan 感知路由
+├── auth/                  # 数据面 virtual key + 控制面本地认证/passkey + 权限模型
+├── metering/              # usage 归一、多单位、定价、dog-fooding 工具
+├── storage/               # 分层、加密、前缀压缩、保留策略、脱敏
+├── upstream/              # 上游 provider 客户端、连接管理、重试
+├── agentapi/              # dog-fooding：供 AI 查询/分析用量的接口
+├── server/                # HTTP/SSE 入口、路由、限流
+├── webui/                 # 前端：fork LibreChat，不从零画
 ├── config/                # 配置样例（仅 .example；凭据走环境变量）
 └── tests/
     ├── unit/
@@ -109,10 +125,14 @@ models/
     └── e2e/
 ```
 
+> **目录命名以 [`docs/design/00-overview.md`](docs/design/00-overview.md) §4.2 的模块表为唯一事实来源。**
+> 此前仓库里有三套命名（本文件的 `src/canonical/…`、00 的 `gateway-core`/`ir`/`metering`、70 验收标准里的 `schema/`），已统一。
+
 ## 状态与路线
 
 - [x] 仓库与协作约定就绪
-- [ ] `docs/design/` 详细设计定稿
+- [x] `docs/design/` 详细设计成稿（v1.0-draft，**待 review**）
+- [ ] review 意见逐条处置（GitHub Issues #1–#8）
 - [ ] canonical schema 与往返互转（含 fast path）
 - [ ] Pipeline 骨架与 SSE / 工具调用循环
 - [ ] 插件系统 + billion-context 请求侧压缩

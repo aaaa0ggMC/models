@@ -14,10 +14,10 @@
 
 ## 2. 阶段总览（Pipeline Stages）
 
-一次请求在网关内部经过 10 个显式阶段。每个阶段是一个实现了
+一次请求在网关内部经过 **11 个显式阶段（S0–S10）**。每个阶段是一个实现了
 `Stage<I, O>` 接口的纯-ish 对象（内部可有 IO），由 `PipelineRunner` 串联。
 
-```
+```text
                     ┌──────────────────────────────────────────────────────────┐
                     │                    AgentGateway                          │
  client (任意格式)   │                                                          │
@@ -45,19 +45,24 @@
 
 ### 阶段职责表
 
-| 阶段 | 输入 → 输出 | 可否流式 | 可否失败重试 | 说明 |
-|---|---|---|---|---|
-| S0 Ingress | HTTP → `RequestContext` | 是 | 是（鉴权/限流拒绝直接返回，不进 S1） | 识别客户端格式、鉴权、限流、分配 `request_id`、超时预算 |
-| S1 Decode | 原始 body → `CanonicalRequest` | 否（请求体必须完整） | 否（格式错误 = 400，不可重试） | 客户端格式 codec 解码；产物带 `source_format` |
-| S2 Route | `CanonicalRequest` → `ResolvedRoute` | 否 | 是（路由失败 = 无可用 provider） | 别名解析、provider 候选列表、健康/熔断过滤、fast path 判定 |
-| S3 onRequest | `CanonicalRequest` → `CanonicalRequest` | 否 | 否（插件短路算成功） | 插件链：压缩、注入、改写、短路返回 |
-| S4 Encode | `CanonicalRequest` → 上游 body | 否 | 否 | provider codec 编码；fast path 时输出原始字节 |
-| S5 Upstream | 上游 body → 上游响应 | **是** | 是 | HTTP 调用、重试、fallback、超时、熔断 |
-| S6 ProviderDecode | 上游响应 → `CanonicalResponse` / 事件流 | **是** | 否 | provider codec 解码；fast path 时只抽取 usage 信封 |
-| S7 onStreamChunk | chunk → chunk | **是** | 否 | 插件可改写/丢弃/缓冲聚合 |
-| S8 ClientEncode | canonical → 客户端格式字节 | **是** | 否 | 客户端格式 codec 编码；fast path 时直通 |
-| S9 onResponse | `CanonicalResponse` → `CanonicalResponse` | 否（流式时在流结束后） | 否 | 后置插件：审计、脱敏、指标 |
-| S10 UsageEmitter | `UsageRecord` → 队列 | 是 | 是（失败只丢统计，不丢响应） | 异步、批量、可重放 |
+| 阶段 | 输入 → 输出 | 可否流式 | 可否失败重试 | 插件 hook | 说明 |
+|---|---|---|---|---|---|
+| S0 Ingress | HTTP → `RequestContext` | 是 | 是（鉴权/限流拒绝直接返回，不进 S1） | `onError` | 识别客户端格式、鉴权、限流、分配 `request_id`、超时预算 |
+| S1 Decode | 原始 body → `CanonicalRequest` | 否（请求体必须完整） | 否（格式错误 = 400，不可重试） | `onError` | 客户端格式 codec 解码；产物带 `source_format` |
+| S2 Route | `CanonicalRequest` → `ResolvedRoute` | 否 | 是（路由失败 = 无可用 provider） | `onError` | 别名解析、provider 候选列表、健康/熔断过滤、fast path 判定 |
+| S3 onRequest | `CanonicalRequest` → `CanonicalRequest` | 否 | 否（插件短路算成功） | **`onRequest`**、`onError` | 插件链：压缩、注入、改写、短路返回 |
+| S4 Encode | `CanonicalRequest` → 上游 body | 否 | 否 | `onError` | provider codec 编码；fast path 时输出原始字节 |
+| S5 Upstream | 上游 body → 上游响应 | **是** | 是 | `onError` | HTTP 调用、重试、fallback、超时、熔断 |
+| S6 ProviderDecode | 上游响应 → `CanonicalResponse` / 事件流 | **是** | 否 | `onError` | provider codec 解码；fast path 时只抽取 usage 信封 |
+| S7 onStreamChunk | chunk → chunk | **是** | 否 | **`onStreamChunk`**、`onError` | 插件可改写/丢弃/缓冲聚合 |
+| S8 ClientEncode | canonical → 客户端格式字节 | **是** | 否 | `onError` | 客户端格式 codec 编码；fast path 时直通 |
+| S9 onResponse | `CanonicalResponse` → `CanonicalResponse` | 否（流式时在流结束后） | 否 | **`onResponse`**、`onError` | 后置插件：审计、脱敏、指标 |
+| S10 UsageEmitter | `UsageRecord` → 队列 | 是 | 是（失败只丢统计，不丢响应） | —（旁路，插件不参与） | 异步、批量、可重放 |
+
+**另外两个 hook 不在阶段表里，因为它们不是"一个阶段"而是横切点**：
+
+- **`onToolCall`**：在 [§5.2](#52-网关循环状态机) 的网关 agentic loop 里，**每次工具执行前后**触发（`(call, ctx) => ToolResultPart`）。客户端循环模式下不触发。
+- **`onError`**：上表标了"每个阶段出错时都会调用"；它与阶段并行而非串在某一格，所以画不成单独一行。完整时序见 [30-plugin-api.md](./30-plugin-api.md) §3。
 
 ### 2.1 `RequestContext`
 
@@ -230,6 +235,20 @@ function isFastPathEligible(ctx: RequestContext): boolean {
 
 **不做**：任何结构转换、字段重命名、类型强转。请求体以上游原始字节透传（仅在必要场景做极小改写，见下）。
 
+> ⚠️ **设计风险（review #8.3，待作者拍板）**：按当前流程，**S1 先把请求完整解码成 canonical，S2 才判定走不走 fast path**。
+> 长上下文的大请求体在 fast path 下也要付"完整解码成 canonical"的代价，这与"附加延迟 < 3ms p99"
+> （[00-overview.md](./00-overview.md) §3、[70-roadmap.md](./70-roadmap.md) Phase 1 验收）存在张力。
+> **建议解法：惰性解码 / 只解析信封字段。**
+>
+> 1. S1 只做"够用即可"的浅解析：识别 `source_format`、取出 `model` / `stream` / 端点必需的路由字段、保留原始字节引用；
+> 2. 真正的完整解码**推迟到确认不走 fast path 之后**（慢路径入口），或推迟到确实需要某个字段时（按访问器 lazy parse）；
+> 3. **插件依赖要写明**：插件拿到的必须是完整 canonical（这是"插件只面对 canonical"的硬约束），因此只要注册了
+>    **任何** `onRequest` 插件，本请求就不能走"完全不解码"档。需要分三级：
+>    - 无 `onRequest` 插件 + 同格式 → 完全不解码（只做信封级浅解析）；
+>    - 有 `onRequest` 插件但插件只读路由相关字段 → 仍可浅解析（需插件在 manifest 里声明 `needs: "envelope_only"`）；
+>    - 插件要改内容 → 必须完整解码（现有 `disableFastPath` 语义）。
+> **待拍板点**：① 是否引入 `needs: "envelope_only"` 这一档；② 浅解析的字段集合怎么定（建议就是 S2 路由 + 计费预检必需的最小集）；③ "完全不解码"档要不要保留字节级 diff 测试（[70-roadmap.md](./70-roadmap.md) Phase 1 验收要求同 provider fast path 与直连 diff 为空）。
+
 **做**（这些都是"统计口径错位修正"，也是 canonical 的主要价值之一）：
 
 | 修正项 | 场景 | 做法 |
@@ -240,24 +259,26 @@ function isFastPathEligible(ctx: RequestContext): boolean {
 
 **流式 fast path**：上游 SSE 字节**不落 canonical、不改写**，直接转发给客户端；同时旁路一个"usage 嗅探器"只解析 SSE 中的 usage 相关字段喂给 S10。这样"零延迟透传"和"计费准确"同时成立。嗅探器实现要求：
 
-- 有字节数上限（默认 256KB/请求）与时间上限，超限即降级为"仅记录已知 token 数 = 0 + warning"；
+- 有字节数上限（默认 256KB/请求）与时间上限；**超限时不得把未知 token 记成 0**——对应键**省略**，并置
+  `warnings += "usage_sniffer_truncated"`（与 [10-canonical-schema.md](./10-canonical-schema.md) §6.1 规则 2 的
+  `usage_missing` 同一立场：**"未知"绝不用 0 表示**，否则看板会静默少报）；
+- **必须解析流尾的 usage 事件**：OpenAI Chat 的 usage 只在最后一个 chunk（且需 `stream_options.include_usage: true`，
+  网关在 S4 自动补上）、OpenAI Responses 在 `response.completed` 事件、Anthropic 分 `message_start` + `message_delta`
+  两次到达（必须合并）、Gemini 每 chunk 都可能带（取最后一次非空）。**按字节数从流头截断会恰好漏掉 usage**——
+  因此嗅探器要么保证覆盖到流尾，要么明确标 `usage_sniffer_truncated` 并让双路计量（[25-streaming.md](./25-streaming.md) §8.2）
+  的自估算兜底；不得用 0 冒充"已计量"；
 - 解析失败不影响转发。
 
 ### 4.3 usage 口径修正表（fast path 也要做）
 
-同一份计费语义在不同格式里字段名不同。fast path 下**不修改响应体**（保持厂商原样），但在 `UsageRecord` 中写入规范化值：
+同一份计费语义在不同格式里字段名不同。fast path 下**不修改响应体**（保持厂商原样），但在 `UsageRecord` 中写入规范化值。
 
-| 规范字段 | OpenAI Chat | OpenAI Responses | Anthropic | Gemini |
-|---|---|---|---|---|
-| `input_tokens` | `usage.prompt_tokens` | `usage.input_tokens` | `usage.input_tokens` | `usageMetadata.promptTokenCount` |
-| `output_tokens` | `usage.completion_tokens` | `usage.output_tokens` | `usage.output_tokens` | `usageMetadata.candidatesTokenCount` |
-| `cache_read_tokens` | `usage.prompt_tokens_details.cached_tokens` | `usage.input_tokens_details.cached_tokens` | `usage.cache_read_input_tokens` | `usageMetadata.cachedContentTokenCount` |
-| `cache_write_tokens` | —（无对应） | —（无对应） | `usage.cache_creation_input_tokens` | —（无对应） |
-| `reasoning_tokens` | `usage.completion_tokens_details.reasoning_tokens` | `usage.output_tokens_details.reasoning_tokens` | 计入 `output_tokens`（无独立字段） | `usageMetadata.thoughtsTokenCount` |
-| `total_tokens` | `usage.total_tokens` | `usage.total_tokens` | 需自算 | `usageMetadata.totalTokenCount` |
-| `tool_use_prompt_tokens` | — | — | — | `usageMetadata.toolUsePromptTokenCount`（**待验证**归属） |
+**字段级映射表只保留一份，在 [40-provider-adaptors.md](./40-provider-adaptors.md) §2.1**（含"哪些字段无对应、如何避免双算"的四条硬不变量 §2.2c）。
 
-> 完整字段级映射与"哪些字段无对应、如何避免双算"见 [40-provider-adaptors.md](./40-provider-adaptors.md)。
+> **去重说明（review #5）**：本节原来抄了一份简表，已经和 40 §2.1 漂移——例如简表写 OpenAI Chat 的 `cache_write_tokens` "无对应"，
+> 而 40 §2.1 与 [docs/sources.md](../sources.md) §1.1 都确认 OpenAI Chat 有 `usage.prompt_tokens_details.cache_write_tokens`
+> 及 `cache_write_tokens_details.{ttl_12h_tokens,ttl_30m_tokens}`。两处分别维护必然分叉，故删除副本，只留指针。
+> fast path 的特殊之处只是"**在哪里写**"（只写 `UsageRecord`，不动响应体），不是"**写什么**"——口径以 40 §2.1 为准。
 
 ## 5. 工具调用循环（agentic loop）
 
@@ -270,7 +291,7 @@ function isFastPathEligible(ctx: RequestContext): boolean {
 
 ### 5.2 网关循环状态机
 
-```
+```text
         ┌──────────────────────────────────────────────┐
         │                                              │
         ▼                                              │
@@ -324,11 +345,13 @@ S2 路由、S3 插件链、工具循环的 compact/escalate/stop，本质都是*
 **因此控制面判断必须攒批**：S2/S3/工具循环里把所有待判断问题（路由、压缩触发、工具选择、是否继续循环…）合并成**一次** `kind:"decision"` 子请求，而不是一个判断发一次。
 
 约束：
+
 - 单次问题数受上游上限约束（Gemini 1–1000、OpenAI 1–400、Jev 无独立上限但受 context 约束）——超限时按优先级截断，低优先级问题退回启发式；
 - 攒批会引入少量延迟（等问题就绪），用"就绪即发 + 短窗口合并"（默认 5 ms）平衡；
 - 批内某题失败不影响其他题（OpenAI 的逐题 `refusal` 语义），canonical 已按"部分答案"建模（见 [10-canonical-schema.md](./10-canonical-schema.md) §4.6）。
 
 **上游选型对攒批的影响（重要）**：
+
 - **只有 OpenAI Decisions 支持 prompt caching**（隐式 breakpoint + ≥1024 token 可复用前缀；cache read 打折、cache write 计费）。Gemini 明确 "doesn't support context caching… Repeated input across requests counts in full"，Jev 无。
 - 因此"同一 state 反复问不同问题"的热点路径上，**OpenAI Decisions 的 TCO 显著优于 Gemini/Jev**——这是选上游时容易被忽略的一维。
 - 反向说：如果判断的 `content` 每次都不同（大多数场景），缓存无收益，Gemini 的免费层与更低的 ECE 更划算。

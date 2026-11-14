@@ -2,7 +2,8 @@
 
 > 版本：v1.0-draft ｜ 日期：2026-11-14 ｜ 状态：**draft（待 review）**
 > 上游依赖：[10-canonical-schema.md](./10-canonical-schema.md)、[20-pipeline.md](./20-pipeline.md)、[15-modalities.md](./15-modalities.md)
-> 下游被引用于：[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md)
+> **页眉只保留"上游依赖"**（读本文前真正需要先读的文档）；"下游被引用于"已按 review 意见删除——
+> 手工维护的反向链接必然失真，谁引用谁请用全文搜索或 CI 的反向链接检查代替。
 
 ---
 
@@ -19,6 +20,7 @@
 ### 1.0 适配范围策略：adaptor 按需写，canonical 一次做全
 
 > ⚠️ **这是一个关键区分，不要混淆两张矩阵**：
+>
 > - **canonical schema 是全面的（超集）**——设计期一次性穷尽式普查，把主流厂商各模态的特性并集全部纳入（**包括我们永远不实现的**）。目标是：**新增 adaptor 时永远不需要改 schema**。
 > - **adaptor 是按需写的**——用到哪个模型/哪个能力，再写那个 adaptor。
 >
@@ -27,11 +29,13 @@
 > canonical 的普查结果见 [12-coverage-survey.md](./12-coverage-survey.md)；本节只管 adaptor。
 
 **adaptor 按需的理由**：
+
 1. 各厂商协议的差异是开放集合，一次性全覆盖 adaptor 会导致 canonical 被某家的怪字段带偏（这是 NewAPI / one-api 渠道 adaptor 越写越乱的根因）；
 2. 未使用的 adaptor 没有测试覆盖，协议一改就静默腐烂，反而制造"看起来支持"的假象；
 3. 真正稀缺的不是 adaptor 数量，而是"加一个 adaptor 的成本够低"。
 
 **v1 完整落地（写透，含全部测试）**：
+
 - `openai.chat`（OpenAI Chat Completions）
 - `openai.responses`（OpenAI Responses API）
 - `anthropic.messages`（Anthropic Messages API）
@@ -136,21 +140,22 @@ interface AdaptorMeta {
    - `native`：canonical 的 `native.<format>.*` 命名空间 → 进透传表；
    - `unmapped`：完全不建模 → 必须进 `raw.unmapped`。
    **不允许出现第四类"忘了处理"。**
-3. **写请求映射表**：canonical → wire，一列一个字段（参照 §9 的格式）。每个单元格要么给目标字段名，要么给 `drop+warn` / `error`。
-4. **写响应映射表**：wire → canonical，同上。usage 与 finish_reason 单独一张表（§2、§9.3）。
+3. **写请求映射表**：canonical → wire，一列一个字段（参照 [10-canonical-schema.md](./10-canonical-schema.md) §9 的格式）。每个单元格要么给目标字段名，要么给 `drop+warn` / `error`。
+4. **写响应映射表**：wire → canonical，同上。usage 与 finish_reason 单独一张表（§2、[10-canonical-schema.md](./10-canonical-schema.md) §9.3）。
 5. **写流式折叠表**：wire 事件 → `StreamFrame`，一列一个事件（参照 [20-pipeline.md](./20-pipeline.md) §S6 的表）。
 6. **写 round-trip 测试**（§1.5），先看它红，再修到绿。
 7. **登记能力矩阵**：填 `AdaptorMeta`，`status: "implemented"`，`contract_tested: true`。
 
 **第 3 步的补充：转换目标的有序偏好表。** 同一份 canonical 可能有多条 wire 路径（如客户端是 Anthropic Messages、上游同时支持 Responses 与 Completions）。**不要穷举 N×M 全矩阵**，而是维护一张**有序偏好表**，取第一个目标支持的：
 
-```
+```text
 Messages    → AnthropicMessages(直连) | OpenAIResponses | OpenAICompletions | BedrockConverse
 Completions → VertexGemini | OpenAICompletions(直连) | AnthropicMessages | BedrockConverse
 Responses   → OpenAIResponses(直连) | OpenAICompletions | BedrockConverse
 ```
 
 **规则**：
+
 - **更便宜/更原生的转换排前面**（直连优先，其次差异小的）；
 - **把不支持的组合写成显式注释**（`Missing: Responses → Messages`），让缺口可见，而不是留空让人以为忘了写；
 - 顺序是**配置项**，可按部署调整（例如某 provider 的 Responses 支持有 bug，就把它排后）；
@@ -161,6 +166,7 @@ Responses   → OpenAIResponses(直连) | OpenAICompletions | BedrockConverse
 ### 1.5 Round-trip 测试模板（每个 adaptor 必过）
 
 **测试目标（两层，都要过）**：
+
 - **adaptor 层**：wire → canonical → wire 对该 adaptor 支持的格式无损；
 - **schema 层**：**任何厂商特性进入 canonical 再出来必须无损**——即使**没有 adaptor 实现它**，也要有 schema 层的 round-trip 用例兜底。这是 canonical 超集性质的回归网：任何人往 schema 里加/改字段，都会被这些用例抓住。
 
@@ -201,7 +207,7 @@ describe.each(fixtures)("adaptor %s round-trip", (name, wire) => {
     // 直接针对已知开源缺陷：JSON.parse 失败后 raw_arguments 必须回写
     const c = adaptor.decode(wireWithBadToolArgs, ctx);
     const out = adaptor.encode(c, ctx);
-    expect(out.body.…arguments).toBe("原始字符串，不是 {}");
+    expect(out.body.raw_arguments).toBe("原始字符串，不是 {}");
   });
 
   it("多 system 消息不丢", () => {
@@ -247,11 +253,10 @@ describe.each(coverageSurveyFeatures)("canonical 容纳特性 %s", (feature) => 
 - [ ] fast path 字节级透传测试通过（若是同格式 adaptor）
 - [ ] 能力矩阵已登记，`status: "implemented"`，`contract_tested: true`
 - [ ] `quirks[]` 已填写人类可读的已知怪癖
-- [ ] 文档 §9 的映射表已补一行（或一个子表）
+- [ ] [10-canonical-schema.md](./10-canonical-schema.md) §9 的映射表已补一行（或一个子表）
 - [ ] 无真实凭据/绝对路径/内网地址进入 fixtures（fixtures 也要过 privacy-scan）
-```
 
-### 1.2 "默认按名拒绝"
+### 1.7 "默认按名拒绝"
 
 **决策 P2：adaptor 对不支持的模态/能力默认返回明确错误，不静默 fallback。**
 
@@ -299,21 +304,6 @@ describe.each(coverageSurveyFeatures)("canonical 容纳特性 %s", (feature) => 
 
 **规则 P3**：以上默认假设全部写进 `usage_raw` 与代码注释，并各配一个集成测试夹具；一旦实测推翻，改默认值 + 迁移历史数据的重算脚本（不追溯改写已存记录，见 [60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §4.1）。
 
-### 2.2c Usage 归一化的四条硬不变量
-
-逐条对照 LiteLLM 的实现（已读源码，见 [docs/sources.md](../sources.md) §LiteLLM）后定死：
-
-| # | 不变量 | 定论 |
-|---|---|---|
-| **I1** | `prompt_tokens` 是否含 cached / cache_write | **OpenAI：含 `cached_tokens`，不含 cache_write**；**Anthropic / Gemini / Bedrock：`input_tokens` 两者都不含**，需 `input + cache_creation + cache_read` 才等于总输入（Anthropic 官方口径即此） |
-| **I2** | `completion_tokens` 是否含 reasoning | **OpenAI：含**（`completion_tokens_details.reasoning_tokens` 是其子集）；**Anthropic：含**（`thinking_tokens` 计入 `output_tokens`）；**Gemini：视模型而定**，用 `promptTokenCount + candidatesTokenCount + toolUsePromptTokenCount == totalTokenCount` 反推 `candidatesTokenCount` 是否已含 thinking（LiteLLM 的 `is_candidate_token_count_inclusive` 做法），否则把 `thoughtsTokenCount` 加上去 |
-| **I3** | `total_tokens` 是透传还是重算 | **流式一律重算**（`prompt + completion`），因为上游的 `total` 在分片到达时可能不完整；**非流式透传**上游值，但与 `prompt+completion` 不一致时记 `warnings` |
-| **I4** | 原始 usage 全量存档 | `usage_raw` 必须**逐字段**保留，且**必须在流式聚合后依然存在**。LiteLLM 的教训：`Usage.__init__` 的 `setattr` 会把未知 provider 字段挂成 extra，但流式聚合 `calculate_total_usage` 只重建声明字段，**extras 会丢**（源码注释自承）。我们的对策：`usage_raw` 在 S6 抽取时就是**独立对象**，不依赖任何"extra 透传"机制，流式聚合只动 `units`，绝不动 `usage_raw` |
-
-**Gemini 的 grounding 特例**：检索到的 token 不计 input，但 URL context / File Search 按 input 计费（LiteLLM 用 `_response_has_search_grounding` 区分）。`toolUsePromptTokenCount` 同理——有 search grounding 时 `billable_tool_use_prompt_tokens = 0`。这直接影响 [50-builtin-search.md](./50-builtin-search.md) §5 的搜索计费口径，标 **`[待验证]`**。
-
-**Bedrock 的特例**：reasoning tokens 默认不返回，需要显式请求 `/usage/output_tokens_details`，否则只能本地估算（LiteLLM 的做法是 `token_counter(text=reasoning_content)`）。
-
 ### 2.2b 2026 年的协议变更（adaptor 必须处理）
 
 | 变更 | 影响 |
@@ -332,6 +322,21 @@ describe.each(coverageSurveyFeatures)("canonical 容纳特性 %s", (feature) => 
 | Gemini 显式缓存（`cachedContents`）**不支持 Gemini 4 / Interactions API**（仅隐式缓存） | `CacheControl.cache_name` 映射到 `cachedContent` 参数；不支持的模型 drop + warning |
 | Gemini 新增 Interactions API（有状态，`previous_interaction_id`），与 generateContent 并存 | canonical 不建模上游状态（见 §6.1），只在 `native.gemini.*` 留位 |
 | OpenAI Chat Completions 自 GPT-5.4 起**仅 `reasoning_effort:"none"` 支持工具调用** | adaptor 需检查模型能力；不满足则 `capability_unsupported` |
+
+### 2.2c Usage 归一化的四条硬不变量
+
+逐条对照 LiteLLM 的实现（已读源码，见 [docs/sources.md](../sources.md) §LiteLLM）后定死：
+
+| # | 不变量 | 定论 |
+|---|---|---|
+| **I1** | `prompt_tokens` 是否含 cached / cache_write | **Anthropic / Gemini / Bedrock：`input_tokens` 两者都不含**，需 `input + cache_creation + cache_read` 才等于总输入（Anthropic 官方口径即此）；**OpenAI：读 LiteLLM 源码的结论是"含 `cached_tokens`、不含 cache_write"，但 OpenAI 官方文档未明说——标 `[待验证]`，见 Q1** |
+| **I2** | `completion_tokens` 是否含 reasoning | **OpenAI：含**（`completion_tokens_details.reasoning_tokens` 是其子集）；**Anthropic：含**（`thinking_tokens` 计入 `output_tokens`）；**Gemini：视模型而定**，用 `promptTokenCount + candidatesTokenCount + toolUsePromptTokenCount == totalTokenCount` 反推 `candidatesTokenCount` 是否已含 thinking（LiteLLM 的 `is_candidate_token_count_inclusive` 做法），否则把 `thoughtsTokenCount` 加上去 |
+| **I3** | `total_tokens` 是透传还是重算 | **流式一律重算**（`prompt + completion`），因为上游的 `total` 在分片到达时可能不完整；**非流式透传**上游值，但与 `prompt+completion` 不一致时记 `warnings` |
+| **I4** | 原始 usage 全量存档 | `usage_raw` 必须**逐字段**保留，且**必须在流式聚合后依然存在**。LiteLLM 的教训：`Usage.__init__` 的 `setattr` 会把未知 provider 字段挂成 extra，但流式聚合 `calculate_total_usage` 只重建声明字段，**extras 会丢**（源码注释自承）。我们的对策：`usage_raw` 在 S6 抽取时就是**独立对象**，不依赖任何"extra 透传"机制，流式聚合只动 `units`，绝不动 `usage_raw` |
+
+**Gemini 的 grounding 特例**：检索到的 token 不计 input，但 URL context / File Search 按 input 计费（LiteLLM 用 `_response_has_search_grounding` 区分）。`toolUsePromptTokenCount` 同理——有 search grounding 时 `billable_tool_use_prompt_tokens = 0`。这直接影响 [50-builtin-search.md](./50-builtin-search.md) §5 的搜索计费口径，标 **`[待验证]`**。
+
+**Bedrock 的特例**：reasoning tokens 默认不返回，需要显式请求 `/usage/output_tokens_details`，否则只能本地估算（LiteLLM 的做法是 `token_counter(text=reasoning_content)`）。
 
 ### 2.3 流式下 usage 的到达方式
 
@@ -417,6 +422,7 @@ interface NormalizeResult {
 ```
 
 **关键设计（照抄）**：
+
 1. **per-tool fallback，不是 per-request**——一个 tool 的 schema 有问题不该让整个请求失败。
 2. **Memo cache**：key = (options, schema)。llmshim 实测 50 tools 时 559µs → 210µs（2.66×）。
 3. **Request budget**：超限返回 400 `request_schema_budget_exceeded`，防止恶意超大 schema。
@@ -495,6 +501,7 @@ interface DecisionAdaptor {
 ```
 
 **与 chat adaptor 的关键差异**：
+
 1. 没有 `tools` / `tool_choice` / `thinking` / `response_format` —— decision 不做这些；
 2. **必须实现 `pricing_state`**（见 §6.4）；
 3. **必须实现降级路径**（见 §6.3）——因为 decision 上游不是每个部署都有；
@@ -565,6 +572,7 @@ interface DecisionAdaptor {
 | `usage_raw` | 上游 usage 原样 | 同 | 同 |
 
 **规则 P5b（已被三家实测验证）**：**"输出免费"有三种不同表现，绝不能假设 `output_tokens == 0`**：
+
 - Gemini：`total_output_tokens` 恒 `0`（真 0 token，不计费）；
 - Jev：`output_tokens` **非 0 但免费**；
 - OpenAI：`output_tokens` 上报（含 `reasoning_tokens`）但不计费。
@@ -597,6 +605,7 @@ interface DecisionAdaptor {
 **陷阱 3：OpenAI 的 `usage.input_tokens_details.cached_tokens` / `cache_write_tokens` 已包含在 `input_tokens` 内**，不要重复相加（官方明确）。这与 chat 模态的口径一致（见 §2.2c I1）。
 
 **陷阱 4：Jev 的 `noul` 不返回 confidence，但可自算 `|2p − 1|`。** 官方 Confidence 页给出的公式：
+
 - Choice（n 个选项，`p_max` 为 top probability）：`confidence = (p_max − 1/n) / (1 − 1/n)`
 - Score（n 层，`m` 为最可能层）：`confidence = max(0, 1 − Σ p_i·|i−m| / MAD_unif)`，`MAD_unif = (1/n)·Σ|i − (n−1)/2|`
 - 官方同时警告：Choice 的 confidence 是 top probability 的线性变换，"checking both adds no independent evidence"——`(0.6,0.3,0.1)` 与 `(0.6,0.2,0.2)` 的 confidence 都是 0.4。
@@ -622,7 +631,7 @@ interface DecisionAdaptor {
 
 **问题**：decision 上游不是每个部署都有（需要额外开通、额外计费路径、可能不在免费额度内）。但网关内部的判断需求（工具选择、compact/escalate/stop）是**始终存在**的。
 
-**决策 D9：提供 chat 模拟 decision 的降级路径，但必须显式标记，且默认不自动启用。**
+**决策 D9：提供 chat 模拟 decision 的降级路径，但必须显式标记，且默认只在路由不到 decision 上游时启用（`on_missing_upstream`）。**
 
 ```typescript
 interface DecisionDegradationPolicy {
@@ -636,9 +645,14 @@ interface DecisionDegradationPolicy {
 ```
 
 **何时启用**：
-- `on_missing_upstream`（**推荐默认**）：路由不到 decision 上游时降级；
+
+- `on_missing_upstream`（**默认值**，与 [15-modalities.md](./15-modalities.md) §6.5 一致）：路由不到 decision 上游时降级；
 - `always`：明确想省钱/省一个依赖；
 - `never`：只要真 decision（高风险判断场景）。
+
+> **默认值的由来（待作者拍板）**：D9 原写"默认不自动启用"，与本节及 15 §6.5 的"推荐默认 `on_missing_upstream`"矛盾。
+> 本文按"网关内部的判断需求始终存在、不是每个部署都开通了 decision 上游"这一前提，统一为 `on_missing_upstream`；
+> 安全性由 `allow_degrade_high_stakes` 默认 `false` 保证（见下）。若作者要改成 `never`，需同步改 15 §6.5 与 70-roadmap Phase 4 的验收标准。
 
 **代价（必须写进响应与文档）**：
 
@@ -651,6 +665,7 @@ interface DecisionDegradationPolicy {
 | 结构化保证 | 原生 | 靠 `response_format: json_schema` | schema 违背时需重试 |
 
 **实现要点**：
+
 1. 降级时把 `questions[]` 渲染成一条 chat 请求：system 说明"你是判断引擎，逐题给出 label + probability + confidence"，user 放 `content[]` 的渲染结果 + 问题列表，`response_format` 用生成的 JSON Schema（含 `answers[]` 结构，每题必填）；
 2. 响应解析回 `DecisionAnswer[]`；**schema 违背时重试一次**，再失败返回 `capability_unsupported` 而不是猜；
 3. **响应信封必须带 `calibration: "degraded"`**（新增字段，见下），并在 `warnings` 说明用了哪个 chat 模型、为什么降级；
@@ -717,16 +732,20 @@ interface DecisionCalibration {
 
 ## 8. Open Questions
 
-1. **Q1（最高优先级）**：OpenAI / Gemini 的 `input_tokens` 是否已含 cache read 部分。直接决定计费双算/少算。验证方式：同一长 prompt，第一次（未缓存）与第二次（已命中）对比 `prompt_tokens` 与 `cached_tokens` 的关系。
-2. **Q3**：Gemini `functionCall` 无 id，`functionResponse` 的匹配机制（name + 序 vs 网关映射表）。
-3. **Q10**：Anthropic 1h/5m cache write 是否分字段返回。
-4. **Q2**：OpenAI Responses `reasoning` item 的多轮回传规则（是否必须原样、字段名）。
+> 编号为**全局 Q 编号**，与 [00-overview.md](./00-overview.md) §8 的登记表一致；状态矛盾时以本节的"已解答/开放"为准（ review 后已统一）。
+
+1. **Q1（最高优先级，仍开放）**：OpenAI / Gemini 的 `input_tokens` 是否已含 cache read 部分。直接决定计费双算/少算。验证方式：同一长 prompt，第一次（未缓存）与第二次（已命中）对比 `prompt_tokens` 与 `cached_tokens` 的关系。
+   > 注意：§2.2c 的 I1 曾把 OpenAI 侧写成"定论"，与本节矛盾；已按"官方文档未明说"改为 `[待验证]`。Gemini 侧已确认"含"、Anthropic 侧已确认"不含"。
+2. **Q3**：Gemini `functionCall` 新版有 `id`；仍待验证的是旧版 API 是否仍无 `id`，以及 `functionResponse` 的匹配机制（name + 序 vs 网关映射表）。
+3. **Q10**：Anthropic 1h/5m cache write 是否分字段返回。（§2.2 已记录"2026-10-21 版 usage schema 已确认分字段返回"，本条改为**复核项**：确认该结论在新版 API version 下仍成立。）
+4. **Q2**：OpenAI Responses `reasoning` item 的多轮回传规则（是否必须原样、字段名；`store:false`/ZDR 下是否仍必须回传）。
 5. Gemini `thoughtSignature` 的确切字段名与回传要求。
 6. Gemini `usageMetadata.toolUsePromptTokenCount` 的归属（是 input 的一部分还是独立项）。
-7. 非 chat 模态各家的 usage 原始字段（[15-modalities.md](./15-modalities.md) §9 Q5）。
+7. 非 chat 模态各家的 usage 原始字段（[15-modalities.md](./15-modalities.md) §10 Q5）。
 8. OpenAI `audio/speech` 是否支持流式分片（决定 TTS 流式能力矩阵该栏）。
-9. **Q21（decision）**：三家 decision API 的确切字段名与嵌套（问题类型枚举、选项集、`probability` / `confidence` / per-option probabilities、usage 形状、错误码）。**这是 decision adaptor 开工的前置依赖。**
-10. **Q22（decision）**：Gemini Decisions 的免费额度与可用区域；Jev 在 TypeSafe / OpenRouter 上的确切模型 id 与计价。
-11. **Q23（decision）**：decision 模型是否真的不能做 chat（需官方文档确认，非产品定位推断）。
-12. **Q24（decision）**：chat 模拟 decision 的校准性损失有无公开基准（决定降级路径是否值得默认开启）。
+9. ~~**Q21（decision）**~~ **已解答**：三家 decision API 的确切字段名与嵌套——已全部读到官方 API reference，映射表见 §6.2（亦见 [12-coverage-survey.md](./12-coverage-survey.md) §5.1）。
+10. ~~**Q22（decision）**~~ **已解答**：Gemini Decisions 免费额度与区域、Jev 模型 id 与计价——已确认（Gemini Free 200 RPM/50K TPM/10K RPD、输入免费；Jev `jev-1.14.0` $0.042/M）。
+11. ~~**Q23（decision）**~~ **已解答**：decision 模型不能做 chat——三家官方文档均明确不能（Gemini model card output token limit = 0；Jev "do not write replies"；OpenAI 端点只收 questions）。
+12. ~~**Q24（decision）**~~ **已解答**：chat 模拟 decision 的校准性/延迟/成本代价——有已发表实测（TypeSafe cookbook：26.8x–176.9x 慢、4.1x–1189x 贵）。
 13. **Q25（decision）**：部分问题失败时的上游语义（整个请求失败 vs 部分答案 + 每题 error）——canonical 已选后者，需确认三家都支持。
+14. **Q26（decision）**：OpenAI Decisions 的专属 rate limit 数值与是否与 `gpt-6-luna` chat/responses 共享配额池（无官方限额表）。

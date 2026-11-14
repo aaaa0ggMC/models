@@ -1,14 +1,13 @@
-# 15 · 多模态（TTS / ASR / Image / Embedding）
+# 15 · 多模态（TTS / ASR / Image / Embedding / decision）
 
 > 版本：v1.0-draft ｜ 日期：2026-11-14 ｜ 状态：**draft（待 review）**
 > 上游依赖：[10-canonical-schema.md](./10-canonical-schema.md)（信封与媒体引用）、[25-streaming.md](./25-streaming.md)（跨模态流式）、[40-provider-adaptors.md](./40-provider-adaptors.md)（能力矩阵）
-> 下游被引用于：[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md)
 
 ---
 
 ## 0. 阅读指引
 
-§1 设计决策；§2 TTS canonical；§3 ASR canonical；§4 Image canonical；§5 Embedding；**§6 decision 模态（第五模态）**；§7 能力矩阵；§8 端点与流式；§9 字段映射；§10 Open Questions。
+§1 设计决策；§2 TTS canonical；§3 ASR canonical；§4 Image canonical；§5 Embedding；**§6 decision 模态（第 9 个模态，2026-11 新增）**；§7 能力矩阵；§8 端点与流式；§9 字段映射；§10 Open Questions。
 
 `[v1.5]` = v1 之后第一个增量；`[later]` = 明确后续。
 
@@ -41,6 +40,7 @@
 ### 决策 M4：v1.5 先做"少量 provider 深度打通"，不做"全厂商浅兼容"
 
 **决策**：v1.5 每模态接 2–3 家：
+
 - TTS：OpenAI `audio/speech`、ElevenLabs、MiniMax
 - ASR：OpenAI `audio/transcriptions`、Deepgram（一次性）
 - Image：OpenAI `images/generations|edits`、FLUX/BFL
@@ -340,12 +340,14 @@ interface EmbeddingResponsePayload {
 **决策**：`kind: "decision"`，独立 payload、独立 adaptor、独立端点、独立 usage 单位。
 
 **理由**：
+
 1. **输出形态根本不同**。chat 返回一段（可能很长的）文本，由调用方自己解析；decision 返回**结构化的判断结果**（label + 校准概率 + 置信度 + 逐选项概率）。把 decision 塞进 chat 意味着"用 chat 模拟 decision"——而这条路线的校准性、延迟、成本都更差（见 §6.1）。
 2. **一次请求问多个问题**。chat 的一轮请求只有一个"回答"；decision 一次前向计算可对最多约 1000 个相互独立的问题评分（Gemini 报道值，`[待验证]`）。这是批量语义，chat 没有。
 3. **输入计费、输出免费**。三家 decision API 的定价形态都是"输入 token 计费、输出免费"（Gemini 报道 $0.10/M 输入、输出免费；Jev 报道 $0.042/M 输入、输出免费，均 `[待验证]`）。这与 chat 的输入输出双向计费完全不同，必须靠 `pricing_state` 表达（见 [10-canonical-schema.md](./10-canonical-schema.md) §6 规则 5）。
 4. **用途是控制面而非内容面**。它的设计用途是工具选择、策略检查、模型路由、上下文质量评估、compact/escalate/stop 决策——这些都是网关自己要做的判断（见 [20-pipeline.md](./20-pipeline.md) §9 与 [45-credentials.md](./45-credentials.md) §4）。
 
 **考虑过的替代方案**：
+
 - *A. 用 chat + 结构化输出（`response_format: json_schema`）模拟*。否掉为主路径，但**保留为降级路径**——因为不是每个部署都有 decision 上游。降级必须在响应里标记 `calibration: "degraded"` 并说明代价（见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.3）。
 - *B. 把 decision 建模成 chat 的一个内置工具*。否掉：内置工具是"模型决定何时调用"，decision 是"网关主动发起的批量判断"，控制方向相反。
 
@@ -408,7 +410,7 @@ interface EmbeddingResponsePayload {
 
 ### 6.3 端点形态
 
-```
+```text
 POST /v1/decisions                      # 一次性（唯一形态；无流式）
 ```
 
@@ -427,13 +429,13 @@ decision 模态的**首要消费者是网关自己**，不是终端用户：
 | compact / escalate / stop 决策（agentic loop） | 继续、压缩、升级模型、还是停止？ | `choice` |
 | fast path 判定辅助 | 这次转换是否可能丢关键字段？ | `binary` |
 
-这些消费点让 decision 从"一个可选模态"变成"网关的自省能力"，也直接服务 dog-fooding（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §10）。
+这些消费点让 decision 从"一个可选模态"变成"网关的自省能力"，也直接服务 dog-fooding（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §6）。
 
 ### 6.5 降级路径（上游只有 chat 模型时）
 
 见 [40-provider-adaptors.md](./40-provider-adaptors.md) §6.3。要点：用 chat + `response_format: json_schema` 模拟，响应标记 `calibration: "degraded"`，并在 `warnings` 说明代价。
 
-**实测代价**（TypeSafe cookbook 2026-11-02，8 个 Choice 问题/次，`[待验证]` 独立复现，数据见 §6.1）：延迟 26.8x–176.9x、成本 4.1x–844.6x；且**判断稳定性显著变差**——LLM 条件的帖子变号 >10%，而 Jev 最不稳定的选项仅 4.0%（从不 >6.7%）。对 compact/escalate/stop 这类"同一输入应给同一判断"的决策，抖动比慢更致命。
+**实测代价**（TypeSafe cookbook 2026-11-02，8 个 Choice 问题/次，`[待验证]` 独立复现，数据见 §6.1）：延迟 26.8x–176.9x、成本 4.1x–**1189.0x**（原写 844.6x 是抄错了行——844.6x 属于 GPT-6 Astra，1189.0x 才是表内最大值 Claude Fable 5.1；§6.1 的表格与 [12-coverage-survey.md](./12-coverage-survey.md) §5.1 均写 1189x）：且**判断稳定性显著变差**——LLM 条件的帖子变号 >10%，而 Jev 最不稳定的选项仅 4.0%（从不 >6.7%）。对 compact/escalate/stop 这类"同一输入应给同一判断"的决策，抖动比慢更致命。
 
 **因此降级的默认策略是 `on_missing_upstream`**（只在路由不到 decision 上游时降级），且**策略检查与 stop 决策不允许降级**——拿不到真 decision 就明确失败，不用 chat 顶替。
 
@@ -496,7 +498,7 @@ interface CapabilityEntry {
 
 ### 8.1 端点
 
-```
+```text
 TTS:    POST /v1/audio/speech                  （once，返回二进制或 base64）
         POST /v1/audio/speech:stream           （SSE，StreamFrame kind:"tts"）
 ASR:    POST /v1/audio/transcriptions          （once，multipart 或 JSON+MediaRef）

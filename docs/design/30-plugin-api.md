@@ -94,7 +94,7 @@ interface RequestContext {
 
 ## 3. 生命周期与调用时序
 
-```
+```text
 init(插件加载时一次)
   │
   ▼
@@ -106,16 +106,18 @@ init(插件加载时一次)
 │      ├─▶ onStreamChunk ─ S7，逐事件（needs:"aggregate" 时同时收到聚合视图）
 │      │
 │      ▼
+│   [网关 agentic loop：每次工具执行] ──▶ onToolCall（仅网关循环模式，见 20-pipeline.md §5.2）
+│      │
+│      ▼
 └─ onResponse ─────────── S9，流式下在流关闭后
        │
        ▼
    S10 UsageEmitter（旁路，插件不参与）
-       │
-       ▼
-   onError ─────────── 任意阶段出错时（含 onRequest 抛错）
-       │
-       ▼
-   dispose(进程退出/热卸载)
+
+onError ────────────── 横切点：任意阶段出错/返回错误时都会调用（含 onRequest 抛错、
+                        上游 5xx、流被空闲超时杀掉）；不占上图某一格，见下方规则
+
+dispose(进程退出/热卸载)
 ```
 
 规则：
@@ -123,6 +125,8 @@ init(插件加载时一次)
 - 同一 hook 内多插件按 `order` 升序执行；前一个插件的输出是后一个的输入。
 - `onRequest` 返回 `ShortCircuit` 时，**后续插件的 `onRequest` 不再执行**，直接进 S9（`onResponse` 仍执行，让审计类插件看到）。
 - `onStreamChunk` 返回数组 = 用多个事件替换一个事件（拆分）；返回 `null` = 丢弃。
+- **`onToolCall` 的触发条件**：仅当请求走**网关 agentic loop**（`ag_agentic_loop: true`，或 Responses 入站 + 带 `tools` + provider 无原生工具执行）时触发，在每次工具执行前后各一次；客户端循环模式下网关看不到工具执行，**不触发**。它与 `RequestContext.state.tool_id_map` 的维护同处（见 [20-pipeline.md](./20-pipeline.md) §5.2）。
+- **`onError` 与阶段失败的关系**：`onError` 不改变控制流（不能"重试"或"吞掉"错误），只做观测/告警/副作用；要阻断请求请用 `fatal: true` 的 `onRequest`。上表的"阶段职责表"逐阶段标了 `onError`。
 - 插件不得在 `onStreamChunk` 里阻塞等待（如调外部 LLM）超过 `timeout_ms`，否则降级为透传原事件 + warning。**长耗时压缩类工作必须在 `onRequest` 完成。**
 
 ## 4. 内置插件：billion-context adaptor 设计草案

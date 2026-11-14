@@ -11,23 +11,32 @@ Completions / OpenAI Responses / Anthropic Messages / Gemini generateContent 等
 
 **当前状态：WIP，只有定位说明与骨架，尚无可用代码。**
 
-架构与详细设计见 [`docs/design/`](docs/design/) —— 由另一线程撰写。
+架构与详细设计见 [`docs/design/`](docs/design/)（00–70 共 15 篇 + `docs/sources.md`，全套 v1.0-draft、**待 review**）。
+
+**可执行规则（取代原先"由另一线程撰写""负责线程"这类内部协作用语）**：
+
 - 设计**定稿前不要写实现代码**；`docs/design/` 的结论优先于本文件与 `README.md`。
-- 不要修改 `docs/` 目录下的内容（除该目录的负责线程外）。
+- `docs/` 下的改动**一律走 PR**，由仓库主人 review 后合入；不要直接 push 到 `main`。
+- 任何对 `docs/design/` 的修改都要在 PR 描述里写清对应哪个 issue / 哪条 review 意见。
+- 只提交自己负责范围的文件；`git add` 用显式路径，不要 `git add -A`。
 
 ## 关键设计约束（实现时不可违背）
 
 - **自研 canonical 中间格式**：超集 schema，保留 raw passthrough 保证无损可逆；
   不直接拿某个厂商格式当超集。
 - **插件只操作 canonical**：generic hook（`onRequest` / `onResponse` /
-  `onStreamChunk`）不接触具体厂商格式；外部能力走 adaptor 接入。
+  `onStreamChunk` / `onError` / `onToolCall`，共 5 个）不接触具体厂商格式；
+  外部能力走 adaptor 接入。
 - **fast path**：客户端格式 == 上游 provider 格式时跳过完整互转，
   只做 usage / finish_reason / tool_call id 标准化。
 - **内置搜索建模为 built-in tool**（`web_search`）：上游原生支持则透传，
   否则网关自实现并注入，两种路径对客户端行为一致。
 - **统计计费独立异步管道**，不阻塞主链路。
-- **请求生命周期用显式 Pipeline 阶段**，正确处理流式 SSE 与工具调用多轮循环。
+- **请求生命周期用显式 Pipeline 阶段**（S0–S10 共 **11 个**），正确处理流式 SSE 与
+  工具调用多轮循环。
 - 每种格式互转都要有**往返（round-trip）测试**兜底。
+- **文档改动也要过 CI**：`.github/workflows/docs.yml` 会跑 markdownlint、外链检查、
+  围栏奇偶、`§N` 引用目标存在性、同文件节号不重复不跳号、术语禁用同义词 grep。
 
 ## 协作约定
 
@@ -51,12 +60,15 @@ Completions / OpenAI Responses / Anthropic Messages / Gemini generateContent 等
 
 ### 代码组织
 
-- `canonical/` 是唯一的事实来源，其他模块通过它交换数据，不跨模块私传厂商结构。
+> 目录命名以 [`docs/design/00-overview.md`](docs/design/00-overview.md) §4.2 的模块表为唯一事实来源。
+
+- `ir/`（AG-IR canonical）是唯一的事实来源，其他模块通过它交换数据，不跨模块私传厂商结构。
 - `adaptors/` 只做格式映射，不放业务逻辑。
-- `pipeline/` 只做阶段编排，不实现具体能力。
+- `gateway-core/`（含 `pipeline/`）只做阶段编排，不实现具体能力。
 - `plugins/` 与 `builtin/` 通过 hook/tool 接口挂载，不反向依赖 pipeline 内部。
-- `usage/` 旁路消费，不允许反向影响请求结果。
-- `webui/` 复用现成 Agent 前端，不从零画；不自建前端组件库。
+- `metering/`（用量/计费）旁路消费，不允许反向影响请求结果。
+- `storage/` 只被 `metering/` 与 dog-fooding 接口读写，不被请求主链路同步依赖。
+- `webui/` fork LibreChat 改造，不从零画；不自建前端组件库。
 - 只提交自己负责范围的文件；`git add` 用显式路径，不要 `git add -A`
   以免带上其他线程正在写的文件。
 

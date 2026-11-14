@@ -31,7 +31,8 @@
 
 ### 1.2 来源
 
-- OpenAI Chat Completions API reference：<https://developers.openai.com/api/reference/resources/chat/completions/methods/create>
+- OpenAI Chat Completions API reference：<https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create>
+  （**链接已修**：原地址 `.../resources/chat/completions/methods/create` 2026-11-14 实测返回 **404**；OpenAI 把 chat 改成了 `chat` 资源下的 `completions` 子资源。当前入口索引 <https://developers.openai.com/api/reference/llms.txt>）
 - OpenAI Responses API reference：<https://developers.openai.com/api/reference/resources/responses/methods/create>
 - Anthropic Messages API reference（`anthropic-version: 2026-10-21`）：<https://platform.claude.com/docs/en/api/messages/create>
 - Gemini generateContent API reference：<https://aistudio.google.com/api/reference/rest/v1beta/models/generateContent>（入口 <https://aistudio.google.com/llms.txt>）
@@ -59,6 +60,7 @@
 - `_original` 机制（`src/models/openai-format/index.ts`）：<https://raw.githubusercontent.com/supermemoryai/llm-bridge/main/src/models/openai-format/index.ts>
 
 **关键结论**：
+
 1. `_original` 是 **fast path 短路**，不是无损档案——只有「目标 provider == 来源 provider 且消息数组未被改动」时才整体返回原始 body（引用相等）。跨 provider 时 `getReconstructionQuality()` 返回 80–99 的启发式分。
 2. **已定位三处真实跨 provider 有损**（源码推理，建议复现测试）：
    - `openaiToUniversal` 用 `messages.find(m => m.role === "system")` 只取**第一条** system message，其余全部丢弃；
@@ -80,6 +82,7 @@
 - 错误处理（`src/error.rs`）：<https://raw.githubusercontent.com/sanjay920/llmshim/main/src/error.rs>
 
 **关键结论**：
+
 1. **明确放弃 canonical IR**。README 原话："No canonical struct. Requests flow as `serde_json::Value` — each provider maps only what it understands." 只做"以 OpenAI Chat 为枢轴的服务端协议翻译"。
 2. `Provider`（语义）/ `RequestTransport`（鉴权 + 流帧）二分；`prepare_authorization` 返回一次性 signer、在 admission 之后才签名——"slow credential traffic cannot leave unsent liabilities"。
 3. **默认「按名拒绝」**：`transform_embedding_request` 默认 `Err(embeddings::absent(...))`，源码注释："a vector from a model the caller did not name is the wrong answer, silently."
@@ -89,7 +92,7 @@
 7. **无插件系统**（全树检索无 hook/plugin/middleware 模块），扩展只能 Rust trait + cargo feature。
 8. 公共 proxy API 不是 OpenAI-shaped（`POST /v1/chat` 等）。
 
-**→ 对我们的启示**：抄 schema 归一化（[40-provider-adaptors.md](./design/40-provider-adaptors.md) §4）、计费不变式（[60-billing-and-dogfooding.md](./design/60-billing-and-dogfooding.md) §4）、Provider/Transport 二分与"按名拒绝"（[40-provider-adaptors.md](./design/40-provider-adaptors.md) §1.2）。**不整体依赖**（3 stars、pre-1.0、bus factor 1）。
+**→ 对我们的启示**：抄 schema 归一化（[40-provider-adaptors.md](./design/40-provider-adaptors.md) §4）、计费不变式（[60-billing-and-dogfooding.md](./design/60-billing-and-dogfooding.md) §4）、Provider/Transport 二分与"按名拒绝"（[40-provider-adaptors.md](./design/40-provider-adaptors.md) §1.7）。**不整体依赖**（3 stars、pre-1.0、bus factor 1）。
 
 ### 2.3 billion-context / acp-kernel — 首个插件的集成对象
 
@@ -101,6 +104,7 @@
 - 热度：7,274 stars / 602 forks / **1,093 open issues** / npm 周下载 786,234 ｜ 单人维护 ｜ 日更 ｜ README 自评 "**Status: Early** ... Expect rough edges" 且 "`master` is the development branch and can be broken at any moment"。
 
 **关键结论**：
+
 1. **形态是「HTTP 代理 + 客户端插件」系统，不是纯函数库**；但内部 vendored 的 `acp-kernel` 是**框架无关、零运行时依赖、自身绝不调用 LLM** 的纯函数内核——这才是该集成的东西。
 2. 算法：**模型驱动的分层增量折叠（fold）+ 3-tier LSM**。9 段每轮纯函数管线（assign-refs → sync-blocks → merge-blocks → prune → filter → hide-compress-calls → nudge-inject → emergency-truncate → render-refs）。`processTurn({messages, state, config, tokenCount}) → {messages, state, nudge}` 无 I/O、无存储 port、无 LLM port，只向 host 要一个 `countTokens`。
 3. **首条 user 消息硬钉住**（即使被覆盖也原文保留），因 Anthropic 等严格 provider 拒绝无 user 消息会话——任何"压缩后消息数应减少 N"的断言都会错。
@@ -116,6 +120,7 @@
 **→ 对我们的启示**：集成 `acp-kernel` 内核而非 bili 代理；插件接口按 `processTurn`/`applyCompression`/`decompress`/`search`/`status`/`retrieve` 形状设计；「摘要产生器」做成可插拔 port；必须自建三件事：稳定 conversation id 注入与粘性路由、上游 usage 回填的 token 会计、宿主自动压缩的抑制开关。详见 [30-plugin-api.md](./design/30-plugin-api.md) §4。
 
 **替代/对照方案**：
+
 - Anthropic context editing + memory tool（宿主/SDK 责任，tool-result 级清除，无可逆分层 block）：<https://platform.claude.com/docs/en/build-with-claude/context-editing>、<https://platform.claude.com/docs/en/agents-and-tools/tool-use/memory-tool>
 - OpenAI Responses `previous_response_id` + `store`（服务端状态，非压缩；省请求体大小与客户端重序列化，不省 token 计费）：<https://developers.openai.com/api/docs/guides/conversation-state>
 - LLMLingua（token 级提示压缩，表示层，与 agent 多轮会话正交）：<https://github.com/microsoft/LLMLingua>、<https://arxiv.org/abs/2310.05736>
@@ -129,6 +134,7 @@
 - spec 源码目录：<https://github.com/vercel/ai/tree/main/packages/provider/src/language-model/v4>
 
 **关键结论**：
+
 1. **三层消息类型分离**：`UIMessage`（应用态）→ `ModelMessage`（用户侧）→ `LanguageModelV4Prompt`（**内部规范**）。源码注释："This is **not** the user-facing prompt ... That approach allows us to evolve the user facing prompts without breaking the language model interface."
 2. **`providerOptions` / `providerMetadata` 命名空间透传**（`Record<string, JSONObject>`），message 级与 part 级都能挂。官方理由："This enables us to quickly ship provider-specific functionality **without affecting the core AI SDK**."——**这是 canonical 应照搬的核心机制**。
 3. **双留原则**：`finishReason{unified, raw}`、`usage{结构化, raw}`。
@@ -153,7 +159,8 @@
 - OpenAPI spec 头部声明 `license: MIT`——这是 API 描述文件的许可，不等于服务实现开源 → 待验证其约束范围。
 
 **关键结论（对外契约）**：
-1. **唯一同时提供 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages 三种入站格式的商用网关**（`/api/v1/chat/completions`、`/api/v1/responses`、`/api/v1/messages`）。<https://openrouter.ai/docs/api_reference/overview>
+
+1. **同时提供 OpenAI Chat Completions / OpenAI Responses / Anthropic Messages 三种入站格式**（`/api/v1/chat/completions`、`/api/v1/responses`、`/api/v1/messages`）；原写"唯一……商用网关"已删（review #4）：LiteLLM Proxy 同样支持这三种，还多一种 `/v1beta/models/{model}:generateContent`（共 4 种，见 §2.10）。<https://openrouter.ai/docs/api_reference/overview>
 2. **usage 里除 token 还带 `cost`（credits）、`is_byok`、`cost_details{upstream_inference_cost, upstream_inference_prompt_cost, upstream_inference_completions_cost, server_tool_cost}`、`server_tool_use_details{tool_calls_requested, tool_calls_executed, web_search_requests}`、`cache_discount`**。`usage:{include:true}` 与 `stream_options:{include_usage:true}` **已废弃且无效**——"Full usage details are always included automatically"。token 用模型**原生 tokenizer** 计。<https://openrouter.ai/docs/cookbook/administration/usage-accounting>
 3. **响应 `provider` 字段暴露实际被路由到的上游**；`finish_reason` 归一为 `tool_calls|stop|length|content_filter|error`，**原文保留在 `native_finish_reason`**。
 4. **provider routing 偏好参数**：`order`、`allow_fallbacks`、**`require_parameters`**（只路由到支持你全部参数的 provider；不满足则请求失败）、`max_price{prompt,completion,request,image,audio}`、`sort: price|throughput|latency` 或 `{by,partition}`、`preferred_min_throughput`/`preferred_max_latency`（数字或 `{p50,p75,p90,p99}`，5 分钟滚动窗口）、`only`/`ignore`、`quantizations`、`zdr`、`data_collection`。默认路由用 6 个生产信号：effective price（反映真实 cache hit 率与 token mix）、throughput、TTFT、429 率、reliability、quality。<https://openrouter.ai/docs/guides/routing/provider-selection>
@@ -173,8 +180,13 @@
 ### 2.6 NewAPI / one-api — 根本分野的对照
 
 **状态：已确认（下载两仓库 main 分支完整源码本地阅读 + `gh api` 元数据）。**
+
 - NewAPI main HEAD `b388140acfd80369ec6243b16869daff1b4051f4`（2026-11-13）；one-api main HEAD `8df4a2670b98266bd287c698243fff327d9748cf`（2026-02-21）。
-- 下文 `[NEW:path]` = https://raw.githubusercontent.com/QuantumNous/new-api/b388140acfd80369ec6243b16869daff1b4051f4/<path>；`[ONE:path]` = https://raw.githubusercontent.com/songquanpeng/one-api/8df4a2670b98266bd287c698243fff327d9748cf/<path>
+- 下文 `[NEW:path]` / `[ONE:path]` 分别表示下面两个 raw 源码根（把 `<path>` 换成仓库内的文件路径即可）：
+  - NewAPI：`https://raw.githubusercontent.com/QuantumNous/new-api/b388140acfd80369ec6243b16869daff1b4051f4/`
+  - one-api：`https://raw.githubusercontent.com/songquanpeng/one-api/8df4a2670b98266bd287c698243fff327d9748cf/`
+
+  （原写法把完整 URL 内联进一句话，其中的 `<path>` 占位符既触发 markdownlint 的 MD033，URL 又是裸链触发 MD034；拆成子列表 + 行内代码后两条都干净，lychee 也能逐个校验。）
 
 **成熟度**（`gh api` 2026-11-14）：
 
@@ -186,6 +198,7 @@
 | 最后 push | 2026-11-14 | 2026-01-09 |
 
 **架构（已确认，源码）**：
+
 - **inbound 支持 4 种协议**：`/v1/chat/completions`、`/v1/responses`、`/v1/messages`（Anthropic）、`/v1beta/models/*:action`（Gemini）。Anthropic/Gemini 的 inbound 入口是 NewAPI 相对 one-api **新增**的（one-api 的 `router/relay.go` 只有 OpenAI 形态 + `/engines/:model/embeddings`）。
 - **没有 canonical IR**，是一张 N×M 成对转换器图，**hub 是 OpenAI Chat**。转换层抽成独立 Go module `relaykit`（[NEW:relaykit/README.md](https://raw.githubusercontent.com/QuantumNous/new-api/b388140acfd80369ec6243b16869daff1b4051f4/relaykit/README.md)）：成对转换器注册表 + **质量分级** + 诊断 + 多跳路由。矩阵：Chat→Responses good、Chat→Claude fair、Chat→Gemini fair、**Claude→Gemini discouraged**（经 OpenAI Chat 两跳）。
 - `Adaptor` 接口 16 方法（[NEW:relay/channel/adapter.go](https://raw.githubusercontent.com/QuantumNous/new-api/b388140acfd80369ec6243b16869daff1b4051f4/relay/channel/adapter.go)），含 `ConvertClaudeRequest` / `ConvertGeminiRequest` / `ConvertOpenAIResponsesRequest` / `ConvertAudioRequest` / `ConvertImageRequest` 等；one-api 的接口只有 9 方法且只有 `ConvertRequest(GeneralOpenAIRequest)`。
@@ -194,6 +207,7 @@
 - **透传逃生阀**：`PassThroughRequestEnabled`（全局）或渠道级 `PassThroughBodyEnabled` 为 true 时完全跳过 `ConvertXxxRequest`，直接用原始字节发上游。issue 模板明说"开启透传请勿反馈问题"——**转换路径与透传路径行为不一致是已知的设计割裂**。
 
 **`relaykit` 最值得借鉴的三件事**：
+
 1. **转换结果对象**：`RequestResult{From, To, Converter, Quality, Steps, Diagnostics}`，`[]types.ConversionDiagnostic`（code / field path / 说明 / 级别 / 源目标格式）。常见 code：`hosted_web_search_omitted`、`trailing_assistant_omitted`、`unsupported_media_type`、`claude_max_tokens_raised`、`claude_budget_adjusted`。
 2. **损耗策略三档** `Options.ToolLossPolicy`：`allow`（默认，转换完成 + 诊断）/ `safe`（遇 error 级诊断返回 `*types.ConversionLossError`）/ `strict`（任何诊断都报错）。
 3. **`RequestConversionChain []types.RelayFormat` + `FinalRequestRelayFormat`** 记进 consume log 的 `other`——直接回答"这个请求到底被转成了什么"。
@@ -201,6 +215,7 @@
 5. README 明确说"HTTP 收发、SSE 读写、渠道选择、鉴权和计费由宿主程序完成，所以可以嵌进其他 Go 网关或代理"——**若我们选 Go，这是唯一值得认真考虑的"站在 NewAPI 肩膀上"的路径**（但同受 AGPL-3.0 约束，且 `v0.x` API 可能小版本变化）。
 
 **计费（已确认，源码）**：
+
 - `types.PriceData`：`ModelRatio, CompletionRatio, CacheRatio, CacheCreationRatio, CacheCreation5mRatio, CacheCreation1hRatio, CacheCreation12hRatio, ImageRatio, AudioRatio, otherRatios`；常量 `ClaudeCacheCreation1hMultiplier = 6/3.75`、`OpenAICacheCreation12hMultiplier = 2`；`QuotaPerUnit = 500 * 1000.0`（$0.002/1K tokens）。
 - 公式（[NEW:service/text_quota.go](https://raw.githubusercontent.com/QuantumNous/new-api/b388140acfd80369ec6243b16869daff1b4051f4/service/text_quota.go) `calculateTextQuotaSummary`）：`baseTokens = prompt - cached - cacheWrite(不含12h) - image - audio`（负则 clamp 0）；`cachedWithRatio = cached * CacheRatio`；`cacheWriteWithRatio = (cacheWriteTotal - cacheWrite12h) * CacheCreationRatio + cacheWrite12h * CacheCreation12hRatio`（Claude 语义改为 `remaining*CacheCreationRatio + 5m*CacheCreation5mRatio + 1h*CacheCreation1hRatio`）；`quota = (promptQuota + completionQuota) * ModelRatio * GroupRatio + audioInputQuota`。
 - **无 reasoning token 独立计价**（全仓无 `ReasoningRatio`，reasoning 计入 completion）。
@@ -209,6 +224,7 @@
 - 无请求/响应 payload 落库（只有 `common.DebugEnabled` 时打 stdout）；IP 记录 opt-in（`GetUserSetting(userId).RecordIpLog`）。
 
 **重试 / failover（已确认）**：
+
 - 渠道选择：priority 去重后**降序**排序，第 N 次重试降到第 N 高的 priority 档；同 priority 内按 `Weight` 加权随机（weight 全 0 时 effective weight = 100，平均 weight < 10 时 smoothingFactor = 100 防饿死）。
 - **`common.RetryTimes = 0`（默认 0 次重试！）**；`DecideRelayRetry` 决策顺序含 strict session/pinned → IsChannelError → IsSkipRetryError → retryTimes<=0 → 2xx → code<100/>599 → `IsAlwaysSkipRetryCode`（**504、524 永不重试**）→ `ShouldRetryByStatusCode`。默认 `AutomaticRetryStatusCodeRanges` = `100-199, 300-399, 401-407, 409-499, 500-503, 505-523, 525-599`（**429 在内**；400/408/504/524 不在）。
 - 同渠道多 key：`MultiKeyModeRandom` / `MultiKeyModePolling`（per-channel mutex）；key 级禁用状态 + 原因；**所有 key 都禁用 → channel 自动禁用**。
@@ -222,6 +238,7 @@
 **License**：**NewAPI = AGPL-3.0 + Section 7 附加条款**（[NEW:NOTICE](https://raw.githubusercontent.com/QuantumNous/new-api/b388140acfd80369ec6243b16869daff1b4051f4/NOTICE)）：修改版必须在 Appropriate Legal Notices 及 UI 中任何显著的 about/legal/footer/attribution 位置保留 `Frontend design and development by New API contributors.`，若呈现 UI 还必须保留指向原项目的可见链接；不得冒名来源；商业例外需按 NOTICE 文件里公布的商务联系方式接洽。**没有"禁止商用"条款**，AGPL 的约束是网络使用也要开源 + 上述署名义务。上游致谢 One API（MIT）与 Midjourney-Proxy。one-api = MIT（`Copyright (c) 2023 JustSong`）。
 
 **已知 issue（可直接当我们的测试用例来源）**：
+
 - 格式转换：[#7454](https://github.com/QuantumNous/new-api/issues/7454) file/document 块丢失 + data URL 格式化 bug；[#6260](https://github.com/QuantumNous/new-api/issues/6260) tool_result 里的 image_url 不转换；[#7564](https://github.com/QuantumNous/new-api/issues/7564) developer 消息被静默合并进 Gemini systemInstruction 无通知；[#8128](https://github.com/QuantumNous/new-api/issues/8128) Responses→Claude 数字 tool 参数被改；[#5938](https://github.com/QuantumNous/new-api/issues/5938) Responses→Chat 丢 mcp tools；[#7472](https://github.com/QuantumNous/new-api/issues/7472) `/v1/messages` 流式转译丢失 message_delta 的 `cache_read_input_tokens`（**直接影响计费**）；[#6075](https://github.com/QuantumNous/new-api/issues/6075) Codex chat→responses 转换因上游 SSE 无 Content-Type 失败。
 - 计费：[#6609](https://github.com/QuantumNous/new-api/issues/6609) 钱包路径 TOCTOU 竞态导致超额；[#4168](https://github.com/QuantumNous/new-api/issues/4168) stream 失败且 completion_tokens=0 仍按 prompt 扣费；[#8084](https://github.com/QuantumNous/new-api/issues/8084) Gemini `promptTokenCount=0` 时 input 计为 0；[#7657](https://github.com/QuantumNous/new-api/issues/7657) 容器重启未排空在途结算；[#7904](https://github.com/QuantumNous/new-api/issues/7904) realtime 逐段实扣后结束再结算一次。
 - 稳定性：[#7059](https://github.com/QuantumNous/new-api/issues/7059) 上游 TCP reset 导致 Responses SSE 无终止事件；[#3142](https://github.com/QuantumNous/new-api/issues/3142) 流式失败前不要提交 HTTP 200；[#2989](https://github.com/QuantumNous/new-api/issues/2989) 流式空回记录为成功未触发重试；[#5698](https://github.com/QuantumNous/new-api/issues/5698) 非流式 `/v1/responses` 的 ReadAll 缓冲 OOM。
@@ -245,7 +262,7 @@
 | <https://github.com/lich0821/ccNexus> | 971 | Go | MIT | Claude Code + Codex CLI 智能网关：端点轮换、用量监控 |
 | <https://github.com/jianshuo/ccglass> | 946 | JS | MIT | 看 coding agent 到底发给模型什么：local proxy + web dashboard |
 | <https://github.com/Portkey-AI/gateway> | 13,377 | TS | MIT | config-driven virtual key / routing / guardrails；偏"治理平面"，协议转换深度不如专用 adaptor；last push 2026-05-25 |
-| <https://developers.cloudflare.com/ai-gateway/> | — | 托管 | 闭源 | **"Unified API (OpenAI compat)" 已标注 Deprecated**，转向 per-provider-native + 横切能力——对"强行统一成一种 OpenAI 方言"路线的实证否定 |
+| <https://developers.cloudflare.com/ai-gateway/> | — | 托管 | 闭源 | **Universal Endpoint 已标注 Deprecated**（替代建议是"用 OpenAI 兼容端点"）；"Unified API (OpenAI compat)" 页写的是 "Deprecated for single-model calls"，替代方案 REST API **仍是 OpenAI 兼容的** `/ai/v1/chat/completions`。→ Cloudflare **没有**放弃 OpenAI 兼容端点，放弃的是"单 Universal 端点 + payload 内联路由"这一种形态；**不能**用它论证"统一成 OpenAI 方言被否定"（review #4 校正，2026-11-14 访问原文） |
 | <https://github.com/inference-gateway/inference-gateway> | 213 | Go | Apache-2.0 | K8s/Gateway API 原生路线 |
 
 ### 2.8 agentgateway（Solo.io / Linux Foundation / AAIF）— 最重要的参照与反例
@@ -257,6 +274,7 @@
 - 商业版 `Solo Enterprise for agentgateway`；开源 standalone 二进制实测已支持 per-key budget / virtual key（比 Solo feature matrix 更慷慨）。
 
 **协议转换（最核心，与我们方向相反）**（[crates/agentgateway/src/llm/mod.rs](https://github.com/agentgateway/agentgateway/blob/main/crates/agentgateway/src/llm/mod.rs)、[crates/llm/src/types/mod.rs](https://github.com/agentgateway/agentgateway/blob/main/crates/llm/src/types/mod.rs)、[crates/llm/src/conversion/](https://github.com/agentgateway/agentgateway/tree/main/crates/llm/src/conversion)）：
+
 1. **客户端 13 种 `RouteType`**（Completions / Messages / Models / Passthrough / Detect / Responses / Embeddings / Realtime(WS) / AnthropicTokenCount / GenerateContent / GeminiCountTokens / Rerank / Decisions）；**provider 侧 5 种 `ChatFormat`**（OpenAICompletions / OpenAIResponses / AnthropicMessages / BedrockConverse / VertexGemini）。
 2. **不是单一 canonical IR**，而是 `CHAT_TRANSLATIONS` **有序配对表**（"取第一个 provider 支持的"，注释原文 "Put cheaper or more native translations before broader fallbacks"）。
 3. **缺口写成显式注释**：`Missing: Responses -> Messages`、`Missing: Bedrock --> Bedrock`；**Gemini 原生格式只去 Gemini 系 backend**，路由到其他 provider 直接 unsupported-conversion 拒绝。
@@ -265,6 +283,7 @@
 6. **已文档化的静默丢弃清单**：Messages→Responses 丢 extended-thinking/redacted-thinking 历史、citations、document/search_result/server_tool_use 块、server tools（含 web search）；**`stop_sequences` 和 `top_k` 被接受后静默丢弃，无 error 无 warning**；Messages→Completions 一个 turn 多个签名 thinking 块时只合并文本不发签名、`redacted_thinking` 被丢。
 
 **插件模型**（[architecture/cel.md](https://github.com/agentgateway/agentgateway/blob/main/architecture/cel.md)、[crates/policy-core/src/policy.rs](https://github.com/agentgateway/agentgateway/blob/main/crates/policy-core/src/policy.rs)）：
+
 - **无 WASM、无 Lua、无 Go 插件**（架构文档原话承认 CEL "not as powerful as alternatives like Lua or WASM"）。
 - 扩展手段 5 种：① 进程内三相位 Rust trait（`RequestPolicy` 每请求一次**重试不重复** / `ResponsePolicy` **所有重试结束后一次** / `BackendPolicy` **每次 backend 尝试都跑**）；② CEL（配置期静态分析 + 运行期**按需物化**贵字段如 `body`）；③ ExtProc（Envoy External Processing API 兼容的 gRPC）；④ Webhooks；⑤ ExtMCP。
 - 挂载相位：gateway（route 选择前）→ route（route 选择后、backend 选择前）→ backend（backend 选择后）。
@@ -272,6 +291,7 @@
 - **流式护栏窗口式评估**：`DEFAULT_EVAL_THRESHOLD = 1024` 字节、`OVERLAP_BYTES = 256` 字节重叠；源码自承 "This is not 100% accurate: a guard that needs full-response context, or a pattern spanning more than the overlap window, can be missed"；**`mask` 对流式响应无效**（只能 reject）。
 
 **其他关键结论**：
+
 - **流式 SSE 自研编解码**（`tokio_sse_codec` + `DoneTolerantSseDecoder`，容忍缺终止空行的 `data: [DONE]`）；Bedrock 用 AWS event-stream 单独解析。流式 Chat Completions **总是**补一个 usage chunk（即使客户端设 `include_usage=false`），且该 chunk `choices` 为空数组。
 - **`responseIdleTimeout`**（1.6 新增）：杀"发了首块后静默"的流——v1.5 无此能力，`requestTimeout` 都杀不掉。
 - **Realtime（WS）代理**：从 `response.done` 抽 token usage；**必须让客户端去掉 `sec-websocket-extensions: permessage-deflate`**，否则帧被压缩无法解析。
@@ -286,6 +306,7 @@
 - **指标**：`agentgateway_gen_ai_client_token_usage`、`..._cost_usd_total`、`..._server_time_to_first_token`、`..._server_inter_chunk_latency`、`..._cost_catalog_lookups_total`（status=Exact/Unpriced/Missing/NoCatalog）。**指标不带 user/team/key 标签**（基数考虑），所以"按团队的成本看板"必须走第二条数据通路（请求日志 DB）。
 
 **已知坑**（含第三方评测 <https://www.truefoundry.com/blog/agentgateway-formerly-gloo-ai-gateway-an-honest-review-of-solo-ios-ai-gateway>）：
+
 1. 升级负担重：1.6.0 五项 breaking change、1.7.0 五项 breaking + 一批行为变更。
 2. **文档-行为漂移真实发生过**：v1.5/v1.6 schema 说 `attempts` 是"总尝试次数"，实测 `attempts:1/2/3` 产生 `2/3/4` 次上游调用；main 源码注释已改。照抄其设计要配契约测试。
 3. **CEL 多值头比较可被绕过授权**（官方文档自己承认的安全陷阱），1.7 才把行为固定成"总是 list"。
@@ -297,14 +318,18 @@
 
 **→ 对我们的启示与借用清单**：见 [00-overview.md](./design/00-overview.md) §1.1b（正面回应"为什么仍选 canonical"）。直接借用的：有序偏好表 + "Missing: X→Y" 显式化、token 双轨命名、cost catalog base/overlay、`capability_rejected: prompt_too_long` 约定、流式空闲超时、golden test 工程、流式护栏窗口+重叠设计（见 [25-streaming.md](./design/25-streaming.md) §7.2）。
 
-### 2.10 LiteLLM 转换层 — 唯一可逐行参考的开源字段级实现
+### 2.9 LiteLLM 转换层 — 可逐行参考的开源字段级实现
+
+> **编号修正（review #5）**：原文这里是 `### 2.10`，而上一节是 `### 2.8`，中间没有 2.9；下一节又是 `### 2.11`。已重排为 2.9（LiteLLM）/ 2.10（Cloudflare），消除两处跳号。
 
 **状态：已确认（读 `v1.109.1` / commit `6c4ead4f` 源码，链接形如 `https://raw.githubusercontent.com/BerriAI/litellm/v1.109.1/<path>`）。**
 
 - Repo <https://github.com/BerriAI/litellm> ｜ MIT core（`litellm/enterprise/` 另许可）｜ Python（有 Rust router core）｜ 63,227 stars / 5,195 open issues。
+- **LiteLLM Proxy 有 hook（review #4 校正）**：文档明确列出 `async_pre_call_hook`、`async_post_call_success_hook`、`async_post_call_streaming_hook`、`async_post_call_failure_hook`（2026-11-14 读 <https://docs.litellm.ai/docs/proxy/call_hooks> 原文确认）。此前 00 §1.2 的表把 LiteLLM 的"插件系统"一格标成"❌ 无 hook 系统"、00 §7.2 写"现有开源全部没有插件系统"，两条都不准确，已改。**真正的差异不是"有没有 hook"，而是"hook 挂在什么上"**：LiteLLM 的 hook 签名拿到的是**已经归一成 OpenAI Chat 形态**的请求/响应，拿不到"这次请求原本是 Anthropic 格式、带 1h ephemeral cache 断点"这类信息；我们的 hook 只面对 canonical。
 - `litellm/llms/` 下 1143 个 `.py`（openai/ 60、anthropic/ 63、gemini/ 29、bedrock/ 84、vertex_ai/ 81、base_llm/ 69）。
 
 **核心结论：LiteLLM 的 "canonical" 不是独立 superset，而是「OpenAI Chat Completions + 一批 LiteLLM 私有扩展字段」。**
+
 - 请求侧：`litellm/types/llms/openai.py` 的 `AllMessageValues`(L1069)、`OpenAIMessageContentListBlock`(L874)、`ChatCompletionToolCallChunk`(L671)。
 - 响应侧：`litellm/types/utils.py` 的 `ModelResponse`(L2366)、`Usage`(L1999)、`PromptTokensDetailsWrapper`(L1865)、`CacheCreationTokenDetails`(L1856)、`CompletionTokensDetailsWrapper`(L1847)。
 - 私有扩展（严格 OpenAI 客户端会拒绝）：`ChatCompletionUserMessage.cache_control`(L899)、`Message.thinking_blocks` / `reasoning_items`、`provider_specific_fields`、`Delta.reasoning_content`、`Usage.server_tool_use` / `iterations` / `inference_geo` / `speed`。
@@ -312,6 +337,7 @@
 - Anthropic Messages 与 OpenAI Responses 是"在 Chat Completions 之上再包一层 adapter"（`BaseAnthropicMessagesConfig` L22、`BaseResponsesAPIConfig` L46、`CompletionTransformationBridge` L18）。
 
 **Usage 归一化（已逐行读）**：
+
 - `Usage.__init__`(L2012-2177) 有**硬编码 provider 映射**：Anthropic `cache_read_input_tokens → prompt_tokens_details.cached_tokens`、`cache_creation_input_tokens → prompt_tokens_details.cache_write_tokens`；DeepSeek `prompt_cache_hit_tokens → cached_tokens`；末尾 `for k,v in params.items(): setattr(self,k,v)` 把未知字段挂成 extra。
 - **Anthropic**（`anthropic/chat/transformation.py` L2858 `calculate_usage`）：`prompt_tokens = input + cache_creation + cache_read`（把 cache 加回去，与 OpenAI 语义对齐）；`_resolve_cache_creation_token_details`(L2844) 处理 5m/1h；`_build_completion_token_details`(L2771) 处理 `output_tokens_details.thinking_tokens`。
 - **Gemini**（`vertex_and_google_ai_studio_gemini.py` L2285 `_calculate_usage`）：`prompt_tokens = promptTokenCount + billable_tool_use_prompt_tokens + cache_creation`；**`is_candidate_token_count_inclusive`(L2240) 用 `prompt+candidates+toolUse == total` 反推 candidates 是否已含 thinking**；`_response_has_search_grounding`(L2262) 决定检索到的 token 是否计 input；`_set_grounding_usage_counters`(L2565) 写 `web_search_requests` / `google_maps_grounding_requests`。
@@ -321,6 +347,7 @@
 **finish_reason 归一化**：唯一映射表 `_FINISH_REASON_MAP`（`litellm_core_utils/core_helpers.py` L306-366）+ `map_finish_reason()`(L367)。**未命中时默认 `stop` 并 warning**——这是多个 issue 的根因（Gemini `MALFORMED_FUNCTION_CALL`→`stop` 被误判完成；`OTHER`→`content_filter` 误报）。LiteLLM 的补偿是把原始 `stop_reason` 写进 `provider_specific_fields`。有损映射：`pause_turn`→`length`（丢失"服务端工具未跑完、应续轮"语义）、`model_context_window_exceeded`→`length`。
 
 **Tool call**：
+
 - Anthropic `convert_tool_use_to_openai_format`(L604-632)：`arguments = json.dumps(input)`，`index` 用 content block 下标。
 - Gemini `_transform_parts`(L2088-2150)：id **三态**——原生 id（Gemini 3.5+）/ 伪造 `call_<uuid4().hex[:28]>` / **把 thoughtSignature 编码进 id 字符串**（`encode_tool_call_id_with_signature`）。第三种是反模式，已导致 [issue #17949](https://github.com/BerriAI/litellm/issues/17949)。
 - **流式重组缺 id 的 tool_call 被静默丢弃**：`ChunkProcessor.get_combined_tool_content`（`streaming_chunk_builder_utils.py` L585-735）条件 `elif tool_call_data.id and tool_call_data.name:`——根因是 [issue #11262](https://github.com/BerriAI/litellm/issues/11262)（ollama 不返回 id）与 [issue #20711](https://github.com/BerriAI/litellm/issues/20711)（Responses 流式丢参数增量）。
@@ -335,6 +362,7 @@
 **已知 issue（可当测试用例来源）**：[#27611](https://github.com/BerriAI/litellm/issues/27611) Chat→Responses 桥不转 `tool_choice` 命名函数格式；[#11262](https://github.com/BerriAI/litellm/issues/11262) 流式 tool_call 无 id 被丢弃；[#20711](https://github.com/BerriAI/litellm/issues/20711) Responses 流式丢参数增量；[#19789](https://github.com/BerriAI/litellm/issues/19789) Gemini `MALFORMED_FUNCTION_CALL`→`stop` 静默失败；[#17949](https://github.com/BerriAI/litellm/issues/17949) id 内嵌元数据；[#16893](https://github.com/BerriAI/litellm/issues/16893) Gemini 3 `thought_signature` 流式不保留；[#25848](https://github.com/BerriAI/litellm/issues/25848) "OpenAI 兼容"端点并不真兼容；[#6516](https://github.com/BerriAI/litellm/issues/6516) `drop_params` 对 `dimensions` 无效；[#26241](https://github.com/BerriAI/litellm/issues/26241) Anthropic→Responses adapter 忽略 `drop_params`。
 
 **→ 对我们的启示**（已落入设计）：
+
 1. **canonical 分层**：请求/响应各一个 canonical，但**额外定义显式的 `ProviderExtension` 命名空间**（我们的 `native.<vendor>.*`），避免 extra 字段在流式聚合时被静默丢弃（[10-canonical-schema.md](./design/10-canonical-schema.md) §7）。
 2. **Usage 四条硬不变量**（I1–I4，见 [40-provider-adaptors.md](./design/40-provider-adaptors.md) §2.2c）。
 3. **finish_reason 双向可逆 + 未命中不得默认 `stop`**（默认 `other` + warn，见 [10-canonical-schema.md](./design/10-canonical-schema.md) §9.3 注意 2）。
@@ -342,9 +370,14 @@
 5. **流式 usage 遵循"调用方显式要才发"**（[25-streaming.md](./design/25-streaming.md) §8.3）。
 6. **计费的缓存分支按 provider 语义分开**（[40-provider-adaptors.md](./design/40-provider-adaptors.md) §2.2c I1）。
 
-### 2.11 Cloudflare AI Gateway 的教训
+### 2.10 Cloudflare AI Gateway 的教训
 
-**状态：已确认（官方文档导航）。** Cloudflare AI Gateway 把 "Unified API (OpenAI compat)" 在文档导航里标注 **Deprecated**，转向 per-provider-native 路径（每个 provider 一个文档页）+ 网关级横切能力；同时 `ai-gateway-provider` 包已废弃。**→ 对 AgentGateway 的直接启示：差异化押在"多入站格式共存 + 真超集 canonical + 横切治理"，而不是"再多一种 OpenAI 方言"。** <https://developers.cloudflare.com/ai-gateway/>
+**状态：已确认（读官方文档 `.md` 原文，2026-11-14）。**
+
+**校正后的口径（review #4）**：文档导航里标 **Deprecated** 的是 **Universal Endpoint**（页面标题即 "Universal Endpoint (Deprecated)"，正文 "The Universal Endpoint is deprecated. Use the OpenAI-compatible endpoint for new integrations, and dynamic routes for fallbacks, retries, and conditional routing."）。而 "Unified API (OpenAI compat)" 页写的是 **"Deprecated for single-model calls"**，"For standard single-model chat completions, this endpoint is deprecated. Use the REST API instead, which provides OpenAI-compatible endpoints at `api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1/chat/completions`"——**替代方案仍然是 OpenAI 兼容端点**。
+
+**正确的启示**：Cloudflare 放弃的是"一个 Universal 端点 + 在 payload 里内联 `provider`/`endpoint`/`query`"这一种形态，转向"per-provider 文档页 + OpenAI 兼容 REST + dynamic routes"。它同时提供 provider-native 页面（Anthropic/Bedrock/…各一页）与统一 OpenAI 兼容端点——这恰恰说明**"多入站格式共存 + 统一兼容端点"是并存的，不是二选一**。
+**→ 对 AgentGateway 的直接启示：差异化押在"多入站格式共存 + 真超集 canonical + 横切治理"；但**不要**把 Cloudflare 这条当作"强行统一成 OpenAI 方言被否定"的论据——它否定的只是 Universal 那一种入口形态。<https://developers.cloudflare.com/ai-gateway/usage/chat-completion/>、<https://developers.cloudflare.com/ai-gateway/usage/universal/>
 
 ---
 
@@ -360,6 +393,7 @@
 | agentgateway UI <https://github.com/agentgateway/agentgateway> | Apache-2.0 | 6,178 | ❌ 只有 Playground |
 
 **关键结论**：
+
 1. **Open WebUI 的 LICENSE 第 4 条是硬门槛**：禁止 "altering, removing, obscuring, or replacing any 'Open WebUI' branding ... in any deployment or distribution"，例外只有 (i) ≤50 用户/30 天、(ii) 书面许可、(iii) 企业授权。官方 FAQ 明确 "**Open WebUI v0.6.6+ is not an OSI-approved 'open source' license**" 且 "**Rebranding and co-branding in any form are prohibited**"（包括 "Managed by Company X" 这种纯文字标注）。→ 与"重度定制的私有产品"直接冲突。<https://docs.openwebui.com/license>、<https://raw.githubusercontent.com/open-webui/open-webui/main/LICENSE>
 2. **LibreChat 是唯一原生建模 cache 计费的候选**：`tokenConfig` 每模型可配 `prompt`/`completion`/`context`/**`cacheRead`**/**`cacheWrite`**/**`cacheWrite1h`** 单价，另有 `balance`（token 额度、自动 refill、reservation）+ transactions。<https://www.librechat.ai/docs/configuration/librechat_yaml/object_structure/custom_endpoint>
 3. LibreChat 的 `endpoints.custom[]` 支持任意 OpenAI 兼容网关，且 `headers` 支持 `{{LIBRECHAT_USER_ID}}` / `{{LIBRECHAT_USER_EMAIL}}` / `{{LIBRECHAT_BODY_CONVERSATIONID}}` 占位符——**可让网关按 LibreChat 用户维度记账**。Admin Panel 提供 `/api/admin/*` 配置 API（secret 字段加密存储并只回掩码预览）。
@@ -388,6 +422,7 @@
 | age / JSONL | 仅归档层。age 官方明确不建议自动化系统用 passphrase-only；无可查询性 |
 
 **本机实测数据**：
+
 - Argon2id（`crypto.argon2Sync`，OWASP 最低档 m=19456 KiB, t=2, p=1）≈ **102 ms**；m=47104 KiB/t=1/p=1 ≈ 163 ms；m=64 MiB/t=3/p=4 ≈ 198 ms。⚠️ `argon2Sync` 阻塞 event loop，只能在启动路径用。
 - Node ≥24.7.0 内置 `crypto.argon2()`（本机 Node v26.13.0 已确认可用），零原生依赖。
 - zstd：同分布训练字典 **6.43×** vs 无字典 1.25×（400 条 × 125 KB）；**跨分布字典反而变差（1.25× → 1.08×）**——字典必须按真实数据分布训练并版本化。
@@ -399,7 +434,8 @@
 - CDC 用 FastCDC（Gear hash，USENIX ATC'16）。
 
 **来源**：
-- SQLCipher <https://sqlcipher.org/>；libsql 加密 <https://github.com/tursodatabase/libsql>；SQLite3MultipleCiphers <https://github.com/utelle/SQLite3MultipleCiphers>；Node crypto Argon2 <https://nodejs.org/api/crypto.html>；age <https://github.com/Filen.io/age>；`@napi-rs/keyring` <https://github.com/nick33810/napi-rs-keyring>
+
+- SQLCipher <https://www.zetetic.net/sqlcipher/>（**链接已换**：原 `sqlcipher.org` 在本次与 review 环境均无法连接——DNS/连接失败，既不能证实也不能证伪；Zetetic 是 SQLCipher 的官方商业实体，该地址实测 200）；libsql 加密 <https://github.com/tursodatabase/libsql>；SQLite3MultipleCiphers <https://github.com/utelle/SQLite3MultipleCiphers>；Node crypto Argon2 <https://nodejs.org/api/crypto.html>；age <https://github.com/FiloSottile/age>（**链接已修**：原 `Filen.io/age` 返回 **404**；age 的官方仓库是 `FiloSottile/age`，200）；`@napi-rs/keyring` <https://github.com/Brooooooklyn/keyring-node>（**链接已修**：原 `nick33810/napi-rs-keyring` 返回 **404**；npm registry 的 `repository` 字段指向 `Brooooooklyn/keyring-node`，200）
 
 **→ 结论与密钥三档、前缀压缩、脱敏、保留策略**：见 [65-storage-and-retention.md](./design/65-storage-and-retention.md)。
 
@@ -469,6 +505,7 @@ OpenRouter 侧（上游归一化样板）：<https://openrouter.ai/docs/api/api-
 **eesel 实测**（2026-10，20 工单 × 3 问）：Luna reasoning=none $0.047/千单、29/40 三问全对、median 1.48 s；Luna medium $0.089、2.34 s；GPT-6.1 Sol low $1.03、2.17 s。要点：**队列路由 40/40 已是"解决问题"**，花 22x 钱上 frontier model 买不到东西；thinking 全额按 output 计费，medium effort 下 82 个隐藏 thinking token 让成本近乎翻倍。
 
 **校准度**：
+
 - Google launch eval（自评）：Top-1 ECE Gemini Decision 1 **0.0250** < Jev 1.14 0.0494 < GPT-6 Luna 0.0721；JevBench 92.2% vs 90.0%；When2Call 79.9% vs **82.0%**（此项 Gemini 反而略低）；评测花费 $0.88 vs $0.68。
 - Artificial Analysis：Decision Index 66/60/66，Brier 0.18/0.19/0.19，每任务 211/206/**92** ms，每 1M 任务 $345/$339/**$156**。
 - ⚠️ **AIHubMix 明确警告**："A lower aggregate ECE does not establish a calibrated threshold for your tool router"——聚合校准度好不代表你的具体判断任务有可用阈值。
@@ -540,13 +577,13 @@ OpenRouter 侧（上游归一化样板）：<https://openrouter.ai/docs/api/api-
 | 10 | Anthropic `output_config.effort` 与 `thinking` 的 per-model 组合限制 | reasoning 映射 | 40-provider-adaptors.md §3 |
 | 11 | `googleSearchRetrieval` 是否已正式废弃 | built-in search | 50-builtin-search.md §6 |
 | 12 | TTS/ASR/Image 各家 usage 原始字段与流式形态 | 多单位归一 | 15-modalities.md §9 |
-| 13 | chinrain/Api-Conversion 与 1rgs/claude-code-proxy 的 license | 合规 | 本节 §5 |
+| 13 | chinrain/Api-Conversion 与 1rgs/claude-code-proxy 的 license | 合规 | 本节 **§6**（License 汇总；原写 §5 是 decision 调研节，已改） |
 | 14 | MongoDB SSPL 合规结论（LibreChat 依赖） | 合规 | 本节 §3 |
 | 15 | 本机无 TPM；若部署机有 TPM，`tpm2-pkcs11` 封存 KEK 的可行性 | 密钥档位 | 65-storage-and-retention.md §8 |
 | 16 | 备份→换机→恢复流程实测（密文 + KDF 参数 + 口令） | 运维 | 65-storage-and-retention.md §8 |
 | 17 | `better-sqlite3-multiple-ciphers` 在 WAL 模式下 `PRAGMA rekey` 的稳定性 | 密钥轮换 | 65-storage-and-retention.md §8 |
-| 18 | **Q21** 三家 decision API 确切字段名/usage 形状/错误码 | decision adaptor 开工前置 | 40-provider-adaptors.md §6.2 |
-| 19 | **Q22** Gemini Decisions 免费额度/区域；Jev 模型 id 与计价 | 路由与计费 | 15-modalities.md §7 |
-| 20 | **Q23** decision 是否真的不能做 chat（需官方文档确认） | 降级路径设计 | 40-provider-adaptors.md §6.3 |
-| 21 | **Q24** chat 模拟 decision 的校准性损失有无公开基准 | 降级默认策略 | 40-provider-adaptors.md §6.3 |
+| 18 | ~~**Q21** 三家 decision API 确切字段名/usage 形状/错误码~~ **已解答**（已全部读到官方 API reference） | — | 40-provider-adaptors.md §6.2 |
+| 19 | ~~**Q22** Gemini Decisions 免费额度/区域；Jev 模型 id 与计价~~ **已确认** | — | 15-modalities.md §7 |
+| 20 | ~~**Q23** decision 是否真的不能做 chat~~ **已解答**（三家官方文档均明确不能） | — | 40-provider-adaptors.md §6.3 |
+| 21 | ~~**Q24** chat 模拟 decision 的校准性损失有无公开基准~~ **已解答**（TypeSafe cookbook 有已发表实测：26.8x–176.9x 慢、4.1x–1189x 贵） | — | 40-provider-adaptors.md §6.3 |
 | 22 | **Q25** 部分问题失败的上游语义（整请求失败 vs 部分答案） | 批量错误处理 | 40-provider-adaptors.md §6.1 |

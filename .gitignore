@@ -42,6 +42,5 @@ tmp/
 .vscode/*
 !.vscode/extensions.json
 
-# 抓取中间产物（正式快照走 data/raw/ 与 data/normalized/）
+# 抓取中间产物（本地调研缓存，不入库）
 .cache/
-snapshots/*.raw.json
