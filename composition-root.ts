@@ -735,15 +735,20 @@ function assembleAdmin(input: {
     aliasResolver,
     ...(options.metadataSync === undefined ? {} : { metadataSync: options.metadataSync }),
     ...(options.balanceProbe === undefined ? {} : { balanceProbe: options.balanceProbe }),
-    ...(input.usageSink === undefined
-      ? {}
-      : {
-          usageSource: {
-            // UsageRecord.units 是 UsageUnits（有名字段）；AdminService 要的是
-            // Record<string, number>（宽类型）。这里显式放宽，让 metering 的
-            // MemoryUsageSink 能直接注入而不必包一层转换类。
-            list: (fromTs, toTs) =>
-              input
+    // usageSource：显式注入的优先；否则退回内部 MemoryUsageSink（仅 test 模式创建）。
+    // 早先的版本只认 input.usageSink，导致 `options.usageSource` 成了声明了却从不
+    // 被消费的死选项——生产模式（不建内部 sink）下管理面看板永远是空的。
+    ...(options.usageSource !== undefined
+      ? { usageSource: options.usageSource }
+      : input.usageSink === undefined
+        ? {}
+        : {
+            usageSource: {
+              // UsageRecord.units 是 UsageUnits（有名字段）；AdminService 要的是
+              // Record<string, number>（宽类型）。这里显式放宽，让 metering 的
+              // MemoryUsageSink 能直接注入而不必包一层转换类。
+              list: (fromTs, toTs) =>
+                input
                 .usageSink!.records.filter((r) => r.ts >= fromTs && r.ts < toTs)
                 .map((r) => ({
                   request_id: r.request_id,
