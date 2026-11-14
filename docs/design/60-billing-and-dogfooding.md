@@ -29,7 +29,7 @@ S10 UsageEmitter
               Tier-2 存储：request_bodies（大、敏感、加密）
                      │
                      ├─▶ 前缀压缩 / delta 链（§5）
-                     ├─▶ zstd + 共享字典
+                     ├─▶ zstd + 全局字典（含按客户端类型变体，见 65 §5.2）
                      └──▶ 应用层信封加密（详见 [65-storage-and-retention.md](./65-storage-and-retention.md) 决策 S1）
 ```
 
@@ -211,7 +211,7 @@ WebUI 的"agent 对话"页就是普通聊天界面，指向上述端点；数据
 ## 7. 待验证清单
 
 1. 各 provider `input_tokens` 是否已含 cache read（决定 §4 规则 2 的最终写法）。
-2. zstd 共享字典在"短 delta + 长公共前缀"上的实测压缩率，以及字典训练耗时（应控制在百 ms 级，否则要离线预训练）。
+2. zstd 全局字典在"短 delta + 长公共前缀"上的实测压缩率，以及离线训练耗时（训练不得进请求路径）。
 3. Argon2id 在目标硬件上的实测耗时（决定 B 档启动延迟）与推荐参数组合。
 4. 加密 Tier-2 后的备份/迁移流程（换机：密文 + KDF 参数 + 口令即可恢复，需实测验证）。
 5. `usage_missing` 兜底估算的误差率。

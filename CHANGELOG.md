@@ -3,7 +3,7 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号暂用 `0.1.0-draft`
 （设计尚未定稿，不设语义化版本；`docs/design/*.md` 页眉里的 `v1.0-draft` 指设计文档自身的版本）。
 
-## [Unreleased] — 2026-11-14 · review #1–#8 逐条处置
+## [Unreleased] — 2026-11-14 · review #1–#8 逐条处置 + #8 六条设计决定定稿
 
 本轮把对外分发的 8 个 GitHub issue 逐条核实后落地。**每个 issue 的核实结论与证据见 issue 内的回复**；
 本文只记"改了什么"。
@@ -110,21 +110,47 @@
   MD034 2 处、MD033 2 处、MD012 1 处、MD029 6 处全部修掉（否则 CI 一上线就是红的）。
   改动都是空白行 / 代码块语言标注 / 加粗冒充标题改冒号引导这类机械修正，不涉及内容。
 
-### 设计风险（#8）—— 只写建议解法，**全部待作者拍板**
+### 设计风险（#8）—— 作者已逐条拍板，全部定稿
 
-以下四条已把"问题 + 建议解法 + 待拍板点"写进文档对应位置，**没有擅自定稿**：
+> 上一轮只写了"问题 + 建议解法 + 待拍板点"。**本轮（2026-11-14 续）仓库主人对六条逐条拍板，
+> 已把结论原意落入文档**，定稿内容见下一节；此节保留问题本身的记录。
 
 - **KEK 轮换与派生方式矛盾**（`65-storage-and-retention.md` §3.1）：DEK 由 HKDF 派生却说"轮换 KEK
-  只需重包 DEK"——二者互斥。建议改为 **DEK 随机生成 + KEK 包裹（AES-256-KW）**。
+  只需重包 DEK"——二者互斥。
 - **nonce 计数器可能重复**（同节）：重启 / 多 worker / 多进程写同一 session 时会重用 AES-GCM nonce。
-  建议改为**随机 96-bit nonce + 单密钥加密次数上限**，或 **XChaCha20-Poly1305 / AES-GCM-SIV**。
 - **fast path 仍先完整解码**（`20-pipeline.md` §4.2）：与"附加延迟 < 3ms p99"有张力。
-  建议**惰性解码 / 只解析信封字段**，并把"插件需要完整 canonical ⇒ 有权关闭 fast path"的依赖关系
-  分成三级写清（含新增的 `needs: "envelope_only"` 档，待拍板）。
 - **relaykit 与拒绝 NewAPI 的理由自相矛盾**（`00-overview.md` §1.3）：relaykit 同样 AGPL-3.0。
-  结论改为**明确不采用**（借鉴设计、不引代码），并说明若要用进程边界隔离需单独的法务判断。
 - **per-session zstd 字典**（`65-storage-and-retention.md` §5.2）：`zstd --train` 需 >100 样本，
-  多数会话攒不到。建议改为**全局 / 按客户端类型分组训练 + 带版本号 `dict_id`**。
+  多数会话攒不到。
+- **LibreChat 必须依赖 MongoDB**（`00-overview.md` §7.3、`docs/sources.md` §3/§6）：与"SQLite 单文件"
+  意味着两套存储；MongoDB SSPL 合规此前未定。
+
+### 定稿（review #8 六条设计决定，2026-11-14）
+
+仓库主人逐条拍板，以下六条已从"待拍板"改为**定稿**写入文档；未改动技术结论，只把结论落到原文位置
+并清掉与之冲突的旧表述。
+
+| # | 决定 | 落点 |
+|---|---|---|
+| 1 | **DEK 随机生成 + KEK 包裹（信封加密）**，不再用 `DEK = HKDF(KEK, salt=session_id, …)` 派生；轮换 KEK 只需重包 DEK。HKDF 的边界写死（KEK 只由 Argon2id 派生，HKDF 不用于从 KEK 派生 DEK）。同步改 AAD、轮换流程、恢复流程 | `65-storage-and-retention.md` §3.1（+ §1 决策 S1/S4、§3.2b、§3.3、§4.3、§5.5、§7） |
+| 2 | **XChaCha20-Poly1305 + 192-bit 随机 nonce**，不做计数器持久化；注明替代方案 **AES-GCM-SIV**（FIPS/审计合规时）及取舍 | `65-storage-and-retention.md` §3.1（密钥层次图 + 正文） |
+| 3 | **fast path 惰性解码**：S1 只解析「信封 + 路由必需字段」，完整 canonical 推迟到 S3 插件链 / S4 Encode / S6 ProviderDecode 的非 fast path 分支；响应侧只抽 usage 信封并直通原始字节。**准入条件**：插件 manifest `scope: "envelope-only" \| "full-canonical"`，仅当全部已启用请求侧插件都是 `envelope-only`（或无请求侧插件）才允许 fast path；该条件由配置/组合根启动时计算并缓存，运行中增删插件需失效重算 | `20-pipeline.md` §3（S1）、§4.1、§4.2；`00-overview.md` §4.1 数据流、§3 性能约束、§1.4、§2.1、§9；`70-roadmap.md` Phase 1 交付物/验收、§8 风险表；`30-plugin-api.md` §2 `PluginManifest.scope`；`40-provider-adaptors.md` §1.1 `decode` 两档 |
+| 4 | **relaykit 明确「不采用」**：与 NewAPI 同为 AGPL-3.0，与"因 AGPL 拒绝 NewAPI"的首要理由自相矛盾；借鉴限"读设计、不引代码"；确需其代码须独立进程/服务边界隔离并先做许可证评估 | `00-overview.md` §1.3；`docs/sources.md` §6 License 汇总 |
+| 5 | **取消 per-session zstd 字典**，改为**全局字典 + 可选按客户端类型的字典变体**，离线训练、带版本号（`dict_id`）、入库加密；小会话退化为无字典压缩并记录实际压缩率 | `65-storage-and-retention.md` §5.2（+ §4.3 `zstd_dicts` 表、§5.3、§8 Q5）；`00-overview.md` §7.5、§8 Q5；`60-billing-and-dogfooding.md` §2/§7；`docs/sources.md` §4 结论、§7 |
+| 6 | **维持 fork LibreChat**；**MongoDB 作为独立服务/容器部署，网关核心（SQLite 单文件）不依赖它**；**SSPL 立场**：私人自托管自用可接受，仓库公开/开源需重新评估（revisit 触发条件已写明）；**Meilisearch 列为可选** | `00-overview.md` §7.3；`docs/sources.md` §3、§6 License 汇总、§7 第 14 条 |
+
+**连带修掉的冲突**（落地时发现，均与上述六条直接相关）：
+
+- `docs/sources.md` §4 结论行的 AAD 仍写 `request_id` + schema 版本（全文已统一为 `request_id + ir_version`）——
+  随本轮改写一并统一，并把算法/字典口径同步为定稿值。
+- `65-storage-and-retention.md` §3.2b、§3.3 里"DEK 派生""GCM 解密"等旧措辞改为"解包"
+  "XChaCha20-Poly1305 解密"，避免与定稿的信封加密口径冲突。
+- `70-roadmap.md` Phase 1 的"p99 附加延迟 < 3ms"此前没有说明它靠什么成立——补上"S1 信封级惰性解析 +
+  插件 `scope` 准入"这个前提，并新增"fast path 准入可观测"一条验收。
+- `00-overview.md` §4.1 数据流图里 S1 框写的 `→canon` 改为 `→信封`，并加一段惰性解析说明。
+- `60-billing-and-dogfooding.md` §2 管道图与 §7 待验证里的"共享字典"改为"全局字典"，与 65 §5.2 一致。
+- `30-plugin-api.md` §4.2 的 billion-context adaptor 示例 manifest 补 `scope: "full-canonical"`（它要改写
+  messages，fast path 因此对它关闭）。
 
 ### 已知未处理（留给作者）
 
@@ -135,6 +161,5 @@
   **Open Questions 集中到 `docs/design/open-questions.md`**（#5 建议 3）：均未执行。
 - **`CapabilityEntry` 两份定义合并**（#3 建议 3）：15 与 45 的两份形状不同（键是 `provider` 还是
   `(access_path, model)`、有没有 `framing`），涉及路由与能力矩阵的核心结构，需作者拍板后统一。
-- **LibreChat 必须依赖 MongoDB**（#8.5 次要项）：与"SQLite 单文件"意味着两套存储；SSPL 合规仍开着。
 - **"canonical 对 9 模态一次做全"的范围风险**（#8.5 次要项）：与 70 §8 风险表里的
   "多模态 schema 过度设计"相关，建议给穷尽普查设截止标准。

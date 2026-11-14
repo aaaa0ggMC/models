@@ -70,7 +70,7 @@
 - `PipelineRunner` + **11 个阶段（S0–S10）**骨架（[20-pipeline.md](./20-pipeline.md) §2）
 - `CanonicalRequestEnvelope` / `CanonicalResponseEnvelope` / `StreamFrame` 类型 + JSON Schema + round-trip 测试夹具
 - **3 个 chat adaptor 写透**：`openai.chat`、`openai.responses`、`anthropic.messages`（含慢路径 + fast path 判定 + 有序偏好表）
-- fast path 透传 + usage 旁路嗅探器
+- fast path 透传（S1 只做信封级惰性解析，完整 canonical 推迟到 S3/S4/S6）+ usage 旁路嗅探器
 - 异步 usage 管道最小版：内存队列 → Tier-1 SQLite（明文，Phase 1 不加密，见下）
 - 凭据模型 v1：`api_key` / `local` / `cloud_iam` 三种类型 + access path + Plan 感知路由（[45-credentials.md](./45-credentials.md)）
 - 数据面 virtual key 鉴权 + 基础限流 + 控制面本地账号 + passkey（[66-auth.md](./66-auth.md)）
@@ -81,7 +81,8 @@
 
 - 单元测试覆盖 3 adaptor × 各格式的 round-trip 保真度（含 `raw.unmapped` 回写、畸形 tool 参数、多 system 消息）
 - 同一 provider 的 fast path 请求与直连 provider 的字节级 diff 为空（除归一化字段）
-- 压测：单核 ≥ 500 rps（fast path 路径），p99 附加延迟 < 3ms
+- 压测：单核 ≥ 500 rps（fast path 路径），p99 附加延迟 < 3ms——该目标成立的前提是 **S1 信封级惰性解析**（不物化完整 canonical，见 [20-pipeline.md](./20-pipeline.md) §3/§4.2）与**插件 manifest `scope` 准入**（启动时计算并缓存）
+- fast path 准入可观测：启动时算出的 `FAST_PATH_PLUGIN_ADMISSION`、以及"多少请求因插件/能力不支持走了转换"都有计数（关闭率仪表盘在 Phase 3 补）
 - 关闭 `persist_messages` 时，磁盘上不存在任何消息正文（有测试断言这一点）
 - **"新增 adaptor 不需要改 schema"**：加一个 mock adaptor 只动 `adaptors/` 目录，`ir/` 目录 diff 为空（CI 断言）
 
@@ -196,7 +197,7 @@
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 某家 provider 改字段/废弃端点 | adaptor 失效 | 能力矩阵 + 集成测试夹具按版本锁定；契约测试跑在 CI |
-| fast path 透传与插件需求冲突 | 要么丢扩展性要么丢保真 | `disableFastPath` 显式化 + 关闭率可观测 |
+| fast path 透传与插件需求冲突 | 要么丢扩展性要么丢保真 | `disableFastPath` 显式化 + manifest `scope` 准入（`envelope-only` / `full-canonical`，启动时算并缓存）+ 关闭率可观测 |
 | 计费口径各家不一致 | 账单不可信 | 原始 usage 全留 + 双路计量 + 单价版本化不追溯 |
 | billion-context license 不可商用 | 核心插件不可用 | adaptor 与驱动解耦，驱动可替换 |
 | 多模态 schema 过度设计 | 延期 | 模态用 `kind` 判别 + 注册表，新增模态不改信封 |

@@ -128,17 +128,17 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 5. **无 canonical IR 意味着无法做协议无关的 hook**——这是我们的核心需求。
 6. **运维特性缺口**：无 Prometheus、无熔断、默认 0 重试、重启丢失途结算。
 
-**一个例外（结论：不采用，待作者拍板）**：`relaykit` 是仓库内的独立 Go module，其 README 明确说"HTTP 收发、SSE 读写、渠道选择、鉴权和计费由宿主程序完成，所以可以嵌进其他 Go 网关或代理"。**若我们的实现语言选 Go，可以直接依赖 `relaykit` 获得 4 协议互转能力，再在其上包一层 AG-IR**——这是唯一值得认真考虑的"站在 NewAPI 肩膀上"的路径。
+**relaykit：明确不采用（review #8.4，作者已拍板定稿）**：`relaykit` 是仓库内的独立 Go module，其 README 明确说"HTTP 收发、SSE 读写、渠道选择、鉴权和计费由宿主程序完成，所以可以嵌进其他 Go 网关或代理"，表面看是一条"站在 NewAPI 肩膀上"获得 4 协议互转能力的捷径。**但结论是明确不采用**：
 
-> **但它同样是 AGPL-3.0 + Section 7 附加条款，而 §1.3 拒绝 NewAPI 的首要理由正是 AGPL。** 直接依赖 `relaykit` 与"因为 AGPL 而不在 NewAPI 上改"面对的是同一个许可证约束，只是换了入口——依赖它的 module 同样触发"网络使用需开源 + 保留前端署名/可见链接"的义务，私有深度定制仓库并不因为"只用了一个 Go module"就豁免。
-> **本文的立场：明确不采用 relaykit。** 理由不是技术（它的成对转换器 + 质量分级设计确实值得借鉴），而是许可证结论必须与 §1.3 自相一致。借鉴方式限定为**读设计、不引代码**（转换结果对象、损耗策略三档、`RequestConversionChain` 记日志）。
-> 若作者认为可以用"独立进程 + 本地 HTTP/stdio 边界"把 AGPL 模块与私有代码隔离（AGPL 的传染性只覆盖"基于该程序的衍生作品"，跨进程边界通信是否构成衍生作品在业界有争议、无定论），需要单独的法务判断——**这一条留给作者拍板，本文不擅自定稿**。
+1. **它与被拒的 NewAPI 同为 AGPL-3.0 + Section 7 附加条款**——而 §1.3 拒绝 NewAPI 的**首要**理由（上文「为什么不"在 NewAPI 上改"」第 1 条）正是 AGPL。直接依赖 `relaykit` 与"因为 AGPL 而不在 NewAPI 上改"面对的是同一个许可证约束，只是换了入口：依赖它的 module 同样触发"网络使用需开源 + 保留前端署名/可见链接"的义务，私有深度定制仓库并不因为"只用了一个 Go module"就豁免。**不采用的理由是许可证结论必须自相一致，不是技术**（它的成对转换器 + 质量分级设计确实值得借鉴）。
+2. **借鉴方式限定为"读设计、不引代码"**：转换结果对象（`From/To/Converter/Quality/Steps/Diagnostics`）、损耗策略三档、`RequestConversionChain` 记日志——这些已按设计借鉴落入本文（本节上文"可从 NewAPI 借鉴的"、[10-canonical-schema.md](./10-canonical-schema.md) 的 `ConversionDiagnostic`、[20-pipeline.md](./20-pipeline.md) §4.2 的 `conversion_chain`）。
+3. **若将来确需其代码**：必须以**独立进程/服务边界**隔离（本地 HTTP/stdio，不 link 进同一进程），**并且先做许可证评估**——AGPL 的传染性只覆盖"基于该程序的衍生作品"，跨进程边界通信是否构成衍生作品在业界有争议、无定论，需单独的法务判断，本文不预设结论。
 
 ### 1.4 核心价值主张（按优先级）
 
 1. **格式互转 + 无损可逆**：`raw passthrough` 机制保证未建模字段不丢（[10-canonical-schema.md](./10-canonical-schema.md) §7）。
 2. **统计口径错位修正**：同样一次调用，四种格式的 usage 字段名与语义不同（`prompt_tokens` vs `input_tokens` vs `promptTokenCount`；`cache_creation_input_tokens` vs 无对应）。canonical 把它们归一，这是**计费可信的前提**，也是 fast path 下唯一必须做的事。
-3. **fast path**：客户端格式 == 上游格式时跳过结构转换，透传原始字节，旁路只做计量。**不为功能牺牲性能**。
+3. **fast path**：客户端格式 == 上游格式时跳过结构转换，透传原始字节，旁路只做计量；S1 只做信封级惰性解析。**不为功能牺牲性能**。
 4. **插件系统**：generic hook，操作对象只有 canonical。
 5. **dog-fooding**：网关把自己的用量/计费/配置数据暴露成工具，让 AI agent 自己查询分析。
 
@@ -155,7 +155,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 |---|---|
 | canonical schema（AG-IR v1）：共享信封 + 9 模态 payload + 媒体引用 + 多单位 usage + raw passthrough | [v1] **穷尽普查，一次做全** |
 | 3 个 chat adaptor 写透：`openai.chat`、`openai.responses`、`anthropic.messages` | [v1] |
-| fast path 透传 + usage 旁路嗅探 | [v1] |
+| fast path 透传 + usage 旁路嗅探（S1 信封级惰性解析） | [v1] |
 | 异步 usage/计费管道（多单位）+ Tier-1 存储 | [v1] |
 | 数据面认证（virtual key）+ 控制面本地认证 + passkey | [v1]（Phase 1 就绪；其唯一使用方 WebUI 是 [v1.5]/Phase 4，中间由 CLI 消费——"能力先于消费者就绪"，不是依赖倒置） |
 | round-trip 测试框架（adaptor 层 6 条 + schema 层全覆盖用例） | [v1] |
@@ -195,7 +195,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
 |---|---|---|
 | **隐私优先** | 聊天数据持久化**默认关闭**；usage 元数据默认开启；落盘即加密；provider key/Authorization 头永不入库 | 分层存储 + 开关 + 脱敏（[65-storage-and-retention.md](./65-storage-and-retention.md)） |
 | **自托管、无人值守** | 单机或小集群，无 KMS/HSM；重启要能自动起来 | 密钥三档来源，默认 OS keyring 档（[65-storage-and-retention.md](./65-storage-and-retention.md) §3） |
-| **性能** | fast path 附加延迟 < 3ms p99；不为功能强制走转换 | fast path + 旁路计量（[20-pipeline.md](./20-pipeline.md) §4） |
+| **性能** | fast path 附加延迟 < 3ms p99（S1 只做信封级惰性解析，完整 canonical 物化推迟到非 fast path）；不为功能强制走转换 | fast path + 旁路计量（[20-pipeline.md](./20-pipeline.md) §4） |
 | **插件只面对 canonical** | 插件拿不到任何 provider 原始 body | adaptor 模式接外部能力（[30-plugin-api.md](./30-plugin-api.md)） |
 | **流式是第一公民** | 不允许隐藏的"等全量再下一步" | 统一流式帧信封（[25-streaming.md](./25-streaming.md)） |
 | **不计费不确定性** | "未知"绝不用 0 表示 | 多单位 usage + source provenance（[10-canonical-schema.md](./10-canonical-schema.md) §6） |
@@ -213,7 +213,7 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
   client (任意格式)  │  ┌────────┐   ┌────────┐   ┌─────────┐   ┌──────────────┐  │
  ───────────────────▶│  │ S0     │──▶│ S1     │──▶│ S2      │──▶│ S3 onRequest │  │
    openai.chat      │  │Ingress │   │Decode  │   │Route    │   │  插件链      │  │
-   openai.responses │  │鉴权/限流│   │→canon  │   │fast path│   │  (压缩/注入) │  │
+   openai.responses │  │鉴权/限流│   │→信封   │   │fast path│   │  (压缩/注入) │  │
    anthropic        │  └────────┘   └────────┘   │ 判定    │   └──────┬───────┘  │
    gemini           │                            └─────────┘          │          │
    tts/asr/image    │                                                 ▼          │
@@ -246,6 +246,11 @@ AgentGateway 的选择：**自建显式的 canonical 超集**，把"哪些字段
              │ APIs       │      │ searxng 等     │     │ LibreChat)      │
              └────────────┘      └────────────────┘     └─────────────────┘
 ```
+
+> **S1 是信封级惰性解析（review #8.3，作者已拍板定稿）**：fast path 下 S1 只解析「信封 + 路由必需字段」
+> （客户端格式识别、model / access_path、usage 信封位置、是否流式、请求体字节长度），**完整 canonical 物化
+> 推迟到真正需要它的阶段**；某个请求能否走这条路，由已启用插件的 manifest `scope` 在启动时算出并缓存。
+> 详见 [20-pipeline.md](./20-pipeline.md) §3（S1）与 §4.2。
 
 ### 4.2 模块划分
 
@@ -430,17 +435,28 @@ OpenRouter 的 `GET /api/v1/models` 返回模型元数据 + 定价 + per-model r
 
 ### 7.3 WebUI：fork LibreChat（MIT）
 
-**结论**：fork LibreChat 改造，自建 gateway 管理模块补上它没有的 virtual key / provider / routing 管理。
+**结论（review #8.5 次要项，作者已拍板定稿）**：**维持 fork LibreChat** 改造，自建 gateway 管理模块补上它没有的 virtual key / provider / routing 管理。
+
+**MongoDB 作为独立服务/容器部署，网关核心不依赖它**：LibreChat 的 MongoDB 是它自己的硬依赖，与网关核心的"SQLite 单文件"是两套存储。部署时 MongoDB 跑独立容器/服务，**网关核心（SQLite 单文件）不依赖它**——WebUI 未部署或挂掉时，网关的数据面、计费管道、dog-fooding 接口全部照常工作。两边只在 WebUI 需要展示时经网关 REST 交互，不共享数据库文件、不共享连接。
+
 **理由**：
 
 1. **许可证**：纯 MIT，fork/rebrand/深度改造零摩擦。Open WebUI 自 v0.6.6 起是 "BSD-3 + 品牌条款"，官方明确"不是 OSI 认证的 open source"且"co-branding 任何形式均被禁止"，>50 用户/30 天必须保留其品牌或买企业授权——与"重度定制的私有产品"直接冲突。LiteLLM UI 是 MIT 但 SSO>5 人付费、不能改主题色。agentgateway UI 是 Apache-2.0 但只有 Playground、无通用 agent 前端。
 2. **唯一原生建模 cache 计费**：`tokenConfig` 显式提供 `cacheRead` / `cacheWrite` / `cacheWrite1h` 单价 + `balance` 额度体系，直接对上我们的多单位计费需求。
 3. **dogfooding 闭环最短**：Agents + MCP + OpenAPI Actions + command hooks，包一个 MCP server 指向我们的 usage API 即可。
-**代价**：Node/React + MongoDB 必选；版本迭代极快（0.8.x）；Admin Panel 是独立服务。裁剪清单见 [docs/sources.md](../sources.md) §UI。
+
+**代价**：Node/React + MongoDB 必选（独立容器）；版本迭代极快（0.8.x）；Admin Panel 是独立服务。**Meilisearch 列为可选**（LibreChat 的 RAG 检索后端，本项目 strip RAG 后默认不需要）。裁剪清单见 [docs/sources.md](../sources.md) §UI。
+
+**SSPL 合规立场（review #8.5，作者已拍板定稿）**：MongoDB 的 SSPL 只约束"把 MongoDB 本身作为服务对外提供"；本项目是**私人自托管、自用**，不对外提供 MongoDB 服务，**可接受**。
+**Revisit 触发条件**（满足任一条即重新评估，评估结论可能是换 WebUI 方案或换它的存储）：
+
+1. 仓库将来**公开/开源**（含把 LibreChat fork 推公开）；
+2. 把 WebUI 或网关作为**托管服务**对多人开放（而非单用户私用）；
+3. LibreChat 上游变更，要求引入 MongoDB 之外的 SSPL 组件，或其 license 从 MIT 变更。
 
 ### 7.4 存储：SQLite + 整库加密 + payload 列应用层信封加密（双层）
 
-**结论**：单文件 SQLite，**两层加密**——① 整库加密 `better-sqlite3-multiple-ciphers`（`PRAGMA cipher='chacha20'`，sqleet/AEAD）；② payload 列（消息内容、媒体二进制）额外用应用层 AES-256-GCM 信封加密，**AAD 绑定 `request_id + ir_version`**。KEK 由 Argon2id 从用户口令派生，密钥三档来源，无人值守默认 OS keyring 档。完整对比、密钥层次与轮换见 [65-storage-and-retention.md](./65-storage-and-retention.md)（**决策 S1**）。
+**结论**：单文件 SQLite，**两层加密**——① 整库加密 `better-sqlite3-multiple-ciphers`（`PRAGMA cipher='chacha20'`，sqleet/AEAD）；② payload 列（消息内容、媒体二进制）额外用应用层 **XChaCha20-Poly1305**（192-bit 随机 nonce，不做计数器持久化）信封加密，**AAD 绑定 `request_id + ir_version`**。DEK 随机生成、用 KEK 包裹（信封加密）后存入密钥表；KEK 由 Argon2id 从用户口令派生，密钥三档来源，无人值守默认 OS keyring 档。完整对比、密钥层次与轮换见 [65-storage-and-retention.md](./65-storage-and-retention.md)（**决策 S1**、§3.1）。
 **理由**：
 
 1. 整库加密覆盖"数据库文件被拷走"的全部场景（含 WAL、临时表、索引泄漏的元数据）；
@@ -452,7 +468,7 @@ OpenRouter 的 `GET /api/v1/models` 返回模型元数据 + 定价 + per-model r
 
 ### 7.5 消息内容持久化：默认关闭 + 前缀压缩
 
-**结论**：`persistence.messages` 默认 `off`；开启后按会话存 delta 链 + zstd 共享字典。
+**结论**：`persistence.messages` 默认 `off`；开启后按会话存 delta 链 + zstd **全局字典**（可选按客户端类型变体，离线训练、带版本号、入库加密；per-session 字典已取消，见 [65-storage-and-retention.md](./65-storage-and-retention.md) §5.2）。
 **理由**：同一会话连续请求共享极长公共前缀（system + 历史），naive 存全量是 O(N²)。delta 链 + 字典预计在"每轮存全量"基础上再降 10–50×（量级估计，需实测）。
 
 ### 7.6 搜索后端：searxng 优先
@@ -476,7 +492,7 @@ OpenRouter 的 `GET /api/v1/models` 返回模型元数据 + 定价 + per-model r
 | Q2 | OpenAI Responses 的 `reasoning` item 多轮回传规则（`store:false`/ZDR 下是否仍必须回传） | chat 多轮保真 | 10-canonical-schema.md |
 | Q3 | Gemini `functionCall` 旧版是否仍无 id；`functionResponse` 匹配机制 | 工具循环 | 40-provider-adaptors.md |
 | Q4 | TTS/ASR/Image 各家 usage 原始字段（按字符/秒/张/token 的口径） | 多单位归一 | 15-modalities.md §10 |
-| Q5 | zstd 共享字典在真实 trace 上的压缩率与训练耗时 | 存储设计 | 65-storage-and-retention.md |
+| Q5 | zstd 全局字典在真实 trace 上的压缩率与离线训练耗时 | 存储设计 | 65-storage-and-retention.md §5.2 |
 | Q6 | Argon2id 在目标硬件的实测耗时（决定启动解锁延迟） | 密钥档位选择 | 65-storage-and-retention.md §3.2 |
 | Q7 | billion-context 的 `acp-kernel` npm 版（0.0.101）与 vendored 版（0.0.197）API 差异 | 插件实现 | 30-plugin-api.md §6 |
 | Q8 | `additionalProperties: false` 是否会因 provider 加字段而频繁报错 | schema 严格度 | 10-canonical-schema.md |
@@ -497,4 +513,4 @@ OpenRouter 的 `GET /api/v1/models` 返回模型元数据 + 定价 + per-model r
 2. **§7.4 双层加密中"整库 + 列级"的分工**——影响备份/迁移/查询能力；已按决策 S1 统一，若要改回"只做应用层"必须同时改 65 S1、sources.md §4 与 70 Phase 4。
 3. **[25-streaming.md](./25-streaming.md) §1 的兼容性矩阵**——"桥接不了就拒绝"的取舍是否过严。
 
-次优先：fast path 与插件需求的冲突消解（[20-pipeline.md](./20-pipeline.md) §4.1）、多单位 usage 的计费复杂度（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §4）。
+次优先：fast path 与插件需求的冲突消解（[20-pipeline.md](./20-pipeline.md) §4.1/§4.2——S1 信封级惰性解析 + 插件 manifest `scope` 准入）、多单位 usage 的计费复杂度（[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md) §4）。
