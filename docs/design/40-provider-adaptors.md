@@ -56,9 +56,10 @@ interface Adaptor {
   readonly format: FormatId;
   readonly modalities: ModalityKind[];
 
-  /** 请求：wire → canonical */
+  /** 请求：wire → canonical。v1 **一律物化完整 canonical**（字节级 fast path 已废弃，
+   *  D-fastpath-1 作废，见 [20-pipeline.md](./20-pipeline.md) §4）。 */
   decode(raw: unknown, ctx: RequestContext): CanonicalRequestEnvelope;
-  /** 请求：canonical → wire（含 fast path 判定） */
+  /** 请求：canonical → wire */
   encode(req: CanonicalRequestEnvelope, ctx: RequestContext): EncodedRequest;
   /** 响应：wire → canonical */
   decodeResponse(raw: unknown, ctx: RequestContext): CanonicalResponseEnvelope;
@@ -78,9 +79,9 @@ interface Adaptor {
 
 interface EncodedRequest {
   body: unknown;
-  /** fast path 时的原始字节（不经过 encode） */
+  /** 【已废弃】原 fast path 下的原始字节（不经过 encode）。v1 一律 encode，不使用 */
   raw_bytes?: Buffer;
-  fast_path: boolean;
+  /** 【已废弃】原 fast path 标记。v1 恒 false */
   /** 本次编码丢弃/降级了哪些能力 */
   dropped?: string[];
   warnings?: string[];
@@ -92,7 +93,7 @@ interface EncodedRequest {
 | 方法 | v1 必做 | 说明 |
 |---|---|---|
 | `decode` | ✅ | 入站解析，必须无损进 `raw.unmapped` |
-| `encode` | ✅ | 出站编码，必须支持 fast path 短路 |
+| `encode` | ✅ | 出站编码；同格式也一律重新编码（字节级 fast path 已废弃） |
 | `decodeResponse` | ✅ | |
 | `encodeResponse` | ✅ | |
 | `decodeStream` | ✅ | 至少支持该模态声明的一种流式形态 |
@@ -137,7 +138,7 @@ interface AdaptorMeta {
 1. **抓样本**：用真实请求/响应各 3–5 份（流式 + 非流式，最小 + 最大，含工具调用，含多模态），存进 `fixtures/<format>/`。**没有样本不动手**——凭文档猜字段必然错。
 2. **列字段清单**：把 wire 格式的请求/响应字段全列出来，逐个标三类之一：
    - `core`：canonical 有对应字段 → 进映射表；
-   - `native`：canonical 的 `native.<format>.*` 命名空间 → 进透传表；
+   - `native`：canonical 的 `native.<format>.*` 命名空间 → 进方言映射表；
    - `unmapped`：完全不建模 → 必须进 `raw.unmapped`。
    **不允许出现第四类"忘了处理"。**
 3. **写请求映射表**：canonical → wire，一列一个字段（参照 [10-canonical-schema.md](./10-canonical-schema.md) §9 的格式）。每个单元格要么给目标字段名，要么给 `drop+warn` / `error`。
@@ -159,7 +160,7 @@ Responses   → OpenAIResponses(直连) | OpenAICompletions | BedrockConverse
 - **更便宜/更原生的转换排前面**（直连优先，其次差异小的）；
 - **把不支持的组合写成显式注释**（`Missing: Responses → Messages`），让缺口可见，而不是留空让人以为忘了写；
 - 顺序是**配置项**，可按部署调整（例如某 provider 的 Responses 支持有 bug，就把它排后）；
-- 直连（同格式）一定排第一——这就是 fast path 的查表依据。
+- 直连（同格式）一定排第一——这是有序偏好表的排序依据（与已废弃的 fast path 查表无关，见 [20-pipeline.md](./20-pipeline.md) §4）。
 
 **第 4 步的补充：token 双轨命名。** 归一化后的字段叫 `input_tokens` / `total_tokens`（跨 provider 同义，用于计费与看板）；provider 原样字段进 `usage_raw`（用于对账）。**显式警告：两者不要相加。** agentgateway 用 `llm.inputTokens` / `llm.providerInputTokens` 表达同一区分，且明确警告"不要把 cache 字段加到 inputTokens，会双算"（[agentgateway metrics reference](https://agentgateway.dev/docs/standalone/latest/documentation/observability/metrics/reference)）。
 
@@ -179,8 +180,9 @@ Responses   → OpenAIResponses(直连) | OpenAICompletions | BedrockConverse
  *
  * 三个断言：
  *   A. decode(encode(decode(wire))) === decode(wire)      // 语义幂等
- *   B. same-format fast path: encode(decode(wire)) === wire（除归一化字段外字节级相等）
- *      —— "归一化字段"白名单：finish_reason、tool id、usage 口径
+ *   B. same-format 保真: encode(decode(wire)) === wire（除归一化字段外字节级相等）
+ *      —— "归一化字段"白名单：finish_reason、tool id、usage 口径。
+ *      v1 同格式请求也一律完整走 canonical，因此这条断言对每个同格式 adaptor 都是硬门槛
  *   C. reconstructionQuality(canonical, format) >= 阈值（同格式 100，跨格式 >= 80）
  */
 describe.each(fixtures)("adaptor %s round-trip", (name, wire) => {
@@ -190,10 +192,9 @@ describe.each(fixtures)("adaptor %s round-trip", (name, wire) => {
     expect(c2).toEqual(c1);
   });
 
-  it("fast path 字节级透传", () => {
+  it("same-format 字节级保真", () => {
     const encoded = adaptor.encode(adaptor.decode(wire, ctx), ctx);
-    expect(encoded.fast_path).toBe(true);
-    expect(normalizableDiff(encoded.raw_bytes, wire)).toBeEmpty();
+    expect(normalizableDiff(encoded.body, wire)).toBeEmpty();
   });
 
   it("未知字段不丢", () => {
@@ -250,7 +251,7 @@ describe.each(coverageSurveyFeatures)("canonical 容纳特性 %s", (feature) => 
 - [ ] 响应映射表已写，usage 与 finish_reason 单独成表
 - [ ] 流式折叠表已写
 - [ ] §1.5 的 6 条 round-trip 测试全绿
-- [ ] fast path 字节级透传测试通过（若是同格式 adaptor）
+- [ ] same-format 字节级保真测试通过（encode(decode(wire)) 与 wire 只差归一化字段白名单）
 - [ ] 能力矩阵已登记，`status: "implemented"`，`contract_tested: true`
 - [ ] `quirks[]` 已填写人类可读的已知怪癖
 - [ ] [10-canonical-schema.md](./10-canonical-schema.md) §9 的映射表已补一行（或一个子表）
@@ -331,8 +332,8 @@ describe.each(coverageSurveyFeatures)("canonical 容纳特性 %s", (feature) => 
 |---|---|---|
 | **I1** | `prompt_tokens` 是否含 cached / cache_write | **Anthropic / Gemini / Bedrock：`input_tokens` 两者都不含**，需 `input + cache_creation + cache_read` 才等于总输入（Anthropic 官方口径即此）；**OpenAI：读 LiteLLM 源码的结论是"含 `cached_tokens`、不含 cache_write"，但 OpenAI 官方文档未明说——标 `[待验证]`，见 Q1** |
 | **I2** | `completion_tokens` 是否含 reasoning | **OpenAI：含**（`completion_tokens_details.reasoning_tokens` 是其子集）；**Anthropic：含**（`thinking_tokens` 计入 `output_tokens`）；**Gemini：视模型而定**，用 `promptTokenCount + candidatesTokenCount + toolUsePromptTokenCount == totalTokenCount` 反推 `candidatesTokenCount` 是否已含 thinking（LiteLLM 的 `is_candidate_token_count_inclusive` 做法），否则把 `thoughtsTokenCount` 加上去 |
-| **I3** | `total_tokens` 是透传还是重算 | **流式一律重算**（`prompt + completion`），因为上游的 `total` 在分片到达时可能不完整；**非流式透传**上游值，但与 `prompt+completion` 不一致时记 `warnings` |
-| **I4** | 原始 usage 全量存档 | `usage_raw` 必须**逐字段**保留，且**必须在流式聚合后依然存在**。LiteLLM 的教训：`Usage.__init__` 的 `setattr` 会把未知 provider 字段挂成 extra，但流式聚合 `calculate_total_usage` 只重建声明字段，**extras 会丢**（源码注释自承）。我们的对策：`usage_raw` 在 S6 抽取时就是**独立对象**，不依赖任何"extra 透传"机制，流式聚合只动 `units`，绝不动 `usage_raw` |
+| **I3** | `total_tokens` 是原样带回还是重算 | **流式一律重算**（`prompt + completion`），因为上游的 `total` 在分片到达时可能不完整；**非流式取上游原值**，但与 `prompt+completion` 不一致时记 `warnings` |
+| **I4** | 原始 usage 全量存档 | `usage_raw` 必须**逐字段**保留，且**必须在流式聚合后依然存在**。LiteLLM 的教训：`Usage.__init__` 的 `setattr` 会把未知 provider 字段挂成 extra，但流式聚合 `calculate_total_usage` 只重建声明字段，**extras 会丢**（源码注释自承）。我们的对策：`usage_raw` 在 S6 抽取时就是**独立对象**，不依赖任何"extra 原样带回"机制，流式聚合只动 `units`，绝不动 `usage_raw` |
 
 **Gemini 的 grounding 特例**：检索到的 token 不计 input，但 URL context / File Search 按 input 计费（LiteLLM 用 `_response_has_search_grounding` 区分）。`toolUsePromptTokenCount` 同理——有 search grounding 时 `billable_tool_use_prompt_tokens = 0`。这直接影响 [50-builtin-search.md](./50-builtin-search.md) §5 的搜索计费口径，标 **`[待验证]`**。
 

@@ -10,7 +10,7 @@
 理由：
 
 1. 四种格式里"搜索"的出现形态并不统一——OpenAI Responses 和 Anthropic 把它放在 `tools[]` 里作为 server tool，Gemini 放在 `tools[]` 的 `googleSearch`，OpenAI Chat Completions **根本没有原生搜索**（只有 `web_search_options` 之类的实验面，且不同版本行为不一，**待验证**）。如果建模成顶层开关，canonical 就必然丢失"它是工具、可被 `tool_choice` 约束、可并发调用"这些语义。
-2. 建模成 tool 之后，"上游支持就透传、不支持就网关自己执行"这条分支可以用同一套代码路径表达，只是执行者不同。
+2. 建模成 tool 之后，"上游支持就走**语义透传 + 方言映射**、不支持就网关自己执行"这条分支可以用同一套代码路径表达，只是执行者不同。
 3. 网关自执行时，搜索结果天然走 `tool_result` part 回流，能进入 canonical → 计费 → trace → dog-fooding 数据面，不需要额外管道。
 
 ## 2. Canonical 建模
@@ -93,19 +93,26 @@ interface SearchResultPart {
 
 ## 3. 两种实现模式
 
-### 3.1 模式 A：上游原生执行（透传 / 映射）
+### 3.1 模式 A：上游原生执行（语义透传 + 方言映射）
 
 判定：`route.provider_format` 的能力表里声明 `native_web_search: true`。
 
+**"透传"在这里的含义是「语义不变地完成一次格式转换」，不是零 mapping、不是原样转发字节**：
+目标格式既可以是标准 OpenAI 形态（如 `{"type": "web_search"}`），也可以是上游方言（如 DeepSeek 的
+`deepseek_web_search` 参数）；无论哪种都过 codec/mapping、都有 round-trip 测试。
+v1 一律完整走 canonical，**系统内不存在"原样转发字节"的路径**（术语表见 [00-overview.md](./00-overview.md) §5）。
+
 | 客户端格式 → 上游格式 | 动作 |
 |---|---|
-| 同格式（fast path） | **完全透传**，`tools[]` 原样。网关只负责把响应里的 citations / grounding 抽到 canonical 的 `SearchResultPart`（旁路，不改响应体） |
-| Responses → Responses（不同 provider 但同格式） | 透传 tool 定义，仅归一 `name`/版本字段 |
+| 同格式 | **语义透传 + 方言映射**：canonical 的 `BuiltinTool` 映射回该格式的 tool 定义（同格式时多数字段一对一）。响应侧网关把 citations / grounding 抽到 canonical 的 `SearchResultPart`（与响应体一起编码回客户端格式） |
+| Responses → Responses（不同 provider 但同格式） | 语义透传 tool 定义，仅归一 `name`/版本字段（方言映射） |
 | Anthropic → Responses | `{type:"web_search_20250305", name, max_uses, ...}` → `{type:"web_search", ...}`；`max_uses` 无对应 → 记录到 `dropped_capabilities` |
 | Responses → Anthropic | 反向；`user_location`、`search_context_size` 等字段若无对应 → drop + warning |
 | Chat / Gemini → Responses/Anthropic | 需要把客户端声明的普通 function tool 升级成 server tool（见 §3.2） |
 
-**fast path 保证**：客户端格式 == 上游格式时，内置搜索**不破坏 fast path**。搜索由上游执行，网关只做旁路抽取。这是设计上重要的一点——内置搜索功能不能让网关退化成"什么请求都要转一轮"。
+**两条路径对客户端行为一致**：模式 A（上游原生执行）与模式 B（网关自执行）都完整过 canonical 与
+codec/mapping，也都有 round-trip 测试；差别只在**执行者**（上游 vs 网关），不在"是否转换"。
+内置搜索不会让网关退化成"什么请求都要特殊处理"，也不会退化成"原样转发字节"。
 
 ### 3.2 模式 B：网关自执行（无原生支持时）
 

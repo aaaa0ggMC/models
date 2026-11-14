@@ -17,9 +17,9 @@
 
 | 上游形态 ↓ / 客户端要 → | `sse` | `chunked-binary` | `ws-duplex` | `none` |
 |---|---|---|---|---|
-| `sse` | ✅ 过 canonical（默认）或透传 | ⚠️ 桥接：抽文本/事件，二进制需客户端接受 SSE+base64 | ❌ 拒绝 | ✅ 缓冲聚合后一次性返回 |
-| `chunked-binary` | ⚠️ 桥接：包成 SSE 帧（base64） | ✅ 透传（推荐） | ❌ 拒绝 | ✅ 缓冲拼整 |
-| `ws-duplex` | ⚠️ 仅"半双工拉模式"可桥接（见 §4） | ❌ 拒绝 | ✅ 透传（推荐） | ⚠️ 需建 WS→拉模式的适配 |
+| `sse` | ✅ 过 canonical（唯一路径） | ⚠️ 桥接：抽文本/事件，二进制需客户端接受 SSE+base64 | ❌ 拒绝 | ✅ 缓冲聚合后一次性返回 |
+| `chunked-binary` | ⚠️ 桥接：包成 SSE 帧（base64） | ✅ 字节级中继（推荐） | ❌ 拒绝 | ✅ 缓冲拼整 |
+| `ws-duplex` | ⚠️ 仅"半双工拉模式"可桥接（见 §4） | ❌ 拒绝 | ✅ 字节级中继（推荐） | ⚠️ 需建 WS→拉模式的适配 |
 | `none` | ❌ 拒绝 | ❌ 拒绝 | ❌ 拒绝 | ✅ |
 
 ✅ = 无损兼容；⚠️ = 可做但有代价（延迟/格式/语义折损），需在响应里明示降级；❌ = 明确拒绝（`streaming_mode_unsupported`），**不静默降级**——静默降级会让客户端以为在流式，实际在等全量，是排障噩梦。
@@ -61,7 +61,7 @@ interface StartData {
   /** 会话/轮次标识；ASR 下为 utterance_id 的容器 */
   session_id?: string;
   model: string;
-  /** 客户端格式 + 上游格式（透传模式下仍记录） */
+  /** 客户端格式 + 上游格式（字节级中继模式下仍记录） */
   client_format: FormatId;
   provider_format: FormatId;
   /** 声明的模态能力子集 */
@@ -111,7 +111,7 @@ event: ag.frame
 data: {"event":"delta","seq":1,"kind":"tts","data":{"audio":{"encoding":"base64","mime":"audio/mpeg","data":"...","byte_length":4096,"chunk_index":0}}}
 ```
 
-同时保留**厂商原生事件名透传**的选项（`stream.native_event_names: true`），用于兼容严格按 OpenAI 事件名解析的客户端；此模式下网关仍发统一帧体，只改 `event:` 行。
+同时保留**厂商原生事件名**的选项（`stream.native_event_names: true`），用于兼容严格按 OpenAI 事件名解析的客户端；此模式下网关仍发统一帧体，只改 `event:` 行。
 
 二进制优先的客户端（TTS）可用 `Accept: application/octet-stream` 走 §3.2 的裸字节模式，跳过 SSE 信封。
 
@@ -121,7 +121,6 @@ data: {"event":"delta","seq":1,"kind":"tts","data":{"audio":{"encoding":"base64"
 
 - 直接解析 `event:` / `data:`，按 [20-pipeline.md](./20-pipeline.md) §S6 的表折叠成 `StreamFrame`。
 - 上游多行 `data:` 需按 SSE 规范拼接；上游若用 `data: [DONE]` 哨兵，映射为 `end` 帧。
-- **透传模式**：原样转发字节，旁路只做帧计数与 usage 嗅探（见 §7）。
 
 ### 3.2 形态 B：裸 chunked 字节流（TTS 直接吐 mp3/opus）
 
@@ -145,7 +144,7 @@ data: {"event":"delta","seq":1,"kind":"tts","data":{"audio":{"encoding":"base64"
 
 - **不解码音频**。网关不解码 mp3/opus 帧，只按传输层 chunk 边界切分，避免引入解码延迟与 CPU 成本。
 - **格式元数据只在 `start` 帧声明一次**（mime、sample_rate、bit_depth、channels、codec）。流中**假设不变**；若上游中途变了（罕见），网关无法从裸字节察觉 → 这是形态 B 的已知盲区，记录为 ⚠️，对策是配置里显式声明 `stream.audio_format` 并在 provider 侧固定。
-- 客户端 `Accept: application/octet-stream` 时，直接转发 chunk，**不包装**（零开销），仅旁路计量。
+- 客户端 `Accept: application/octet-stream` 时，直接转发 chunk，**不包装**（零开销），仅旁路计量（音频二进制的传输层中继，不是格式转换路径）。
 
 ### 3.3 形态 C：WebSocket 双向流（实时 ASR）
 
@@ -153,17 +152,17 @@ Deepgram / AssemblyAI 的实时 ASR 是 WS：客户端边说边上传音频，�
 
 设计成**双路径**：
 
-#### 路径 1：透传代理（默认，推荐）
+#### 路径 1：字节级中继代理（默认，推荐）
 
 ```text
 客户端 WS ◀══════ 网关 WS 代理 ══════▶ 上游 WS
              （只做：鉴权、限流、计量、观测、审计）
 ```
 
-- 网关是纯字节/消息中继，**不过 canonical**；
+- 网关是纯字节/消息中继，**不过 canonical**（这是全双工 WS 音频的传输层中继，不是格式转换路径；chat 等请求/响应模态没有这条路径）；
 - 计量：按"连接时长 + 上行音频字节数 + 下行消息数"计，不解析内容（除非 `debug_mode`）；
 - 优点：零语义损失、最低延迟、上游任何协议细节都天然兼容；
-- 缺点：插件完全无法介入（`onStreamChunk` 在透传模式下**不触发**，这是显式设计，不是遗漏）。
+- 缺点：插件完全无法介入（`onStreamChunk` 在中继模式下**不触发**，这是显式设计，不是遗漏）。
 
 #### 路径 2：转换模式（插件需要介入时）
 
@@ -186,7 +185,7 @@ Deepgram / AssemblyAI 的实时 ASR 是 WS：客户端边说边上传音频，�
 
 | 场景 | 路径 |
 |---|---|
-| 无 ASR 相关插件 | 透传 |
+| 无 ASR 相关插件 | 字节级中继 |
 | 有脱敏/关键词类 ASR 插件 | 转换 |
 | 客户端只会 SSE，不会 WS | 拒绝（`streaming_mode_unsupported`），提示用一次性 ASR 端点 |
 | 需要"网关同时驱动上游 + 面向客户端" | 转换 |
@@ -198,11 +197,11 @@ Deepgram / AssemblyAI 的实时 ASR 是 WS：客户端边说边上传音频，�
 | chat | 半双工（请求→响应） | canonical |
 | tts | 半双工 | canonical（或 octet-stream 直通） |
 | asr（一次性） | 半双工 | canonical |
-| asr（实时） | **全双工** | 透传（可切转换） |
+| asr（实时） | **全双工** | 字节级中继（可切转换） |
 | image | 半双工（progress 流） | canonical |
 | embedding / rerank / moderation | 半双工 | canonical |
 
-**"实时 ASR 走透传"不违反"插件只面对 canonical"的原则**：那是**模态级**的显式声明，即"这个模态的这个形态我不做结构转换，只做计量"。这与 chat 的"同格式 fast path 透传"是同一思想的推广——**能不过 canonical 就不过，但计量永远在**。
+**"实时 ASR 走字节级中继"不违反"插件只面对 canonical"的原则**：那是**模态级**的显式声明，即"这个模态的这个形态我不做结构转换，只做计量"。这与 chat 的"一律过 canonical"是不同层次的取舍：chat 的请求/响应是**结构化的格式互转**，v1 一律完整走 canonical（见 [20-pipeline.md](./20-pipeline.md) §4）；实时 ASR 的 WS 是**二进制音频的传输层中继**，不存在"格式转换"可做。共同点是**计量永远在**。
 
 ## 5. ASR 中间态语义（可改写，非 append-only）
 
@@ -316,7 +315,7 @@ interface StreamChunkBuffer {
 1. **上游 usage 优先**；缺失或为 0 时用自估算，并置 `usage_source: "estimated"`。
 2. 两路都有且差异 > 20% → `usage_mismatch` warning，**两路都存**（`usage` 与 `usage_estimated`），供后续校准，不静默选一个。
 3. TTS 按 `audio_seconds` 计费时，客户端中途断开 → 只计**实际下发**的音频秒数（网关有精确下发计数，不需要上游配合）。
-4. ASR 按音频时长计费时，用**上行音频**的时长；透传模式下网关按"WS 连接时长 + 上行消息数"估算，标注 `usage_source: "estimated"` + `precision: "low"`。
+4. ASR 按音频时长计费时，用**上行音频**的时长；字节级中继模式下网关按"WS 连接时长 + 上行消息数"估算，标注 `usage_source: "estimated"` + `precision: "low"`。
 5. 流式 usage 帧可能多次到达（如 OpenAI 的 `usage` 只在末 chunk、Gemini 每 chunk 都带）→ **取最后一次非空**，中间值只用于进度展示。
 
 ### 8.4 多单位 usage 结构
@@ -341,6 +340,6 @@ usage 不是单一的 token 数，见 [10-canonical-schema.md](./10-canonical-sc
 
 1. ElevenLabs / MiniMax / OpenAI TTS 的流式到底是 chunked 二进制还是 SSE 信封（决定 §3.2 是否需要 sniff）。
 2. Gemini TTS（若存在）的流式形态。
-3. Deepgram/AssemblyAI 实时端点是否支持"服务端主动结束"语义（影响透传模式下的 `end` 帧生成）。
+3. Deepgram/AssemblyAI 实时端点是否支持"服务端主动结束"语义（影响中继模式下的 `end` 帧生成）。
 4. 上游 WS 断开时，客户端 WS 应收到 `error` 帧还是干净的 `end` 帧（需按上游错误码分类）。
 5. 音频分片在 SSE + base64 下的带宽膨胀（33%）对首包延迟的实际影响，决定是否默认走 octet-stream。

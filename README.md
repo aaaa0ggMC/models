@@ -40,8 +40,9 @@
 不直接拿某个厂商的格式当超集（厂商格式各有私有字段与语义，做超集会漏水）。
 
 - 保留 raw passthrough 字段，保证**无损可逆**：转过去再转回来，语义不丢。
-- **fast path**：当客户端格式 == 上游 provider 格式时，跳过完整互转，
-  只做轻量标准化（usage 字段归一、finish_reason 归一、tool_call id 归一）。
+- **一律走 canonical（always-canonical）**：v1 每个请求都完整 decode → canonical →
+  encode，再完整转回来，**不做字节级 fast path**；usage / finish_reason / tool_call id
+  的归一是每次请求的必经步骤。字节级 fast path 为未来可选优化，须实测数据支撑才加回。
 - canonical 是插件、内置工具、统计计费唯一看到的数据形态。
 
 ### 3. 插件系统
@@ -56,7 +57,8 @@
 
 在 canonical 里，搜索被建模为一个 **built-in tool**（`web_search`）：
 
-- 上游 provider **原生支持** → 透传，由 provider 执行；
+- 上游 provider **原生支持** → **语义透传 + 方言映射**（如 `web_search` ↔
+  `deepseek_web_search`），由 provider 执行；
 - 上游**不支持** → 网关自己实现搜索结果，并以 tool 结果的形式注入对话。
 
 对客户端而言，两种路径的可见行为一致。
@@ -102,7 +104,7 @@ models/
 ├── ir/                    # AG-IR canonical：类型定义 + JSON Schema + round-trip 校验
 │                            （= 00 §4.2 的 `ir` 模块；原 README 写的 src/canonical/、70 写的 schema/ 已统一）
 ├── gateway-core/          # PipelineRunner、11 个阶段（S0–S10）、RequestContext、错误模型
-├── adaptors/              # 客户端格式 ↔ 上游 provider 格式互转（含 fast path）
+├── adaptors/              # 客户端格式 ↔ 上游 provider 格式互转（一律过 canonical）
 ├── pipeline/              # 阶段编排（并入 gateway-core；保留目录仅为可读性）
 ├── plugins/               # 插件系统：5 个 generic hook + adaptor 接入外部能力
 ├── streaming/             # 统一流式帧信封、三种上游形态桥接、WS 双路径
@@ -133,10 +135,10 @@ models/
 - [x] 仓库与协作约定就绪
 - [x] `docs/design/` 详细设计成稿（v1.0-draft，**待 review**）
 - [ ] review 意见逐条处置（GitHub Issues #1–#8）
-- [ ] canonical schema 与往返互转（含 fast path）
+- [ ] canonical schema 与往返互转（一律过 canonical，无字节级 fast path）
 - [ ] Pipeline 骨架与 SSE / 工具调用循环
 - [ ] 插件系统 + billion-context 请求侧压缩
-- [ ] 内置 `web_search`（透传 + 网关自实现两条路径）
+- [ ] 内置 `web_search`（语义透传 + 方言映射 / 网关自实现两条路径）
 - [ ] 异步用量统计/计费管道 + agent 查询接口
 - [ ] WebUI 接入
 

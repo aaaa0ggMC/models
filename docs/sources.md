@@ -47,6 +47,22 @@
 4. `googleSearchRetrieval` 是否已正式废弃。
 5. 模型 ID 清单随时间变动，网关应动态拉取而非硬编码。
 
+### 1.4 DeepSeek 峰谷计费与价格表依据
+
+**状态：已核实（官方价格页经三家媒体转述，2026-11 核查）。** 这是 [60-billing-and-dogfooding.md](./design/60-billing-and-dogfooding.md) §4.2 价格表三层结构（规则集 × 费率 × 节假日日历）的直接依据。
+
+| 主题 | 结论 |
+|---|---|
+| 峰谷体系生效 | **2026-08-17 00:00（Asia/Shanghai）**，高峰价为低谷 **2 倍** |
+| 高峰窗口 | **工作日 09:00–12:00、14:00–18:00**（北京时间）；其余时段低谷 |
+| 周末规则 | **2026-08-23 00:00 起**周六/周日**全天统一低谷**（此前周末按工作日规则）；空闲时段另含**法定节假日** |
+| 历史结算 | 官方明确"新规则生效前产生的费用仍按原标准结算"——**供应商自身都不重算历史**，是"快照固化、历史不重算"原则的外部佐证 |
+| 官方 API | **没有官方 API 提供峰谷规则或实时价格**，价格只公布在官方价格页；上游响应**不返回命中档位**，档位须由网关按请求时间戳自行解析。**已核实：同一个 API key 即可查询余额**——余额即计费真值，用于区间级对账（赠送余额优先扣，余额差 ≠ 现金支出） |
+
+**来源**：[新浪财经](https://finance.sina.com.cn/tech/digi/2026-08-17/doc-ininqpev7133165.shtml)、[TradingView / PANews](https://es.tradingview.com/news/panews:5758a6926acdf:0)、[知乎专栏](https://zhuanlan.zhihu.com/p/2075260274609803574)。
+
+**待验证**：① 法定节假日的**逐日清单与调休上班日**（按年维护进节假日日历，缺失日期按工作日保守处理并标 `holiday_unknown`，**不用算法推算**）；② 高峰期是否另有并发/速率限制差异；③ 余额查询能否区分"赠送余额"与"现金余额"的扣减顺序（影响对账灵敏度）。
+
 ---
 
 ## 2. 竞品与参考实现
@@ -399,9 +415,11 @@
 3. LibreChat 的 `endpoints.custom[]` 支持任意 OpenAI 兼容网关，且 `headers` 支持 `{{LIBRECHAT_USER_ID}}` / `{{LIBRECHAT_USER_EMAIL}}` / `{{LIBRECHAT_BODY_CONVERSATIONID}}` 占位符——**可让网关按 LibreChat 用户维度记账**。Admin Panel 提供 `/api/admin/*` 配置 API（secret 字段加密存储并只回掩码预览）。
 4. LibreChat 2025-11 被 ClickHouse 收购，仍保持 MIT 开源。<https://www.librechat.ai/about>
 5. **代价**：Node/React + **MongoDB 必选**、Meilisearch 可选；版本迭代极快（0.8.x）；Admin Panel 是独立服务。
-6. ⚠️ **待验证**：LibreChat transaction schema 是否含 reasoning tokens 与 cache token 的**实际计量值**（读 `packages/api/src/models/`）；MongoDB SSPL 合规结论。
-7. agentgateway UI 的 **Analytics 是最值得抄的部分**：按 model/provider/user/group/user-agent 分组，measure 切 tokens/cost/requests，cache hit%，且 release notes 显示 "price 1h cache writes separately from 5m"、"Support openai 12h cache prompt"、"add prices for anthropic 1h cache"——**确实把 5m/1h cache write 分开计价**。<https://agentgateway.dev/docs/standalone/latest/documentation/llm/cost-controls/dashboard>
-8. agentgateway 存储：SQLite（默认）或 PostgreSQL，表 `request_logs` / `request_log_payloads` / `budget_usage` / `agw_config_resources`；API `POST /api/logs/search`、`/api/config/effective`。<https://agentgateway.dev/docs/standalone/latest/documentation/setup/database>
+   **MongoDB 的部署定位（00 §7.3 定稿）**：跑独立服务/容器，**网关核心（SQLite 单文件）不依赖它**——WebUI 未部署或挂掉时，网关数据面、计费管道、dog-fooding 接口照常工作；两边不共享数据库文件与连接，只经网关 REST 交互。**Meilisearch 列为可选**（LibreChat 的 RAG 检索后端，strip RAG 后默认不需要）。
+6. **MongoDB SSPL 合规立场（00 §7.3 定稿）**：SSPL 只约束"把 MongoDB 本身作为服务对外提供"；本项目是**私人自托管、自用**，不对外提供 MongoDB 服务，**可接受**。**Revisit 触发条件**（满足任一条即重新评估）：① 仓库将来公开/开源；② 把 WebUI 或网关作为托管服务对多人开放；③ LibreChat 上游要求引入 MongoDB 之外的 SSPL 组件，或其 license 从 MIT 变更。
+7. ⚠️ **待验证**：LibreChat transaction schema 是否含 reasoning tokens 与 cache token 的**实际计量值**（读 `packages/api/src/models/`）。
+8. agentgateway UI 的 **Analytics 是最值得抄的部分**：按 model/provider/user/group/user-agent 分组，measure 切 tokens/cost/requests，cache hit%，且 release notes 显示 "price 1h cache writes separately from 5m"、"Support openai 12h cache prompt"、"add prices for anthropic 1h cache"——**确实把 5m/1h cache write 分开计价**。<https://agentgateway.dev/docs/standalone/latest/documentation/llm/cost-controls/dashboard>
+9. agentgateway 存储：SQLite（默认）或 PostgreSQL，表 `request_logs` / `request_log_payloads` / `budget_usage` / `agw_config_resources`；API `POST /api/logs/search`、`/api/config/effective`。<https://agentgateway.dev/docs/standalone/latest/documentation/setup/database>
 
 **→ 结论与裁剪清单**：见 [00-overview.md](./design/00-overview.md) §7.3 与本节。fork LibreChat，strip ChatGPT 克隆相关部分（Artifacts/Code Interpreter/DALL-E/语音/i18n/RAG），新增 `/gateway`、`/usage`、`/plugins` 三个路由打我们自己的 REST。
 
@@ -411,7 +429,7 @@
 
 **状态：已确认（官方文档 + 本机实测）。**
 
-**结论**：**SQLite + `better-sqlite3-multiple-ciphers`（整库加密，`PRAGMA cipher='chacha20'` sqleet/AEAD 为默认）+ payload 列应用层 AES-256-GCM（AAD 绑定 `request_id` + schema 版本）+ Argon2id 派生 KEK + systemd `LoadCredentialEncrypted=` 无人值守解锁 + Node 内置 zstd + 训练字典。**
+**结论**：**SQLite + `better-sqlite3-multiple-ciphers`（整库加密，`PRAGMA cipher='chacha20'` sqleet/AEAD 为默认）+ payload 列应用层 XChaCha20-Poly1305（192-bit 随机 nonce，不做计数器持久化；DEK 随机生成后用 KEK 包裹，**不用 HKDF 派生**；AAD 绑定 `request_id + ir_version`）+ Argon2id 派生 KEK + systemd `LoadCredentialEncrypted=` 无人值守解锁 + Node 内置 zstd + 全局训练字典（可选按客户端类型变体，带版本号、入库加密；per-session 字典已取消）。**
 
 | 方案 | 结论 |
 |---|---|
@@ -545,11 +563,13 @@ OpenRouter 侧（上游归一化样板）：<https://openrouter.ai/docs/api/api-
 | 项目 | License | 商用 | 注意 |
 |---|---|---|---|
 | LibreChat | MIT | ✅ | 保留版权声明即可；可 rebrand |
+| MongoDB | SSPL | ✅（私人自托管自用） | 只约束"把 MongoDB 本身作为服务对外提供"；本项目自用可接受。**Revisit 触发条件**：仓库公开/开源、把 WebUI 或网关作为托管服务对多人开放、上游要求引入其他 SSPL 组件或其 license 变更（见 00 §7.3） |
 | llm-bridge | MIT | ✅ | 零依赖，可放心 fork/vendor |
 | llmshim | Apache-2.0 OR MIT | ✅ | 双授权，任选 |
 | Vercel AI SDK | Apache-2.0 | ✅ | 保留 NOTICE |
 | one-api | MIT | ✅ | 上游停更 |
 | NewAPI | **AGPL-3.0** | ⚠️ | 强 copyleft，深度定制+SaaS 化前必须想清楚 |
+| relaykit（NewAPI 仓库内的独立 Go module） | **AGPL-3.0 + Section 7** | ❌ | **明确不采用**（review #8.4 定稿）：与"因 AGPL 拒绝 NewAPI"的首要理由自相矛盾。借鉴方式限"读设计、不引代码"；确需其代码须以独立进程/服务边界隔离并先做许可证评估 |
 | agentgateway | Apache-2.0 | ✅ | |
 | **billion-context / acp-kernel** | **MIT + 强制署名条款** | ✅ | **必须在首页/文档/About-Credits 之一标注使用了 acp-kernel 并附仓库链接** |
 | Open WebUI | BSD-3 + 品牌条款 | ⚠️ | 不可去品牌/co-branding；>50 用户/30 天需企业授权；**非 OSI 认证** |
@@ -568,7 +588,7 @@ OpenRouter 侧（上游归一化样板）：<https://openrouter.ai/docs/api/api-
 | 1 | OpenAI `prompt_tokens` 是否已含 `cached_tokens`（Gemini 已确认含、Anthropic 已确认不含） | 计费双算/少算 | 40-provider-adaptors.md §2.2 |
 | 2 | LibreChat transaction schema 是否含 reasoning / cache 实际计量值 | WebUI 改造量 | 00-overview.md §7.3 |
 | 3 | NewAPI 两个 org（`QuantumNous` vs `Calcium-Ion`）哪个是主仓库、star 是否重复计数 | 对比表准确性 | 00-overview.md §1.3 |
-| 4 | zstd 共享字典在真实 trace 上的压缩率与训练耗时 | 存储设计 | 65-storage-and-retention.md §5.3 |
+| 4 | zstd 全局字典在真实 trace 上的压缩率与离线训练耗时（per-session 字典已取消） | 存储设计 | 65-storage-and-retention.md §5.2 |
 | 5 | Argon2id 在目标硬件实测耗时（决定启动解锁延迟） | 密钥档位 | 65-storage-and-retention.md §3.2 |
 | 6 | `acp-kernel` npm 版（0.0.101）与 vendored 版（0.0.197）API 差异 | 插件实现 | 30-plugin-api.md §6 |
 | 7 | Gemini 旧版 API 的 `functionCall` 是否仍无 `id` | 工具循环 | 10-canonical-schema.md §10 |
@@ -578,7 +598,7 @@ OpenRouter 侧（上游归一化样板）：<https://openrouter.ai/docs/api/api-
 | 11 | `googleSearchRetrieval` 是否已正式废弃 | built-in search | 50-builtin-search.md §6 |
 | 12 | TTS/ASR/Image 各家 usage 原始字段与流式形态 | 多单位归一 | 15-modalities.md §9 |
 | 13 | chinrain/Api-Conversion 与 1rgs/claude-code-proxy 的 license | 合规 | 本节 **§6**（License 汇总；原写 §5 是 decision 调研节，已改） |
-| 14 | MongoDB SSPL 合规结论（LibreChat 依赖） | 合规 | 本节 §3 |
+| 14 | MongoDB SSPL 合规结论（LibreChat 依赖）——**已定稿**：私人自托管自用可接受，revisit 触发条件见 00 §7.3 | 合规 | 本节 §3 |
 | 15 | 本机无 TPM；若部署机有 TPM，`tpm2-pkcs11` 封存 KEK 的可行性 | 密钥档位 | 65-storage-and-retention.md §8 |
 | 16 | 备份→换机→恢复流程实测（密文 + KDF 参数 + 口令） | 运维 | 65-storage-and-retention.md §8 |
 | 17 | `better-sqlite3-multiple-ciphers` 在 WAL 模式下 `PRAGMA rekey` 的稳定性 | 密钥轮换 | 65-storage-and-retention.md §8 |

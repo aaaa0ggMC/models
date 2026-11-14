@@ -7,7 +7,9 @@
 ## 1. 设计原则
 
 1. **单一事实来源是 canonical（AG-IR）**。所有插件、计费、日志只面对 canonical，不面对任何厂商格式。
-2. **fast path 优先**。能不过 canonical 结构转换就不转；必须转时才付保真度代价。
+2. **一律完整走 canonical（always-canonical）**。v1 不做字节级 fast path：每个请求都完整解码成
+   canonical、完整编码成上游格式，再完整解码回来。理由与换来什么见 §4.1；将来若要加回字节级
+   fast path，必须满足 §4.4 的实测触发条件。
 3. **流式是第一公民**。所有阶段都必须能在"边收边发"模式下工作，不允许出现"等整个响应体结束才开始下一步"的隐藏缓冲（除非显式声明需要聚合的插件）。
 4. **失败可观测**。每个阶段都有明确的错误类型、可重试性标记和 fallback 语义。
 5. **计费旁路**。统计与计费绝不阻塞主链路，失败不影响用户请求。
@@ -25,7 +27,7 @@
                     │                              │                           │
                     │                              ▼                           │
                     │                        S4 Encode ──┐                     │
-                    │                              │     │ fast path          │
+                    │                              │     │ canonical 往返     │
                     │                              ▼     ▼                     │
                     │               ┌──────► S5 Upstream ◄──────┐              │
                     │               │            │              │              │
@@ -48,14 +50,14 @@
 | 阶段 | 输入 → 输出 | 可否流式 | 可否失败重试 | 插件 hook | 说明 |
 |---|---|---|---|---|---|
 | S0 Ingress | HTTP → `RequestContext` | 是 | 是（鉴权/限流拒绝直接返回，不进 S1） | `onError` | 识别客户端格式、鉴权、限流、分配 `request_id`、超时预算 |
-| S1 Decode | 原始 body → `CanonicalRequest` | 否（请求体必须完整） | 否（格式错误 = 400，不可重试） | `onError` | 客户端格式 codec 解码；产物带 `source_format` |
-| S2 Route | `CanonicalRequest` → `ResolvedRoute` | 否 | 是（路由失败 = 无可用 provider） | `onError` | 别名解析、provider 候选列表、健康/熔断过滤、fast path 判定 |
+| S1 Decode | 原始 body → `CanonicalRequest`（完整档，见 §3 S1） | 否（请求体必须完整） | 否（格式错误 = 400，不可重试） | `onError` | 客户端格式 codec 解码；产物带 `source_format`；v1 一律物化完整 canonical，不保留"只解析信封"的字节级快路径 |
+| S2 Route | `CanonicalRequest` → `ResolvedRoute` | 否 | 是（路由失败 = 无可用 provider） | `onError` | 别名解析、provider 候选列表、健康/熔断过滤、候选排序 |
 | S3 onRequest | `CanonicalRequest` → `CanonicalRequest` | 否 | 否（插件短路算成功） | **`onRequest`**、`onError` | 插件链：压缩、注入、改写、短路返回 |
-| S4 Encode | `CanonicalRequest` → 上游 body | 否 | 否 | `onError` | provider codec 编码；fast path 时输出原始字节 |
+| S4 Encode | `CanonicalRequest` → 上游 body | 否 | 否 | `onError` | provider codec 编码；一律由 canonical 重新编码（字节级 fast path 已废弃，见 §4） |
 | S5 Upstream | 上游 body → 上游响应 | **是** | 是 | `onError` | HTTP 调用、重试、fallback、超时、熔断 |
-| S6 ProviderDecode | 上游响应 → `CanonicalResponse` / 事件流 | **是** | 否 | `onError` | provider codec 解码；fast path 时只抽取 usage 信封 |
+| S6 ProviderDecode | 上游响应 → `CanonicalResponse` / 事件流 | **是** | 否 | `onError` | provider codec 解码；一律解析为完整 canonical（含 usage 与 finish_reason 归一） |
 | S7 onStreamChunk | chunk → chunk | **是** | 否 | **`onStreamChunk`**、`onError` | 插件可改写/丢弃/缓冲聚合 |
-| S8 ClientEncode | canonical → 客户端格式字节 | **是** | 否 | `onError` | 客户端格式 codec 编码；fast path 时直通 |
+| S8 ClientEncode | canonical → 客户端格式字节 | **是** | 否 | `onError` | 客户端格式 codec 编码；一律由 canonical 重新编码 |
 | S9 onResponse | `CanonicalResponse` → `CanonicalResponse` | 否（流式时在流结束后） | 否 | **`onResponse`**、`onError` | 后置插件：审计、脱敏、指标 |
 | S10 UsageEmitter | `UsageRecord` → 队列 | 是 | 是（失败只丢统计，不丢响应） | —（旁路，插件不参与） | 异步、批量、可重放 |
 
@@ -81,7 +83,7 @@ interface RequestContext {
   auth: AuthContext;             // virtual key / team / user 标识（不含明文 key）
   route: ResolvedRoute;          // S2 后填充
   provider_format: FormatId;     // 目标 provider 的格式 id
-  fast_path: boolean;            // 见 §4
+  canonical_roundtrip: boolean;  // 恒 true：v1 一律完整走 canonical（见 §4）
 
   state: Record<string, unknown>; // 阶段间共享的暂存区（tool loop、插件 scratch）
   metrics: StageMetric[];        // 每阶段耗时/大小
@@ -104,7 +106,16 @@ interface RequestContext {
 
 ### S1 Decode（client → canonical）
 
-由 `client_format` 对应的 codec 执行。硬性要求：
+由 `client_format` 对应的 codec 执行，**一律物化完整 `CanonicalRequest`**。
+
+> **已废弃：D-fastpath-1「信封档惰性解码」（review #8.3 曾拍板定稿，2026-11 由作者再次拍板作废）。**
+> 原设计把 S1 拆成"信封档（只解析路由必需字段、保留原始字节引用）+ 完整档（物化全部 canonical）"，
+> 并让 fast path 只走信封档、把完整 canonical 物化推迟到 S3/S4/S6。**v1 不再保留这条路径**：
+> 理由见 §4.1。将来若加回，必须满足 §4.4 的实测触发条件。
+> 下文"需要完整 canonical 的阶段"表与插件 manifest `scope` 准入（D-fastpath-2）一并作废，
+> 见 [30-plugin-api.md](./30-plugin-api.md) §2。
+
+硬性要求（完整档的全部语义）：
 
 - **不允许丢字段**。未建模的顶层键必须进入 `raw.unmapped`（见 [10-canonical-schema.md](./10-canonical-schema.md) §raw passthrough）；
 - 遇到**未知的 part 类型**时，降级为 `UnknownPart{ type: "unknown", raw }`，而不是报错——保证前向兼容（provider 新增 block 类型时网关不炸）；
@@ -114,12 +125,11 @@ interface RequestContext {
 
 1. `model` 字符串 → 查别名表（`alias → [provider:model, ...]`），得到候选列表（含权重、优先级、最大上下文、单价）。
 2. 过滤：provider 健康检查、熔断器（连续失败率超阈值则摘除）、key 额度不足、`model` 不在 key 允许列表。
-3. 排序得到 `attempt_plan: Attempt[]`，每个 `Attempt` 带 `provider`、`provider_format`、`fast_path_eligible`、`weight`。
-4. **fast path 判定**见 §4。
-5. 缓存查询（Phase 2+）：exact-match key = hash(规范化 canonical)；语义缓存后续做，命中则直接跳到 S9。
-6. **参数兼容性预检**（`require_parameters` 语义）：若客户端传了目标 provider 不支持的参数，且 `on_unsupported === "error"`，直接返回 `capability_unsupported`，**不进入 fallback**。理由：静默丢参数比失败更危险（OpenRouter 的 `require_parameters` 是同一立场，见 [00-overview.md](./00-overview.md) §7.0.2）。
-7. **预算预检**：`is_priceable(provider, model)` + 单价存在性检查 + key 额度上限。缺单价时取该模型的最高已发布价（高估不低估），避免 spend cap 静默失效。
-8. **sticky 会话键**：若同一 `session_key` 近期命中过某 provider，优先复用（保 prompt cache），60 分钟不活动过期；provider 报错则不更新粘性。
+3. 排序得到 `attempt_plan: Attempt[]`，每个 `Attempt` 带 `provider`、`provider_format`、`weight`。
+4. 缓存查询（Phase 2+）：exact-match key = hash(规范化 canonical)；语义缓存后续做，命中则直接跳到 S9。
+5. **参数兼容性预检**（`require_parameters` 语义）：若客户端传了目标 provider 不支持的参数，且 `on_unsupported === "error"`，直接返回 `capability_unsupported`，**不进入 fallback**。理由：静默丢参数比失败更危险（OpenRouter 的 `require_parameters` 是同一立场，见 [00-overview.md](./00-overview.md) §7.0.2）。
+6. **预算预检**：`is_priceable(provider, model)` + 单价存在性检查 + key 额度上限。缺单价时取该模型的最高已发布价（高估不低估），避免 spend cap 静默失效。
+7. **sticky 会话键**：若同一 `session_key` 近期命中过某 provider，优先复用（保 prompt cache），60 分钟不活动过期；provider 报错则不更新粘性。
 
 排序键（可配置）：`priority` / `weight` / `price` / `throughput_p50` / `latency_p50` / `error_rate`。分位数据来自 `RequestTrace` 聚合（[00-overview.md](./00-overview.md) §7.0.2 的六个生产信号）。
 
@@ -135,7 +145,7 @@ interface RequestContext {
 
 ### S4 Encode（canonical → provider）
 
-由 `provider_format` 对应的 codec 执行。**非 fast path** 时：
+由 `provider_format` 对应的 codec 执行，**一律**：
 
 - 按 [10-canonical-schema.md](./10-canonical-schema.md) 的字段映射表逐字段转换；
 - 目标格式不支持的 canonical 能力 → 按 `loss_policy` 三档处置（默认 `allow`，可全局/按 key/按请求覆盖）：
@@ -214,71 +224,89 @@ type CanonicalStreamEvent =
 - 产出 `UsageRecord`（见 [60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md)）写入内存队列 → 批量刷到存储；
 - 永不抛异常影响主链路；队列满时按 `drop_policy`（默认丢弃最旧 + 计数告警）。
 
-## 4. Fast Path
+## 4. Fast Path（已废弃，未来可选优化）
 
-### 4.1 判定条件
+> **状态：v1 不做字节级 fast path。本节保留为"未来可选优化"的设计档案，不是 v1 的实现范围。**
+> 对应决定：v1 全部走 canonical（always-canonical）。
 
-```typescript
-function isFastPathEligible(ctx: RequestContext): boolean {
-  return (
-    ctx.client_format === ctx.provider_format &&          // 格式同一
-    ctx.route.provider === referenceImplementationOf(ctx.client_format) && // 或显式声明兼容
-    !ctx.state.requires_structural_change &&              // 无插件要求改写结构
-    ctx.client_raw_body_available                           // 保留了原始字节
-  );
-}
-```
+### 4.1 废弃理由（2026-11，作者拍板）
 
-第三条是核心：**插件有权关闭 fast path**。插件在 `onRequest` 里若改写了 canonical 中"没有 `_raw` 对应关系的部分"，或显式调用 `ctx.disableFastPath("reason")`，Runner 立即切到慢路径并记录原因（用于后续统计"多少请求因为插件/能力不支持而走了转换"）。
+canonical 往返在 Node 里就是 **JSON parse + 对象映射 + stringify**：一次典型对话请求的往返是
+**亚毫秒到几毫秒**量级，相对 LLM 推理（数百毫秒到数秒）可以忽略。一座私人低流量网关不值得为这点
+开销长期维护**两条**代码路径。
 
-### 4.2 fast path 下做什么 / 不做什么
+**换来的是**：
 
-**不做**：任何结构转换、字段重命名、类型强转。请求体以上游原始字节透传（仅在必要场景做极小改写，见下）。
+1. **单一代码路径**——只有一条 S1→S10 的流转逻辑，没有"fast/slow 分支行为不一致"这类只在一边出现的 bug；
+2. **插件永远可见 canonical**——不需要 `scope` 准入判断，插件拿到的永远是同一份完整请求/响应；
+3. **usage 标准化永远执行**——`finish_reason` / tool id / 多单位 usage 的归一不再有"fast path 下只在
+   usage record 里改、不动响应体"的特例，响应体与计量口径永远一致；
+4. **round-trip 测试永远被走到**——同格式请求也一定经过 decode→encode，保真度回归网不会出现盲区。
 
-> ⚠️ **设计风险（review #8.3，待作者拍板）**：按当前流程，**S1 先把请求完整解码成 canonical，S2 才判定走不走 fast path**。
-> 长上下文的大请求体在 fast path 下也要付"完整解码成 canonical"的代价，这与"附加延迟 < 3ms p99"
-> （[00-overview.md](./00-overview.md) §3、[70-roadmap.md](./70-roadmap.md) Phase 1 验收）存在张力。
-> **建议解法：惰性解码 / 只解析信封字段。**
->
-> 1. S1 只做"够用即可"的浅解析：识别 `source_format`、取出 `model` / `stream` / 端点必需的路由字段、保留原始字节引用；
-> 2. 真正的完整解码**推迟到确认不走 fast path 之后**（慢路径入口），或推迟到确实需要某个字段时（按访问器 lazy parse）；
-> 3. **插件依赖要写明**：插件拿到的必须是完整 canonical（这是"插件只面对 canonical"的硬约束），因此只要注册了
->    **任何** `onRequest` 插件，本请求就不能走"完全不解码"档。需要分三级：
->    - 无 `onRequest` 插件 + 同格式 → 完全不解码（只做信封级浅解析）；
->    - 有 `onRequest` 插件但插件只读路由相关字段 → 仍可浅解析（需插件在 manifest 里声明 `needs: "envelope_only"`）；
->    - 插件要改内容 → 必须完整解码（现有 `disableFastPath` 语义）。
-> **待拍板点**：① 是否引入 `needs: "envelope_only"` 这一档；② 浅解析的字段集合怎么定（建议就是 S2 路由 + 计费预检必需的最小集）；③ "完全不解码"档要不要保留字节级 diff 测试（[70-roadmap.md](./70-roadmap.md) Phase 1 验收要求同 provider fast path 与直连 diff 为空）。
+**废弃的两条原始决定**：
 
-**做**（这些都是"统计口径错位修正"，也是 canonical 的主要价值之一）：
+| 原决定 | 原内容 | 现状 |
+|---|---|---|
+| D-fastpath-1 | S1 分"信封档 / 完整档"，fast path 下惰性解码，完整 canonical 推迟到 S3/S4/S6 | **已废弃**，见 §3 S1 |
+| D-fastpath-2 | 插件 manifest `scope: "envelope-only" \| "full-canonical"` 静态准入，全部请求侧插件都是 `envelope-only` 才允许 fast path | **已废弃**，`scope` 字段无其他用途，见 [30-plugin-api.md](./30-plugin-api.md) §2 |
+
+### 4.2 原来 fast path 做什么 / 不做什么（存档）
+
+以下描述仅为将来重新评估时参考，**v1 不实现**：
+
+- **不做**：任何结构转换、字段重命名、类型强转；请求体以上游原始字节原样转发；
+- **请求侧惰性解码**：S1 只解析「信封 + 路由必需字段」，完整 canonical 推迟到真正需要它的阶段；
+- **响应侧**：只抽取 usage 信封并直通原始字节，不物化完整 canonical 响应；
+- **流式**：上游 SSE 字节不落 canonical、不改写，直接转发给客户端，旁路一个"usage 嗅探器"喂给 S10。
+
+### 4.3 usage / finish_reason / tool id 的归一（现在永远执行）
+
+原 fast path 下的"修正项"表现在是**每个请求的必经步骤**，不再是可选分支：
 
 | 修正项 | 场景 | 做法 |
 |---|---|---|
-| `finish_reason` / `stop_reason` 别名统一 | 客户端期待 `length`，provider 给 `max_tokens` | 响应侧只改这一个字符串字段，或仅在 usage record 里记录规范化值 |
+| `finish_reason` / `stop_reason` 别名统一 | 客户端期待 `length`，provider 给 `max_tokens` | 编码回客户端格式时改写该字段；原文进 `raw.finish_reason_provider` |
 | `tool_call` / `tool_use` id 补全 | provider 不返回 id（Gemini）或客户端格式要求不同 id 形态 | 生成 `call_<ulid>`，维护 `tool_use_id → call_id` 映射供后续轮次使用 |
-| usage 口径修正 | provider 的 usage 字段与客户端格式语义不一致 | 见 §4.3 |
+| usage 口径修正 | provider 的 usage 字段与客户端格式语义不一致 | 见 §4.3.1；响应体与 `UsageRecord` 写同一份规范化值 |
 
-**流式 fast path**：上游 SSE 字节**不落 canonical、不改写**，直接转发给客户端；同时旁路一个"usage 嗅探器"只解析 SSE 中的 usage 相关字段喂给 S10。这样"零延迟透传"和"计费准确"同时成立。嗅探器实现要求：
+#### 4.3.1 usage 口径修正表（一律执行）
 
-- 有字节数上限（默认 256KB/请求）与时间上限；**超限时不得把未知 token 记成 0**——对应键**省略**，并置
-  `warnings += "usage_sniffer_truncated"`（与 [10-canonical-schema.md](./10-canonical-schema.md) §6.1 规则 2 的
-  `usage_missing` 同一立场：**"未知"绝不用 0 表示**，否则看板会静默少报）；
-- **必须解析流尾的 usage 事件**：OpenAI Chat 的 usage 只在最后一个 chunk（且需 `stream_options.include_usage: true`，
-  网关在 S4 自动补上）、OpenAI Responses 在 `response.completed` 事件、Anthropic 分 `message_start` + `message_delta`
-  两次到达（必须合并）、Gemini 每 chunk 都可能带（取最后一次非空）。**按字节数从流头截断会恰好漏掉 usage**——
-  因此嗅探器要么保证覆盖到流尾，要么明确标 `usage_sniffer_truncated` 并让双路计量（[25-streaming.md](./25-streaming.md) §8.2）
+同一份计费语义在不同格式里字段名不同。现在**响应体与 `UsageRecord` 都写规范化值**（原 fast path 下
+"只写 `UsageRecord`、不动响应体"的特例随之取消）。
+
+**流式 usage 的抽取要求（原 fast path 嗅探器的约束，现在由 S6 的 codec 承担，结论不变）**：
+
+- **超限时不得把未知 token 记成 0**——对应键**省略**，并置 `warnings += "usage_sniffer_truncated"`
+  （与 [10-canonical-schema.md](./10-canonical-schema.md) §6.1 规则 2 的 `usage_missing` 同一立场：
+  **"未知"绝不用 0 表示**，否则看板会静默少报）；
+- **必须解析流尾的 usage 事件**：OpenAI Chat 的 usage 只在最后一个 chunk（且需
+  `stream_options.include_usage: true`，网关在 S4 自动补上）、OpenAI Responses 在
+  `response.completed` 事件、Anthropic 分 `message_start` + `message_delta` 两次到达（必须合并）、
+  Gemini 每 chunk 都可能带（取最后一次非空）。**按字节数从流头截断会恰好漏掉 usage**——因此要么保证
+  覆盖到流尾，要么明确标 `usage_sniffer_truncated` 并让双路计量（[25-streaming.md](./25-streaming.md) §8.2）
   的自估算兜底；不得用 0 冒充"已计量"；
-- 解析失败不影响转发。
-
-### 4.3 usage 口径修正表（fast path 也要做）
-
-同一份计费语义在不同格式里字段名不同。fast path 下**不修改响应体**（保持厂商原样），但在 `UsageRecord` 中写入规范化值。
+- 解析失败不影响主链路（用法见 [25-streaming.md](./25-streaming.md) §8.3）。
 
 **字段级映射表只保留一份，在 [40-provider-adaptors.md](./40-provider-adaptors.md) §2.1**（含"哪些字段无对应、如何避免双算"的四条硬不变量 §2.2c）。
 
 > **去重说明（review #5）**：本节原来抄了一份简表，已经和 40 §2.1 漂移——例如简表写 OpenAI Chat 的 `cache_write_tokens` "无对应"，
 > 而 40 §2.1 与 [docs/sources.md](../sources.md) §1.1 都确认 OpenAI Chat 有 `usage.prompt_tokens_details.cache_write_tokens`
 > 及 `cache_write_tokens_details.{ttl_12h_tokens,ttl_30m_tokens}`。两处分别维护必然分叉，故删除副本，只留指针。
-> fast path 的特殊之处只是"**在哪里写**"（只写 `UsageRecord`，不动响应体），不是"**写什么**"——口径以 40 §2.1 为准。
+
+### 4.4 若要加回字节级 fast path：必须满足的实测触发条件
+
+**默认立场是不加回。** 只有当下面几条**同时**成立、且有我们自己的实测数据支撑时，才重新立项：
+
+1. **实测 canonical 往返开销占比可观**：在目标硬件上测出 `S1 解码 + S4/S6/S8 往返` 的 p50/p99 绝对值，
+   并对照同期 LLM 推理延迟，证明它占端到端延迟的比例已经不可忽略（不是"理论上可能更慢"）；
+2. **私人网关流量已经高到这条路径有回报**：实测 rps / 并发达到需要省这点 CPU 的程度
+   （低流量自用场景下，省下的 CPU 换不来任何可感知收益）；
+3. **两条路径的行为一致性有测试保障**：能给出"fast/slow 输出逐字节等价（除归一化字段白名单）"的
+   回归测试，且愿意长期维护它；
+4. **插件可见性不倒退**：新方案不能让插件退回"只看信封"，`scope` 准入类机制不重新引入；
+5. **用量与计费口径不倒退**：usage 标准化与 round-trip 覆盖不因这条路径出现盲区。
+
+任一条不满足，就维持 always-canonical。
 
 ## 5. 工具调用循环（agentic loop）
 
@@ -356,11 +384,15 @@ S2 路由、S3 插件链、工具循环的 compact/escalate/stop，本质都是*
 - 因此"同一 state 反复问不同问题"的热点路径上，**OpenAI Decisions 的 TCO 显著优于 Gemini/Jev**——这是选上游时容易被忽略的一维。
 - 反向说：如果判断的 `content` 每次都不同（大多数场景），缓存无收益，Gemini 的免费层与更低的 ECE 更划算。
 
-### 6.4 与 fast path 的关系
+### 6.4 与 canonical 往返的关系
 
-**decision 判断本身也走 fast path 判定**：如果客户端请求 `kind:"decision"` 且上游就是 decision 格式，透传；否则过 canonical。判断类请求通常很小（一个问题 + 少量内容），fast path 的收益不如 chat 明显，但机制一致。
+**decision 子请求同样完整走 canonical**：客户端格式与上游格式相同时也照样 decode→encode
+（v1 没有"同格式就透传字节"的路径，见 §4）。判断类请求通常很小（一个问题 + 少量内容），
+canonical 往返的开销完全可以忽略。
 
-**decision 不参与"客户端请求的 fast path"**——它是网关内部发起的子请求，用独立的 `request_id`（`req_` 前缀 + `_dec` 后缀）与独立的预算桶，避免污染用户的 usage 记录。子请求的计量进 `UsageRecord.control_plane_cost`（与 `compaction` 同级，都不算进用户 `input_tokens`）。
+**decision 不参与"客户端请求的计量"**——它是网关内部发起的子请求，用独立的 `request_id`
+（`req_` 前缀 + `_dec` 后缀）与独立的预算桶，避免污染用户的 usage 记录。子请求的计量进
+`UsageRecord.control_plane_cost`（与 `compaction` 同级，都不算进用户 `input_tokens`）。
 
 ### 6.5 降级与"不降级"的边界
 
@@ -411,7 +443,7 @@ type CanonicalErrorCode =
 | `http_status` + `error.message` | `{ "error": { message, type, code } }` | `{ "type":"error", "error":{ type, message } }` | `{ "error": { code, message, status } }` |
 | `retryable` | 体现在 `type`（`rate_limit_error`/`server_error`）与状态码 | 体现在 `type`（`overloaded_error`/`api_error`） | 体现在 `code`（`RESOURCE_EXHAUSTED`/`UNAVAILABLE`） |
 
-错误体由客户端格式 codec 生成，**不**直接透传上游错误体（避免泄漏内部 provider 名/内部 IP；需要透传时走 `raw` 并受 `debug_mode` 开关控制）。
+错误体由客户端格式 codec 生成，**不**把上游错误体原样转给客户端（避免泄漏内部 provider 名/内部 IP；需要时走 `raw` 并受 `debug_mode` 开关控制）。
 
 ### 7.3 重试 / fallback 决策矩阵
 
@@ -439,7 +471,7 @@ interface RequestTrace {
   request_id: string;
   client_format: FormatId;
   provider_format: FormatId;
-  fast_path: boolean;
+  canonical_roundtrip: boolean;  // 恒 true；fast path 已废弃（见 §4）
   attempts: Array<{ provider: string; model: string; status: number; ttfb_ms: number; total_ms: number; error?: string }>;
   stages: StageMetric[];          // 每阶段耗时与 payload 大小
   usage: CanonicalUsage;
@@ -460,5 +492,5 @@ interface RequestTrace {
 1. Gemini `streamGenerateContent?alt=sse` 的 `usageMetadata` 是否逐 chunk 重复、末 chunk 是否完整。
 2. OpenAI Responses 流式中 `function_call` item 的 `name` 是否在 `output_item.added` 时即存在。
 3. Anthropic 1h/5m 两种 ephemeral cache 在 `usage` 里是分字段返回还是合并到 `cache_creation_input_tokens`（影响计费拆分）。
-4. 各 provider 在 fast path 下返回的 `finish_reason` 与客户端格式期望值的完整差异集合（用真实响应抽样统计）。
-5. 透传原始字节时，OpenAI/Anthropic 是否允许客户端传入未知顶层字段（决定 `raw.unmapped` 回写是否安全）。
+4. 各 provider 返回的 `finish_reason` 与客户端格式期望值的完整差异集合（用真实响应抽样统计）——canonical 往返下这个集合决定归一化表的覆盖度。
+5. 未知顶层字段经 `raw.unmapped` 回写后，OpenAI/Anthropic 是否接受（决定回写是否安全）。
