@@ -19,7 +19,7 @@ import type {
   FinishReason,
 } from "../../../ir/index.js";
 import { createCanonicalError, emptyUsage } from "../../../ir/index.js";
-import { sniffUsageFromSseChunks, type UsageSnifferOptions } from "../usage-sniffer.js";
+import { IncrementalUsageSniffer, type UsageSnifferOptions } from "../usage-sniffer.js";
 
 export class S6ProviderDecode implements Stage {
   readonly id = "S6";
@@ -37,6 +37,16 @@ export class S6ProviderDecode implements Stage {
     const streaming = state.shallow?.stream === true;
 
     if (streaming) {
+      if (ctx.fast_path) {
+        // fast path：**不读流**。只创建嗅探器交给 S8——S8 一边把字节写给客户端，
+        // 一边喂给嗅探器，两者互不等待，保持"零延迟透传"（20 §4.2、设计原则 3）。
+        state.sniffer = new IncrementalUsageSniffer(snifferOptionsFor(ctx.provider_format, deps));
+        ctx.recordStage(this.id, deps.clock.now() - started, "fast_path:sniffer-armed");
+        deps.metrics.increment("pipeline.stage", 1, { stage: this.id, mode: "fast_path" });
+        return;
+      }
+
+      // 慢路径：折叠成 CanonicalStreamEvent 序列（20 §S6 折叠表由 codec 实现）
       const chunks: string[] = [];
       if (upstream.chunks !== undefined) {
         for await (const chunk of upstream.chunks) {
@@ -46,19 +56,6 @@ export class S6ProviderDecode implements Stage {
       }
       state.upstream_chunks = chunks;
       const sseText = chunks.join("");
-
-      if (ctx.fast_path) {
-        // fast path：只抽取 usage 信封，原始字节交由 S8 直通（D-fastpath-1）
-        const sniffed = sniffUsageFromSseChunks(chunks, snifferOptionsFor(ctx.provider_format, deps));
-        state.usage = sniffed.usage;
-        if (sniffed.truncated) ctx.warn("usage_sniffer_truncated");
-        if (sniffed.empty) ctx.warn("usage_missing");
-        ctx.recordStage(this.id, deps.clock.now() - started, "fast_path:usage-sniffer");
-        deps.metrics.increment("pipeline.stage", 1, { stage: this.id, mode: "fast_path" });
-        return;
-      }
-
-      // 慢路径：折叠成 CanonicalStreamEvent 序列（20 §S6 折叠表由 codec 实现）
       const events = await collectEvents(providerAdaptor, sseText, ctx);
       state.stream_events = events;
       const lastUsage = [...events].reverse().find((e) => e.type === "usage");

@@ -34,9 +34,26 @@ export class S8ClientEncode implements Stage {
       state.bytes_written = true;
 
       if (ctx.fast_path) {
-        // fast path：原样转发上游 SSE 字节（D-fastpath-1）
-        for (const chunk of state.upstream_chunks ?? []) {
-          deps.sink.write(chunk);
+        // fast path：**边收边发**。上游 SSE 字节不落 canonical、不改写，直接转发给客户端；
+        // 同时旁路喂给 S6 布防的嗅探器（D-fastpath-1 + 20 §4.2 流式 fast path）。
+        const sniffer = state.sniffer;
+        const upstreamChunks = state.upstream?.chunks;
+        if (upstreamChunks !== undefined) {
+          for await (const chunk of upstreamChunks) {
+            if (deps.sink.closed) {
+              // 客户端断开：立刻停止读上游（25 §6 第 3 条止损）
+              break;
+            }
+            const text = chunk.toString("utf8");
+            deps.sink.write(text);
+            sniffer?.push(text);
+          }
+        }
+        if (sniffer !== undefined) {
+          const sniffed = sniffer.finish();
+          state.usage = sniffed.usage;
+          if (sniffed.truncated) ctx.warn("usage_sniffer_truncated");
+          if (sniffed.empty) ctx.warn("usage_missing");
         }
         ctx.recordStage(this.id, deps.clock.now() - started, "fast_path:passthrough");
         deps.metrics.increment("pipeline.stage", 1, { stage: this.id, mode: "fast_path" });

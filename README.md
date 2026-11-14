@@ -149,3 +149,23 @@ models/
 ## 许可
 
 MIT，见 [LICENSE](LICENSE)。
+
+---
+
+## 实现运行说明
+
+仓库已进入实现阶段（Phase 1 骨架与最小闭环）。运行方式、目录职责、DI 装配方式、
+测试覆盖见 **[`IMPLEMENTATION.md`](IMPLEMENTATION.md)**。
+
+```bash
+npm install
+npm test            # vitest
+npm run typecheck   # tsc --noEmit --strict
+npm run demo        # 起 HTTP ingress + mock 上游，端到端往返演示
+```
+
+**当前状态**：`ir/` canonical 类型、DI 容器 + 组合根、`gateway-core/pipeline/`（S0–S10）、
+`openai.chat` 与 `anthropic.messages` 两个双向 codec、`metering/` 异步计量管道、
+最小 HTTP ingress 已落地。尚未实现：`storage/` 加密存储（Phase 4）、`webui/`、
+decision/image/tts/asr 的 **adaptor**（canonical 类型已建）、真实 credential OAuth 流程、
+内置搜索实现、商业化功能。

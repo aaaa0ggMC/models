@@ -20,6 +20,7 @@ import type {
 } from "../../ir/index.js";
 import type { RequestEnvelopeShallow } from "../../adaptors/types.js";
 import type { ClientSink } from "./sink.js";
+import type { IncrementalUsageSniffer } from "./usage-sniffer.js";
 import type { Adaptor, EncodedRequest } from "../../adaptors/types.js";
 import type { AdaptorRegistry } from "../../adaptors/types.js";
 import type { MutableRequestContext } from "../context.js";
@@ -107,6 +108,11 @@ export interface PipelineState {
   finish_reason?: FinishReason;
   /** S6 慢路径：折叠后的规范流事件序列。 */
   stream_events?: CanonicalStreamEvent[];
+  /**
+   * fast path 流式：S6 创建、S8 消费的增量 usage 嗅探器。
+   * S6 **不读流**——读流会破坏"零延迟透传"（20 §4.2 / 设计原则 3）。
+   */
+  sniffer?: IncrementalUsageSniffer;
   /** S5 记录的首字节耗时（UsageRecord.ttfb_ms）。 */
   ttfb_ms?: number;
 

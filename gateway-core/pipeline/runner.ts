@@ -116,76 +116,101 @@ export class PipelineRunner {
     }
   }
 
-  /** 顺序执行 S0→S10；其中 S4→S8 可能因工具循环重复执行。 */
+  /**
+   * 执行顺序（20 §2 阶段表）：
+   *   S0 → S1 → S2 → S3 ──(ShortCircuit)──▶ S9 → S10
+   *                        └──▶ S4 → S5 → S6 → S7 → S8
+   *                                   └──(网关 agentic loop：每轮重跑 S4→S8)
+   *                                                └──▶ S9 → S10
+   *
+   * 流式时 S9 在流关闭后执行（20 §S9：不再影响已发出的内容，只能做记录与副作用）。
+   * 因此 **S9/S10 在整个 run() 里只执行一次**——工具循环的每一轮只重跑 S4→S8。
+   */
   private async runStages(state: PipelineState, deps: PipelineDeps): Promise<void> {
     const { ctx } = state;
-
-    for (const stage of this.stages) {
+    const stageById = new Map(this.stages.map((s) => [s.id, s]));
+    const run = async (id: string): Promise<void> => {
+      const stage = stageById.get(id);
+      if (stage === undefined) throw new Error(`未知阶段: ${id}`);
       const before = state.materialized;
       await stage.execute(state, deps);
       // 观测：哪些阶段触发了完整物化（D-fastpath-1 的代价观测）
       if (!before && state.materialized) {
         deps.metrics.increment("pipeline.materialize", 1, { stage: stage.id });
       }
+    };
 
-      // S3 短路：跳过 S4–S8，直达 S9
-      if (stage.id === "S3" && (state.short_circuit_response !== undefined || state.short_circuit_error !== undefined)) {
+    // ---- S0–S3 ----
+    for (const id of ["S0", "S1", "S2", "S3"]) {
+      await run(id);
+      if (id === "S3" && (state.short_circuit_response !== undefined || state.short_circuit_error !== undefined)) {
         state.status = state.short_circuit_error !== undefined ? "error" : "short_circuit";
         state.error = state.short_circuit_error;
         state.final_response = state.short_circuit_response;
         if (state.short_circuit_response !== undefined) {
           state.usage = state.short_circuit_response.usage;
         }
-        await this.stages[9]!.execute(state, deps); // S9
-        await this.stages[10]!.execute(state, deps); // S10
+        await run("S9");
+        await run("S10");
         return;
-      }
-
-      // S8 之后：流式已发出字节，S9 在流关闭后执行
-      if (stage.id === "S8" && state.bytes_written && state.input.query["stream"] !== "false") {
-        const streaming = state.shallow?.stream === true;
-        if (streaming) {
-          await this.stages[9]!.execute(state, deps); // S9
-          await this.stages[10]!.execute(state, deps); // S10
-          return;
-        }
       }
     }
 
-    // 网关 agentic loop（20 §5.2）：S3 之后、S9 之前多轮
+    // ---- S4–S8（第一轮）----
+    for (const id of ["S4", "S5", "S6", "S7", "S8"]) {
+      await run(id);
+    }
+
+    // ---- 网关 agentic loop（20 §5.2）：每轮重跑 S4→S8 ----
     if (
       state.canonical !== undefined &&
       state.short_circuit_response === undefined &&
       shouldUseGatewayLoop(state.canonical)
     ) {
       const maxTurns = state.canonical.gateway?.max_turns ?? deps.config.maxTurns;
-      const loopResult = await runToolLoop(state.canonical, ctx, {
-        pluginHost: deps.pluginHost,
-        runTurn: async (req) => {
-          // 每轮重跑 S4→S8（canonical 变，provider 不变）
-          const turnState: PipelineState = { ...state, canonical: req, turns: state.turns };
-          await this.stages[3]!.execute(turnState, deps); // S4
-          await this.stages[4]!.execute(turnState, deps); // S5
-          await this.stages[5]!.execute(turnState, deps); // S6
-          await this.stages[6]!.execute(turnState, deps); // S7
-          await this.stages[7]!.execute(turnState, deps); // S8
-          state.turns = turnState.turns;
-          state.usage = turnState.usage;
-          state.response = turnState.response;
-          state.finish_reason = turnState.finish_reason;
-          return turnState.response ?? (turnState.final_response as CanonicalResponseEnvelope);
+      const loopResult = await runToolLoop(
+        state.canonical,
+        ctx,
+        {
+          pluginHost: deps.pluginHost,
+          runTurn: async (req) => {
+            // 每轮重跑 S4→S8（canonical 变，provider 不变）
+            const turnState: PipelineState = { ...state, canonical: req };
+            const turnRun = async (id: string): Promise<void> => {
+              const stage = stageById.get(id);
+              if (stage === undefined) throw new Error(`未知阶段: ${id}`);
+              await stage.execute(turnState, deps);
+            };
+            for (const id of ["S4", "S5", "S6", "S7", "S8"]) {
+              await turnRun(id);
+            }
+            // 把这一轮的产物合并回主 state（S9/S10 只跑一次）
+            state.turns = turnState.turns;
+            state.usage = turnState.usage;
+            state.response = turnState.response;
+            state.finish_reason = turnState.finish_reason;
+            state.stream_events = turnState.stream_events;
+            state.aggregated = turnState.aggregated;
+            state.final_response = turnState.final_response;
+            state.upstream_chunks = turnState.upstream_chunks;
+            state.ttfb_ms = turnState.ttfb_ms;
+            state.diagnostics.push(...turnState.diagnostics);
+            state.dropped_capabilities.push(...turnState.dropped_capabilities);
+            return turnState.response ?? (turnState.final_response as CanonicalResponseEnvelope);
+          },
         },
-      }, maxTurns);
+        maxTurns,
+      );
       state.turns = loopResult.turns;
       state.response = loopResult.response;
       if (loopResult.exceeded) {
         ctx.warn("agentic_loop_exceeded", `turns=${loopResult.turns}`);
       }
-      // 循环结束后补 S9/S10
-      await this.stages[9]!.execute(state, deps);
-      await this.stages[10]!.execute(state, deps);
-      return;
     }
+
+    // ---- S9 / S10（整个请求只跑一次）----
+    await run("S9");
+    await run("S10");
   }
 
   private successOutcome(state: PipelineState): PipelineOutcome {

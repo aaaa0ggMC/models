@@ -38,7 +38,159 @@ export interface UsageSnifferOptions {
 }
 
 /**
- * 从一串 SSE chunk 里抽 usage。
+ * 增量式 usage 嗅探器。
+ *
+ * 为什么是增量而不是"收完整流再解析"：fast path 的承诺是**零延迟透传**（20 §4.2）。
+ * 若 S6 先把整个流读完再交给 S8，就变成了"等全量再下一步"——正是设计原则 3 明令禁止的。
+ * 因此嗅探器做成 `push(chunk) → 立刻可下发` 的形状：S8 每收到一个 chunk，
+ * 一边写给客户端，一边喂给嗅探器；两者互不等待。
+ *
+ * 内存是有界的：只保留每个 chunk 里与 usage 相关的抽取结果，不缓存全文。
+ */
+export class IncrementalUsageSniffer {
+  private bytes = 0;
+  private truncated = false;
+  private found = 0;
+
+  /** openai_chat / openai_responses：最后一个非空 usage 对象。 */
+  private lastOpenAiUsage: Record<string, unknown> | undefined;
+  /** anthropic：message_start + message_delta 分两次到达，必须合并。 */
+  private anthropicMerged: TokenUsage | undefined;
+  private anthropicRaw: Record<string, unknown> | undefined;
+  /** gemini：每 chunk 都可能带 usageMetadata，取最后一次非空。 */
+  private lastGeminiUsage: Record<string, unknown> | undefined;
+
+  constructor(private readonly opts: UsageSnifferOptions) {}
+
+  /** 喂一个上游 chunk（SSE 文本片段）。返回是否已超限。 */
+  push(chunk: string): boolean {
+    this.bytes += Buffer.byteLength(chunk, "utf8");
+    if (this.bytes > this.opts.max_bytes) {
+      // 超限：**不得把未知 token 记成 0**——标 truncated 让双路计量兜底（20 §4.2）
+      this.truncated = true;
+      return false;
+    }
+    switch (this.opts.flavor) {
+      case "openai_chat":
+        this.lastOpenAiUsage = lastUsageFromSse(
+          chunk,
+          this.lastOpenAiUsage,
+          (o) => asRecord(o["usage"]),
+        );
+        break;
+      case "openai_responses":
+        this.lastOpenAiUsage = lastUsageFromSse(chunk, this.lastOpenAiUsage, (o) => {
+          const r = asRecord(o["response"]);
+          return r === undefined ? undefined : asRecord(r["usage"]);
+        });
+        break;
+      case "anthropic":
+        for (const u of allUsagesFromSse(chunk)) {
+          this.anthropicRaw = u;
+          const t = tokenFromAnthropic(u);
+          this.anthropicMerged =
+            this.anthropicMerged === undefined ? t : mergeTokenUsage(this.anthropicMerged, t);
+        }
+        break;
+      case "gemini":
+        this.lastGeminiUsage = lastUsageFromSse(chunk, this.lastGeminiUsage, (o) => asRecord(o["usageMetadata"]));
+        break;
+      case "generic":
+        break;
+    }
+    return true;
+  }
+
+  /** 流结束；产出归一 usage。 */
+  finish(): UsageSnifferResult {
+    switch (this.opts.flavor) {
+      case "openai_chat":
+      case "openai_responses": {
+        if (this.lastOpenAiUsage === undefined) {
+          return { usage: { units: {}, source: "provider" }, truncated: this.truncated, empty: true };
+        }
+        this.found = 1;
+        return {
+          usage: {
+            units: { tokens: tokenFromOpenAi(this.lastOpenAiUsage) },
+            raw: this.lastOpenAiUsage,
+            source: "provider",
+          },
+          truncated: this.truncated,
+          empty: false,
+        };
+      }
+      case "anthropic": {
+        if (this.anthropicMerged === undefined) {
+          return { usage: { units: {}, source: "provider" }, truncated: this.truncated, empty: true };
+        }
+        this.found = 1;
+        return {
+          usage: {
+            units: { tokens: this.anthropicMerged },
+            ...(this.anthropicRaw === undefined ? {} : { raw: this.anthropicRaw }),
+            source: "provider",
+          },
+          truncated: this.truncated,
+          empty: false,
+        };
+      }
+      case "gemini": {
+        if (this.lastGeminiUsage === undefined) {
+          return { usage: { units: {}, source: "provider" }, truncated: this.truncated, empty: true };
+        }
+        this.found = 1;
+        return {
+          usage: {
+            units: { tokens: tokenFromGemini(this.lastGeminiUsage) },
+            raw: this.lastGeminiUsage,
+            source: "provider",
+          },
+          truncated: this.truncated,
+          empty: false,
+        };
+      }
+      case "generic":
+        return { usage: { units: {}, source: "provider" }, truncated: this.truncated, empty: true };
+    }
+  }
+
+  /** 是否解析到过任何 usage 字段。 */
+  get hasUsage(): boolean {
+    return this.found > 0;
+  }
+}
+
+/** 从一段 SSE 文本里找"最后一个非空"的 usage（按 selector 抽取）。 */
+function lastUsageFromSse(
+  sseText: string,
+  previous: Record<string, unknown> | undefined,
+  select: (obj: Record<string, unknown>) => Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  let found = previous;
+  for (const ev of parseSseEvents(sseText)) {
+    const obj = asRecord(jsonOf(ev));
+    if (obj === undefined) continue;
+    const usage = select(obj);
+    if (usage !== undefined) found = usage;
+  }
+  return found;
+}
+
+/** 从一段 SSE 文本里抽出全部 usage 对象（Anthropic 分多次到达时要逐个合并）。 */
+function allUsagesFromSse(sseText: string): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = [];
+  for (const ev of parseSseEvents(sseText)) {
+    const obj = asRecord(jsonOf(ev));
+    if (obj === undefined) continue;
+    const usage = asRecord(obj["usage"]);
+    if (usage !== undefined) out.push(usage);
+  }
+  return out;
+}
+
+/**
+ * 从一串 SSE chunk 里抽 usage（批处理接口，非流式场景用）。
  *
  * 注意这里的"覆盖到流尾"实现方式：调用方传入了**完整**的 chunk 序列（流已结束），
  * 因此不存在"从头截断漏掉流尾"的问题；`max_bytes` 只用于防御恶意超长流——
@@ -48,25 +200,11 @@ export function sniffUsageFromSseChunks(
   chunks: string[],
   opts: UsageSnifferOptions,
 ): UsageSnifferResult {
-  let bytes = 0;
-  let truncated = false;
-  const collected: unknown[] = [];
-
+  const sniffer = new IncrementalUsageSniffer(opts);
   for (const chunk of chunks) {
-    bytes += Buffer.byteLength(chunk, "utf8");
-    if (bytes > opts.max_bytes) {
-      truncated = true;
-      break;
-    }
-    collected.push(chunk);
+    if (!sniffer.push(chunk)) break;
   }
-
-  const usage = extractUsage(collected.join(""), opts.flavor);
-  return {
-    usage,
-    truncated,
-    empty: usage.units.tokens === undefined,
-  };
+  return sniffer.finish();
 }
 
 /** 按 flavor 从 SSE 文本里抽 usage。解析失败一律返回空 usage，不影响转发。 */
