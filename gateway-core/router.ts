@@ -34,6 +34,30 @@ export interface RouteTable {
   aliases: Record<string, RouteAlias>;
 }
 
+/**
+ * 别名解析端口（S2 的第一步）。
+ *
+ * **为什么是一个注入的端口而不是内置逻辑**：规则数据（哪些别名存在、优先级）
+ * 属于控制面（admin/aliases.ts），本文件只做「怎么用解析结果产出 attempt_plan」。
+ * 这样管理面改规则不需要动路由引擎，测试里也能整体替换解析器。
+ *
+ * 传 undefined = 只用 `RouteTable.aliases` 的静态查表（本文件的历史行为，
+ * 完全不差地保留）。
+ */
+export interface AliasResolver {
+  resolve(model: string, modality: ModalityKind): AliasResolution | undefined;
+}
+
+/** 解析结果的来源（透传给下游做可观测：请求路径上要能回答"模型名是怎么来的"）。 */
+export type AliasResolutionSource = 'exact' | 'prefix' | 'passthrough';
+
+export interface AliasResolution {
+  source: AliasResolutionSource;
+  /** 命中的规则 id（passthrough 时为 undefined）。 */
+  rule_id?: string;
+  target: { provider: string; access_path: string; model: string; max_context_tokens?: number };
+}
+
 export interface RouteRequest {
   model: string;
   modality: ModalityKind;
@@ -72,6 +96,19 @@ export class StaticRouter implements Router {
     private readonly capabilityRegistry: CapabilityRegistry,
     private readonly credentialResolver: CredentialResolver,
     private readonly hooks: RouteHooks = NOOP_ROUTE_HOOKS,
+    /**
+     * 别名解析器（可选）。
+     *
+     * 注入后的解析顺序（**显式别名 > 前缀规则 > 原样 model id**）：
+     *   1. 先问 resolver；命中就用它的 target；
+     *   2. resolver 没命中（或返回 passthrough）→ 回落到 `RouteTable.aliases`
+     *      的静态查表；
+     *   3. 两者都没有 → `no_available_provider`。
+     *
+     * resolver 返回 `passthrough` 时**不需要**静态表里有对应条目——那是
+     * 「客户端直接传上游 model id」的场景（见 admin/aliases.ts 的优先级说明）。
+     */
+    private readonly aliasResolver?: AliasResolver,
   ) {
     this.aliases = { ...table.aliases };
   }
@@ -81,7 +118,27 @@ export class StaticRouter implements Router {
   }
 
   resolve(req: RouteRequest, ctx: RequestContext): RouteResult {
-    const alias = this.aliases[req.model];
+    // ---- 第 1 步：别名解析（20 §S2）----
+    // 注入了解析器就先用它；没注入则纯静态查表（历史行为）。
+    const resolved = this.aliasResolver?.resolve(req.model, req.modality);
+    let alias: RouteAlias | undefined;
+    if (resolved !== undefined) {
+      alias = {
+        targets: [
+          {
+            access_path: resolved.target.access_path,
+            provider: resolved.target.provider,
+            model: resolved.target.model,
+          },
+        ],
+        ...(resolved.target.max_context_tokens === undefined
+          ? {}
+          : { max_context_tokens: resolved.target.max_context_tokens }),
+      };
+    } else {
+      alias = this.aliases[req.model];
+    }
+
     if (alias === undefined || alias.targets.length === 0) {
       return {
         ok: false,

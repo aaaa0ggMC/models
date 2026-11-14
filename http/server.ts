@@ -11,6 +11,17 @@
  *
  * 隐私约束（AGENTS.md）：请求头在进 pipeline 前**脱敏**——Authorization / x-api-key /
  * cookie 一律不透传进 trace 或日志。
+ *
+ * ## 管理面挂载（控制平面）
+ *
+ * `createHttpServer` 接受一个可选的 `adminHandler`：一个
+ * `(req, res, url) => Promise<boolean>` 的函数，返回 true 表示"这个请求我处理了"。
+ * 数据面路由在此之前**完全不认识** `/admin/*`——两者是独立的两个平面
+ * （66 §1：两个认证平面，不要混），挂载点只有下面那一次调用。
+ *
+ * 之所以用"返回 boolean 的 handler"而不是中间件链：本文件刻意不引框架，
+ * 加一个中间件机制就等于自己造半个 fastify。一个可选的挂载点足够表达
+ * "管理面在这里"，且对数据面代码零侵入。
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -18,6 +29,7 @@ import type { FormatId } from '../ir/index.js';
 import type { PipelineRunner } from '../gateway-core/pipeline/runner.js';
 import type { ClientSink } from '../gateway-core/pipeline/sink.js';
 import { FORMAT_HEADER } from '../gateway-core/pipeline/stages/s0-ingress.js';
+import type { AdminRouteHandler } from '../admin/routes.js';
 
 /** 脱敏：只保留白名单头，其余丢弃（含鉴权头）。 */
 const ALLOWED_HEADERS = new Set([
@@ -54,6 +66,13 @@ export interface HttpServerOptions {
   runner: PipelineRunner;
   /** 健康检查端点（不起 pipeline）。 */
   healthPath?: string;
+  /**
+   * 管理面（控制平面）挂载点。
+   *
+   * 传了它，`/admin/*` 就归管理面路由处理（见 admin/routes.ts），数据面
+   * 完全不参与。不传 = 没有管理面，行为与本文件加这一行之前完全一致。
+   */
+  adminHandler?: AdminRouteHandler;
 }
 
 /** Node http 的 ServerResponse → ClientSink 适配。 */
@@ -98,9 +117,10 @@ class NodeResponseSink implements ClientSink {
 export function createHttpServer(options: HttpServerOptions): Server {
   const { port: _port, host: _host, runner } = options;
   const healthPath = options.healthPath ?? '/health';
+  const adminHandler = options.adminHandler;
 
   return createServer((req, res) => {
-    void handleRequest(req, res, runner, healthPath);
+    void handleRequest(req, res, runner, healthPath, adminHandler);
   });
 }
 
@@ -109,9 +129,18 @@ async function handleRequest(
   res: ServerResponse,
   runner: PipelineRunner,
   healthPath: string,
+  adminHandler: AdminRouteHandler | undefined,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
+
+  // ---- 管理面优先：/admin/* 归控制平面，数据面不参与 ----
+  // 66 §1：两个认证平面不要混。这里用「先问管理面」而不是「先匹配数据面路由」
+  // 来表达边界——数据面的 ROUTES 表里永远不会出现 /admin 开头的路径。
+  if (adminHandler !== undefined) {
+    const handled = await adminHandler(req, res, url);
+    if (handled) return;
+  }
 
   if (req.method === 'GET' && path === healthPath) {
     res.writeHead(200, { 'content-type': 'application/json' });

@@ -55,12 +55,17 @@ import { MemoryUsageEmitter, MemoryUsageSink } from './metering/index.js';
 import type { UsageEmitter, UsageSink } from './metering/index.js';
 import { ScriptedTransport } from './gateway-core/transport.js';
 import type { Transport } from './gateway-core/transport.js';
-import { StaticRouter } from './gateway-core/router.js';
+import { StaticRouter, NOOP_ROUTE_HOOKS } from './gateway-core/router.js';
 import type { RouteTable } from './gateway-core/router.js';
 import { PipelineRunner } from './gateway-core/pipeline/runner.js';
 import { createFastPathAdmission } from './gateway-core/pipeline/fast-path.js';
 import type { FastPathAdmission } from './gateway-core/pipeline/fast-path.js';
 import type { CapabilityEntry } from './ir/index.js';
+import { DefaultAliasResolver, defaultAliasRules } from './admin/aliases.js';
+import { AdminService } from './admin/service.js';
+import { DefaultAdminAuth } from './admin/auth.js';
+import { createAdminRouter } from './admin/routes.js';
+import { createStaticAssetsHandler } from './admin/static.js';
 
 export interface GatewayOptions {
   /** 覆盖配置（测试用）。缺省从环境变量读。 */
@@ -84,6 +89,33 @@ export interface GatewayOptions {
   credentialResolver?: CredentialResolver;
   /** provider profile 注册表（默认装配 DeepSeek；测试可替换）。 */
   providerProfiles?: ProviderProfileRegistry;
+  /**
+   * 别名解析器（可选）：注入后 S2 按「显式别名 > 前缀规则 > 原样 model id」
+   * 三级优先级解析客户端模型名（见 admin/aliases.ts）。不注入 = 纯静态
+   * RouteTable 查表，行为与注入前完全一致。
+   */
+  aliasResolver?: import('./admin/aliases.js').AliasResolver;
+  /**
+   * 加密记录存储（可选）：注入后管理面（admin/）才有地方存凭据/别名/审计。
+   * 不注入 = 管理面仍可起来，但所有存储操作报"未装配"。
+   */
+  recordStore?: import('./storage/record-store.js').EncryptedRecordStore;
+  /** 已解锁的密钥库（可选；管理面密钥状态展示用）。 */
+  keystore?: { status(): import('./admin/api-types.js').KeystoreStatusResponse };
+  /** 元数据同步端口（可选；管理面的"同步触发"按钮用）。 */
+  metadataSync?: import('./admin/service.js').MetadataSyncPort;
+  /** 余额探测端口（可选；管理面的"余额探测"按钮用）。 */
+  balanceProbe?: import('./admin/service.js').BalanceProbePort;
+  /** usage 记录源（可选；管理面看板用）。 */
+  usageSource?: import('./admin/service.js').UsageRecordSource;
+  /** 对账记录源（可选；管理面看板用）。 */
+  reconciliationSource?: import('./admin/service.js').ReconciliationSource;
+  /** 管理面静态资源根目录（webui/admin/）。 */
+  adminStaticRoot?: string;
+  /** 管理面单 access token（66 §2.2 同款；不传则只接受口令登录）。 */
+  adminAccessToken?: string;
+  /** 初始别名规则（缺省用 admin/aliases.ts 的内置兜底）。 */
+  aliasRules?: import('./admin/aliases.js').AliasRule[];
   /**
    * 模型发现（可选）：注入后 `gateway.refreshModelCapabilities()` 会用 `/models`
    * 的实时元数据刷新能力矩阵（窗口/模态/effort/上游约束）。不注入 = 只用静态表。
@@ -414,10 +446,15 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
   container.registerValue(TOKENS.UsageEmitter, emitter);
 
   // ---- 路由 ----
+  // aliasResolver 可选注入：传了就按「显式别名 > 前缀规则 > 原样 model id」
+  // 三级优先级解析（admin/aliases.ts），不传则纯静态 RouteTable 查表
+  // （本文件的历史行为，完全不变）。
   const router = new StaticRouter(
     options.routeTable ?? defaultRouteTable(),
     capabilityRegistry,
     credentialResolver,
+    NOOP_ROUTE_HOOKS,
+    options.aliasResolver,
   );
   container.registerValue(TOKENS.Router, router);
 
@@ -450,6 +487,32 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     await pluginHost.dispose();
   };
 
+  // ---- 管理面（控制平面）装配 ----
+  // 全部可选：不传任何 admin 相关 option 时，网关行为与本轮改动之前完全一致
+  // （没有管理面，`createHttpServer` 也不挂 adminHandler）。
+  //
+  // 装配顺序说明：aliasResolver 必须先于 router（router 构造时收它）；
+  // recordStore / keystore 必须先于 AdminService；AdminService 与 AdminAuth
+  // 先于 createAdminRouter。这个顺序写在下面的代码顺序里，没有隐藏依赖。
+  const admin = assembleAdmin({
+    options,
+    capabilityRegistry,
+    credentialResolver,
+    clock,
+    usageSink,
+    balanceClientFactory: () =>
+      new DeepSeekBalanceClient({
+        transport,
+        headersProvider: async () => {
+          const { headers } = await credentialResolver.headersFor(
+            'deepseek.openai-chat',
+            systemProbeCtx(clock),
+          );
+          return headers;
+        },
+      }),
+  });
+
   return {
     container,
     config,
@@ -473,7 +536,135 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
         return headers;
       },
     }),
+    ...(admin === undefined ? {} : { admin }),
     shutdown,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 管理面装配（可选；全都不传则整块不存在）
+// ---------------------------------------------------------------------------
+
+export interface AdminAssembly {
+  aliasResolver: import('./admin/aliases.js').DefaultAliasResolver;
+  adminService: import('./admin/service.js').AdminService;
+  adminAuth: import('./admin/auth.js').AdminAuth;
+  /** http/server.ts 的挂载点（`createHttpServer({ adminHandler })`）。 */
+  routeHandler: import('./admin/routes.js').AdminRouteHandler;
+  /** 把库里持久化的别名规则灌进解析器（启动时 await 一次）。 */
+  loadAliases(): Promise<number>;
+}
+
+/**
+ * 装配管理面。
+ *
+ * 返回 undefined = 没配管理面（没传 recordStore / adminStaticRoot 任一）。
+ * 这样 `createGateway()` 的既有调用方（测试、demo）完全不受影响。
+ */
+function assembleAdmin(input: {
+  options: GatewayOptions;
+  capabilityRegistry: import('./credentials/capability-registry.js').CapabilityRegistry;
+  credentialResolver: import('./credentials/resolver.js').CredentialResolver;
+  clock: import('./ir/clock.js').Clock;
+  usageSink?: import('./metering/memory-emitter.js').MemoryUsageSink;
+  balanceClientFactory: () => import('./providers/deepseek/balance.js').DeepSeekBalanceClient;
+}): AdminAssembly | undefined {
+  const { options, capabilityRegistry, credentialResolver, clock } = input;
+  if (options.recordStore === undefined) return undefined;
+
+  // ---- 别名解析器 ----
+  // 能力查找直接用 capabilityRegistry（不另写一份矩阵）
+  const aliasResolver = new DefaultAliasResolver(
+    options.aliasRules ?? defaultAliasRules(),
+    {
+      list: (modality) =>
+        capabilityRegistry
+          .list(modality)
+          .map((e) => ({ access_path: e.access_path, model: e.model })),
+    },
+  );
+
+  // ---- 业务逻辑 ----
+  const adminService = new AdminService({
+    store: options.recordStore,
+    clock,
+    capabilityRegistry,
+    credentialResolver,
+    aliasResolver,
+    ...(options.metadataSync === undefined ? {} : { metadataSync: options.metadataSync }),
+    ...(options.balanceProbe === undefined
+      ? {}
+      : { balanceProbe: options.balanceProbe }),
+    ...(input.usageSink === undefined
+      ? {}
+      : {
+          usageSource: {
+            // UsageRecord.units 是 UsageUnits（有名字段）；AdminService 要的是
+            // Record<string, number>（宽类型）。这里显式放宽，让 metering 的
+            // MemoryUsageSink 能直接注入而不必包一层转换类。
+            list: (fromTs, toTs) =>
+              input.usageSink!.records
+                .filter((r) => r.ts >= fromTs && r.ts < toTs)
+                .map((r) => ({
+                  request_id: r.request_id,
+                  ts: r.ts,
+                  provider: r.provider,
+                  model: r.model,
+                  ...(r.model_alias === undefined ? {} : { model_alias: r.model_alias }),
+                  status: r.status,
+                  usage: { units: r.usage.units as unknown as Record<string, number> },
+                  cost: {
+                    cash: { total: r.cost.cash.total },
+                    as_api: { total: r.cost.as_api.total },
+                    status: r.cost.status,
+                  },
+                  finish_reason: r.finish_reason,
+                  fast_path: r.fast_path,
+                })),
+          },
+        }),
+    ...(options.reconciliationSource === undefined
+      ? {}
+      : { reconciliationSource: options.reconciliationSource }),
+  });
+
+  // ---- 认证 ----
+  // accessToken 走 options（不读 process.env——全仓库只有 di/config.ts 读 env）
+  const adminAuth = new DefaultAdminAuth(options.recordStore, clock, {
+    ...(options.adminAccessToken === undefined ? {} : { accessToken: options.adminAccessToken }),
+  });
+
+  // ---- 静态资源 ----
+  const serveStatic =
+    options.adminStaticRoot === undefined
+      ? undefined
+      : createStaticAssetsHandler({ rootDir: options.adminStaticRoot });
+
+  // ---- HTTP 路由 ----
+  const routeHandler = createAdminRouter({
+    auth: adminAuth,
+    service: adminService,
+    keystoreStatus:
+      options.keystore?.status ??
+      (() => ({
+        mode: 'key_file' as const,
+        tradeoff_note: '未装配密钥库：管理面可看界面，但读不到任何加密存储内容。',
+        unlocked: false,
+        active_dek_id: '',
+        encryption_count: 0,
+        should_rotate_dek: false,
+        argon2_rehash_recommended: false,
+        kek_fingerprint: '',
+      })),
+    ...(serveStatic === undefined ? {} : { serveStatic }),
+  });
+
+  return {
+    aliasResolver,
+    adminService,
+    adminAuth,
+    routeHandler,
+    loadAliases: () => adminService.loadAliasesIntoResolver(),
   };
 }
 

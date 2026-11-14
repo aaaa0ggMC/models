@@ -238,8 +238,15 @@ export interface EncryptedRecordStore {
   getStrict<T>(kind: AadRecordKind, id: string): Promise<T>;
   /** 列出某类的元数据（**不解密**，因此绝不泄漏 secret）。 */
   listMeta(kind: AadRecordKind): Promise<RecordMeta[]>;
-  /** 列出某类并解密全部（量小才用；管理面 CRUD 走这条）。 */
-  listDecrypted<T>(kind: AadRecordKind): Promise<Array<{ id: string; value: T }>>;
+  /**
+   * 列出某类并解密全部（量小才用；管理面 CRUD 走这条）。
+   *
+   * 带上 created_at / updated_at：管理面列表要显示「什么时候建的」，
+   * 而时间戳是**明文元数据**（65 §4.3 的明文索引列），不涉及解密成本。
+   */
+  listDecrypted<T>(
+    kind: AadRecordKind,
+  ): Promise<Array<{ id: string; value: T; created_at: number; updated_at: number; dek_id: string }>>;
   delete(kind: AadRecordKind, id: string): Promise<boolean>;
   /** 全量导出（密文形态，可安全外传；65 §7 的备份立场）。 */
   exportCiphertext(): Promise<StoredRecord[]>;
@@ -300,11 +307,27 @@ export class DefaultEncryptedRecordStore implements EncryptedRecordStore {
     }));
   }
 
-  async listDecrypted<T>(kind: AadRecordKind): Promise<Array<{ id: string; value: T }>> {
+  async listDecrypted<T>(
+    kind: AadRecordKind,
+  ): Promise<
+    Array<{ id: string; value: T; created_at: number; updated_at: number; dek_id: string }>
+  > {
     const records = await this.raw.list(kind);
-    const out: Array<{ id: string; value: T }> = [];
+    const out: Array<{
+      id: string;
+      value: T;
+      created_at: number;
+      updated_at: number;
+      dek_id: string;
+    }> = [];
     for (const rec of records) {
-      out.push({ id: rec.id, value: this.decryptRecord<T>(kind, rec.id, rec) });
+      out.push({
+        id: rec.id,
+        value: this.decryptRecord<T>(kind, rec.id, rec),
+        created_at: rec.created_at,
+        updated_at: rec.updated_at,
+        dek_id: rec.dek_id,
+      });
     }
     return out;
   }
