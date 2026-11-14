@@ -19,9 +19,9 @@ import type {
   RequestTrace,
 } from "../../ir/index.js";
 import type { RequestEnvelopeShallow } from "../../adaptors/types.js";
+import type { ClientSink } from "./sink.js";
 import type { Adaptor, EncodedRequest } from "../../adaptors/types.js";
 import type { AdaptorRegistry } from "../../adaptors/types.js";
-import type { ClientSink } from "./sink.js";
 import type { MutableRequestContext } from "../context.js";
 import type { FastPathAdmission } from "./fast-path.js";
 import type { LazyRequest } from "./lazy-decode.js";
@@ -48,8 +48,16 @@ export interface PipelineDeps {
   capabilityRegistry: CapabilityRegistry;
   router: Router;
   fastPathAdmission: FastPathAdmission;
+  /**
+   * 客户端写出通道。**每次请求不同**（http/server.ts 的 NodeResponseSink 或测试的
+   * MemoryClientSink），因此 Runner 的构造函数收 `Omit<PipelineDeps, "sink">`，
+   * 在 run() 里按请求合并进来。
+   */
   sink: ClientSink;
 }
+
+/** Runner 构造时注入的服务（不含 per-request 的 sink）。 */
+export type PipelineServices = Omit<PipelineDeps, "sink">;
 
 export interface PipelineInput {
   /** S0 识别出的客户端格式。 */

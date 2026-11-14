@@ -1,0 +1,57 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "decision",
+  "model": "gemini-decision-1",
+  "source_format": "gemini.decisions",
+  "stream": { "enabled": false, "mode": "none", "on_mismatch": "reject" },
+  "payload": {
+    "content": [
+      { "text": "用户在 30 分钟内第 4 次请求同一个问题，前三次的回答都被标记为不满意。", "role": "context" },
+      {
+        "media": {
+          "kind": "inline",
+          "mime": "image/png",
+          "data": "iVBORw0KGgoAAAANSUhEUg==",
+          "byte_length": 32
+        },
+        "role": "candidate"
+      }
+    ],
+    "questions": [
+      {
+        "id": "q_escalate",
+        "type": "binary",
+        "prompt": "是否应该升级到更强的模型重试？"
+      },
+      {
+        "id": "q_route",
+        "type": "choice",
+        "prompt": "这个请求应该路由到哪条 access path？",
+        "options": [
+          { "value": "strong_reasoning", "label": "强推理", "description": "慢但更可能答对" },
+          { "value": "fast_cheap", "label": "轻量快速", "description": "快且便宜" },
+          { "value": "refuse", "label": "拒绝", "description": "明显超出能力" }
+        ]
+      },
+      {
+        "id": "q_quality",
+        "type": "scale",
+        "prompt": "这段上下文的历史信息量还有多少？",
+        "scale": { "min": 1, "max": 5, "labels": ["已无用", "略有用", "一般", "有用", "关键"] }
+      },
+      {
+        "id": "q_rubric",
+        "type": "rubric",
+        "prompt": "这段历史是否满足压缩质量标准？",
+        "rubric": {
+          "criteria": "保留全部 tool_use/tool_result 配对与不透明思考块",
+          "pass_threshold": 0.8
+        }
+      }
+    ],
+    "include_option_probabilities": true,
+    "native": {}
+  },
+  "raw": { "source_provider": "gemini-decisions" },
+  "gateway": { "debug": true }
+}

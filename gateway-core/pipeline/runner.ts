@@ -32,7 +32,15 @@ import { S7OnStreamChunk } from "./stages/s7-on-stream-chunk.js";
 import { S8ClientEncode } from "./stages/s8-client-encode.js";
 import { S9OnResponse } from "./stages/s9-on-response.js";
 import { S10UsageEmitter } from "./stages/s10-usage-emitter.js";
-import type { PipelineDeps, PipelineInput, PipelineOutcome, PipelineState, Stage } from "./types.js";
+import type {
+  PipelineDeps,
+  PipelineInput,
+  PipelineOutcome,
+  PipelineServices,
+  PipelineState,
+  Stage,
+} from "./types.js";
+import type { ClientSink } from "./sink.js";
 import { shouldUseGatewayLoop, runToolLoop } from "./tool-loop.js";
 
 export interface PipelineRunnerOptions {
@@ -44,7 +52,7 @@ export class PipelineRunner {
   private readonly stages: Stage[];
 
   constructor(
-    private readonly deps: PipelineDeps,
+    private readonly services: PipelineServices,
     options: PipelineRunnerOptions = {},
   ) {
     this.stages = [
@@ -62,14 +70,20 @@ export class PipelineRunner {
     ];
   }
 
-  /** 跑一次完整请求。**不抛**——所有失败都转成 outcome.error + 客户端错误体。 */
-  async run(input: PipelineInput): Promise<PipelineOutcome> {
-    const now = this.deps.clock.now();
-    const requestId = this.deps.ids.requestId();
+  /**
+   * 跑一次完整请求。**不抛**——所有失败都转成 outcome.error + 客户端错误体。
+   *
+   * `sink` 每次请求注入（http/server.ts 的 NodeResponseSink 或测试的 MemoryClientSink），
+   * 因此组合根不需要知道"这一次请求写给谁"。
+   */
+  async run(input: PipelineInput, sink: ClientSink): Promise<PipelineOutcome> {
+    const deps: PipelineDeps = { ...this.services, sink };
+    const now = this.services.clock.now();
+    const requestId = this.services.ids.requestId();
     const traceId = input.headers["traceparent"];
 
     const onDisableFastPath = (reason: string) => {
-      this.deps.metrics.increment("pipeline.fast_path_disabled", 1, { reason });
+      this.services.metrics.increment("pipeline.fast_path_disabled", 1, { reason });
     };
 
     const ctx: MutableRequestContext = createContext(
@@ -95,10 +109,10 @@ export class PipelineRunner {
     };
 
     try {
-      await this.runStages(state, this.deps);
+      await this.runStages(state, deps);
       return this.successOutcome(state);
     } catch (err) {
-      return await this.failureOutcome(state, err);
+      return await this.failureOutcome(state, err, deps);
     }
   }
 
@@ -192,9 +206,12 @@ export class PipelineRunner {
   }
 
   /** 阶段失败：广播 onError → 映射错误体 → 决定能否还改状态码。 */
-  private async failureOutcome(state: PipelineState, err: unknown): Promise<PipelineOutcome> {
+  private async failureOutcome(
+    state: PipelineState,
+    err: unknown,
+    deps: PipelineDeps,
+  ): Promise<PipelineOutcome> {
     const { ctx } = state;
-    const deps = this.deps;
     const canonical = toCanonicalError(err, ctx.request_id);
     state.error = canonical;
     state.status = "error";

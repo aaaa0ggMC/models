@@ -1,0 +1,127 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/envelope.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "共享信封（CanonicalRequestEnvelope / CanonicalResponseEnvelope）",
+  "description": "docs/design/10-canonical-schema.md §2 共享信封 + §7 raw passthrough 两级结构。ir_version 必填（决策 D6）：新增模态走注册表，不新增顶层字段。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "ir_version": { "const": "ag-ir/1" },
+    "kind": {
+      "enum": [
+        "chat",
+        "decision",
+        "embedding",
+        "tts",
+        "asr",
+        "image",
+        "rerank",
+        "moderation",
+        "video"
+      ],
+      "description": "模态判别。decision 是第 9 个模态，勿称'第五模态'（00 §5 术语表）"
+    },
+    "model": { "type": "string" },
+    "resolved_model": { "type": "string" },
+    "stream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "mode", "on_mismatch"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "mode": { "enum": ["sse", "chunked-binary", "ws-duplex", "none"] },
+        "include_usage": { "type": "boolean" },
+        "native_event_names": { "type": "boolean" },
+        "on_mismatch": { "enum": ["reject", "bridge", "buffer"] }
+      }
+    },
+    "payload": {
+      "description": "模态特定 payload；按 kind 判别",
+      "type": "object"
+    },
+    "source_format": { "type": "string" },
+    "raw": { "$ref": "#/$defs/RawEnvelope" },
+    "gateway": {
+      "type": "object",
+      "properties": {
+        "agentic_loop": { "type": "boolean" },
+        "max_turns": { "type": "integer" },
+        "builtin_tools": { "type": "array", "items": { "type": "string" } },
+        "debug": { "type": "boolean" }
+      }
+    },
+    "request_id": { "type": "string" },
+    "usage": { "$ref": "usage.schema.json" },
+    "finish_reason": {
+      "enum": [
+        "stop",
+        "length",
+        "tool_use",
+        "content_filter",
+        "stop_sequence",
+        "error",
+        "pause_turn",
+        "recitation",
+        "context_exceeded",
+        "missing_thought_signature",
+        "other",
+        "final"
+      ],
+      "description": "归一化完成原因，是四家枚举的超集（10 §9.3 注意 1）"
+    },
+    "degraded": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/ConversionDiagnostic" }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "calibration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calibration"],
+      "properties": {
+        "calibration": { "enum": ["native", "degraded"] },
+        "degraded_by": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason", "model", "chat_adaptor"],
+          "properties": {
+            "reason": { "type": "string" },
+            "model": { "type": "string" },
+            "chat_adaptor": { "type": "string" }
+          }
+        }
+      },
+      "description": "decision 模态专用（40 §6.3）"
+    }
+  },
+  "$defs": {
+    "RawEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "unmapped": {
+          "type": "object",
+          "description": "顶层级：请求/响应根上未建模的字段。additionalProperties:false 逼着它们显式进这里"
+        },
+        "nodes": {
+          "type": "object",
+          "description": "节点级：每个 canonical 节点可带 _raw（原文对象或原始 block）"
+        },
+        "source_provider": { "type": "string", "description": "回写时判断能否整体还原" }
+      }
+    },
+    "ConversionDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "from", "to", "level", "message"],
+      "properties": {
+        "code": { "type": "string" },
+        "field_path": { "type": "string" },
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "level": { "enum": ["info", "warning", "error"] },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

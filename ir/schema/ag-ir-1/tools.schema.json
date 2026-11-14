@@ -1,0 +1,56 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/tools.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CanonicalTool / ToolChoice / CacheControl",
+  "description": "docs/design/10-canonical-schema.md §4.3 工具定义与 tool_choice。BuiltinTool.name 只用 canonical 稳定名，厂商专有工具名/版本串收进 native.provider_tool_type（50 §2.2 归一化规则）。注意 function 与 builtin 共用 name 键，JSON Schema 无法按同名键区分类型，因此 builtin 的稳定名枚举放在 if/then 里条件生效。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type"],
+  "properties": {
+    "type": { "enum": ["function", "builtin"] },
+    "_raw": {},
+    "name": {
+      "description": "function tool 的工具名；builtin 时为 canonical 稳定名（见下方 if/then 的枚举约束）",
+      "type": "string"
+    },
+    "description": { "type": "string" },
+    "parameters": { "$ref": "json-schema.schema.json" },
+    "strict": { "type": "boolean" },
+    "cache_control": { "$ref": "#/$defs/CacheControl" },
+    "config": { "type": "object" },
+    "executor": { "enum": ["provider", "gateway"] },
+    "native": {
+      "type": "object",
+      "description": "厂商专有字段命名空间（provider_tool_type / display_name / description …）"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "function" } }, "required": ["type"] },
+      "then": { "required": ["name", "parameters"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "builtin" } }, "required": ["type"] },
+      "then": {
+        "required": ["name", "config"],
+        "properties": {
+          "name": {
+            "enum": ["web_search", "url_context", "code_interpreter", "file_search"]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "CacheControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "ephemeral" },
+        "ttl": { "enum": ["5m", "1h"] },
+        "cache_name": { "type": "string", "description": "Gemini cachedContent 的资源名" }
+      }
+    }
+  }
+}

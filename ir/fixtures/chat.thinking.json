@@ -1,0 +1,36 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "chat",
+  "model": "claude-test-1",
+  "source_format": "anthropic.messages",
+  "stream": { "enabled": false, "mode": "none", "on_mismatch": "bridge" },
+  "payload": {
+    "system": [{ "text": "保持思考过程完整回传。" }],
+    "messages": [
+      {
+        "role": "user",
+        "parts": [{ "type": "text", "text": "证明根号 2 是无理数。" }]
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "thinking",
+            "thinking": "假设根号 2 = p/q（最简分数）…",
+            "signature": "EroWKgALdG9tZQ=="
+          },
+          {
+            "type": "redacted_thinking",
+            "data": "EroWCmNvbXBsZXRlbHk="
+          },
+          { "type": "text", "text": "假设根号 2 是有理数…", "cache_control": { "type": "ephemeral" } }
+        ]
+      }
+    ],
+    "params": {
+      "max_output_tokens": 4096,
+      "thinking": { "enabled": true, "budget_tokens": 2048, "preserve_history": true }
+    }
+  },
+  "raw": { "source_provider": "anthropic" }
+}

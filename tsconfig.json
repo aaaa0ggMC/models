@@ -23,6 +23,7 @@
     "outDir": "dist",
     "rootDir": "."
   },
+  "//": "typecheck 覆盖全部 .ts（含测试）。构建产物用 tsconfig.build.json（排除测试）。",
   "include": [
     "ir/**/*.ts",
     "di/**/*.ts",
@@ -35,7 +36,9 @@
     "http/**/*.ts",
     "composition-root.ts",
     "vitest.config.ts",
-    "vitest.setup.ts"
+    "vitest.setup.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts"
   ],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  "exclude": ["node_modules", "dist"]
 }

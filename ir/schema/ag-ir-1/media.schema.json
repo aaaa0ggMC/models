@@ -1,0 +1,40 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/media.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MediaRef",
+  "description": "docs/design/10-canonical-schema.md §5 统一媒体引用三态。决策 M2（15-modalities.md §1）：所有模态共用，不允许某个模态自己定义一种 base64 字段名。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "mime"],
+  "properties": {
+    "kind": { "enum": ["inline", "uri", "asset"] },
+    "mime": { "type": "string" },
+    "byte_length": { "type": "integer" },
+    "duration_seconds": { "type": "number" },
+    "width": { "type": "integer" },
+    "height": { "type": "integer" },
+    "sample_rate": { "type": "integer" },
+    "bit_depth": { "type": "integer" },
+    "channels": { "type": "integer" },
+    "sha256": { "type": "string" },
+    "data": { "type": "string", "description": "inline：base64，不含 data: 前缀" },
+    "uri": { "type": "string" },
+    "fetch_by_gateway": { "type": "boolean" },
+    "credential_ref": { "type": "string", "description": "代取时用的凭据引用，绝不存明文" },
+    "asset_id": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "inline" } }, "required": ["kind"] },
+      "then": { "required": ["data"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "uri" } }, "required": ["kind"] },
+      "then": { "required": ["uri"] }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "asset" } }, "required": ["kind"] },
+      "then": { "required": ["asset_id"] }
+    }
+  ]
+}
