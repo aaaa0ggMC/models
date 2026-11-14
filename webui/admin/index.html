@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>AgentGateway 管理面</title>
+    <!--
+      资源用**绝对路径** `/admin/...` 而不是相对路径：网关可能把本文档serve成
+      `/admin`（无尾斜杠）或 `/admin/index.html`，相对路径在第一种情况下会解析到
+      `/styles.css` 而 404。契约见 admin/api-types.ts：静态资源在 `/admin/`，
+      API 在 `/admin/api/`。
+    -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%9B%A1%EF%B8%8F%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/admin/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主内容</a>
+
+    <!-- 已登录时才显示的外壳（导航 / 用户 / 退出）。登录页由 JS 渲染进 #view。 -->
+    <div id="chrome" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">🔑</span>
+          <span>AgentGateway</span>
+          <span class="brand-sub">管理面</span>
+        </div>
+        <nav id="nav" class="nav" aria-label="主导航"></nav>
+        <div class="topbar-right">
+          <span id="user-badge" class="badge" hidden></span>
+          <button id="theme-toggle" type="button" class="btn btn-ghost" aria-pressed="false">
+            切换主题
+          </button>
+          <button id="logout-btn" type="button" class="btn btn-ghost">退出登录</button>
+        </div>
+      </header>
+
+      <!--
+        密钥自动解锁的代价说明。文案由服务端给出（bootstrap.keystore.tradeoff_note
+        或 keystore/status.tradeoff_note），**原样插入、一个字都不改**
+        （docs/design/65-storage-and-retention.md §3.2b 的硬要求：
+        「自动解锁换不来运行时防护」）。这里用 textContent 写入，不做任何
+        截断、换行重排或措辞润色。
+      -->
+      <aside id="tradeoff" class="tradeoff" hidden></aside>
+    </div>
+
+    <main id="main" class="main" tabindex="-1">
+      <div id="view" class="view"></div>
+    </main>
+
+    <footer id="footer" class="footer" hidden>
+      <span id="footer-api"></span>
+      <span class="footer-sep" aria-hidden="true">·</span>
+      <span>会话令牌只保存在页面内存中，刷新或关闭标签页即失效</span>
+    </footer>
+
+    <script type="module" src="/admin/app.js"></script>
+  </body>
+</html>
