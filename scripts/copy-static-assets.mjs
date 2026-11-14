@@ -1,5 +1,5 @@
 /**
- * scripts/copy-static-assets.mjs —— 把运行时读取的 JSON 资产复制进 dist/。
+ * scripts/copy-static-assets.mjs —— 把运行时读取的资产复制进 dist/。
  *
  * ## 为什么需要它
  *
@@ -15,11 +15,17 @@
  * 调用），`catalog/` 的离线层会踩同一个坑。统一在这里补上，比在每个 loader 里写
  * "dist 没有就回退到源目录" 干净（那种回退会让生产部署读到仓库源码目录）。
  *
- * 幂等：重复跑只是覆盖同一份文件。缺文件时报错并 exit 1（静默跳过会让生产带着
- * 半个资产跑起来）。
+ * 同时把**管理面前端产物**（`webui/admin/dist`，由 `npm run build:admin` 的 Vite
+ * 构建产出）整体拷进 `dist/admin/`，网关默认从那里托管 `/admin/*`（见
+ * composition-root.ts 的 defaultAdminStaticRoot）——保持「网关自己托管静态资源、
+ * 无独立服务」的形态。
+ *
+ * 幂等：重复跑只是覆盖同一份文件。JSON 资产一个都没复制到时报错并 exit 1
+ * （静默跳过会让生产带着半个资产跑起来）；管理面产物缺失只告警不阻断
+ * （`npm run build` 已先跑 build:admin，单独跑本脚本且没构建前端时才缺）。
  */
 
-import { copyFileSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { copyFileSync, cpSync, mkdirSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -53,7 +59,25 @@ for (const dir of ASSET_DIRS) {
 }
 
 if (copied === 0) {
-  process.stderr.write('copy-static-assets: 一个资产都没复制到，检查 ASSET_DIRS 配置\n');
+  process.stderr.write('copy-static-assets: 一个 JSON 资产都没复制到，检查 ASSET_DIRS 配置\n');
   process.exit(1);
 }
 process.stdout.write(`copy-static-assets: 已复制 ${copied} 个 JSON 资产进 dist/\n`);
+
+// ---- 管理面前端产物：webui/admin/dist -> dist/webui/admin ----
+// 目标用 dist/webui/admin 而不是 dist/admin：后端 admin/ 模块会被 tsc 编译成
+// dist/admin/*.js，若前端也落在这里，静态托管会把后端模块源码经 /admin/routes.js
+// 之类路径serve出去。tsc 不产出 dist/webui/**，故此处无碰撞。
+const ADMIN_SRC = join(ROOT, 'webui', 'admin', 'dist');
+const ADMIN_DEST = join(DIST, 'webui', 'admin');
+if (existsSync(ADMIN_SRC)) {
+  cpSync(ADMIN_SRC, ADMIN_DEST, { recursive: true });
+  process.stdout.write(
+    `copy-static-assets: 已复制管理面产物 webui/admin/dist -> dist/webui/admin/\n`,
+  );
+} else {
+  process.stderr.write(
+    'copy-static-assets: 未找到 webui/admin/dist（跳过管理面产物）。' +
+      '如需托管管理面，请先运行 npm run build:admin。\n',
+  );
+}

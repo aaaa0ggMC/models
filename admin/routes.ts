@@ -39,6 +39,7 @@ import type {
   LoginRequest,
   LoginResponse,
   PageQuery,
+  ProviderPresetListResponse,
   ProviderUpsertRequest,
   SyncTriggerRequest,
 } from './api-types.js';
@@ -66,6 +67,13 @@ export interface AdminRouterDeps {
   rotateDek?(): Promise<KeystoreRotateDekResponse>;
   /** 静态资源服务（webui/admin/）。 */
   serveStatic?(pathname: string, res: ServerResponse): Promise<boolean>;
+  /**
+   * Provider 预设注册表（只读，「新建渠道」ComboBox 数据源）。
+   *
+   * 由 composition-root 从 providers/presets.ts 组装后注入。不注入 = 该端点 501，
+   * 前端退化成自由手填（与旧版一致），不假装有预设。
+   */
+  providerPresets?(): ProviderPresetListResponse['items'];
   /** 日志（可选；不传则静默）。 */
   log?: (message: string) => void;
 }
@@ -233,6 +241,19 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
       // ---- access path 列表（UI 下拉）----
       if (route === 'access-paths' && method === 'GET') {
         sendJson(res, 200, { items: service.listAccessPaths() });
+        return true;
+      }
+
+      // ---- Provider 预设注册表（只读，「新建渠道」ComboBox 数据源）----
+      if (route === 'provider-presets' && method === 'GET') {
+        if (deps.providerPresets === undefined) {
+          sendJson(res, 501, {
+            error: { code: 'not_implemented', message: '未注入 Provider 预设注册表' },
+          });
+          return true;
+        }
+        const items = deps.providerPresets();
+        sendJson(res, 200, { items, total: items.length });
         return true;
       }
 

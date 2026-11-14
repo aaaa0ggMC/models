@@ -10,3 +10,8 @@ scripts/check-docs.mjs
 # 生成物：models.dev 离线快照由 scripts/fetch-models-dev.mjs 生成，重排它会让
 # 「上游改了 → 我们重新生成」的 diff 里混进纯格式噪音，看不出来真正变了什么。
 catalog/vendor/
+
+# 构建产物：tsc 的 dist/ 与管理面前端 webui/admin/dist/（Vite 产物）都是生成的，
+# 不参与 prettier --check（否则「改构建配置」会被格式噪音淹没）。
+dist/
+webui/admin/dist/

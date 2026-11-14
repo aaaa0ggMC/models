@@ -38,6 +38,7 @@ import { ScriptedTransport } from '../gateway-core/transport.js';
 import { EnvCredentialResolver } from '../credentials/resolver.js';
 import { InMemoryProviderProfileRegistry } from '../di/index.js';
 import { createDeepSeekProfile } from '../providers/deepseek/index.js';
+import { PROVIDER_PRESETS } from '../providers/presets.js';
 import { MemoryClientSink } from '../gateway-core/pipeline/sink.js';
 
 const KEYSTORE_PASSPHRASE = 'e2e-test-passphrase-not-real';
@@ -189,6 +190,7 @@ beforeAll(async () => {
       argon2_rehash_recommended: false,
       kek_fingerprint: '0123456789abcdef',
     }),
+    providerPresets: () => PROVIDER_PRESETS,
   });
 
   server = createHttpServer({
@@ -887,6 +889,36 @@ describe('access-paths（UI 下拉数据源）', () => {
     // 每条都有 requires_credential 布尔位
     for (const p of res.body.items ?? []) {
       expect(typeof p['requires_credential']).toBe('boolean');
+    }
+  });
+});
+
+describe('provider-presets（「新建渠道」ComboBox 数据源，只读）', () => {
+  it('透出预设注册表，DeepSeek 有两条 access path 与实测 base', async () => {
+    const res = await api('GET', '/admin/api/provider-presets');
+    expect(res.status).toBe(200);
+    const items = (res.body.items ?? []) as Array<Record<string, unknown>>;
+    expect(typeof res.body.total).toBe('number');
+    expect(items.length).toBeGreaterThan(0);
+
+    const deepseek = items.find((p) => p['id'] === 'deepseek') as
+      { access_paths?: Array<Record<string, unknown>>; base_url?: string } | undefined;
+    expect(deepseek).toBeDefined();
+    const paths = deepseek?.access_paths ?? [];
+    expect(paths.map((p) => p['id'])).toEqual([
+      'deepseek.openai-chat',
+      'deepseek.anthropic-messages',
+    ]);
+    // 实测 base（credentials/resolver.ts）：openai-chat 无 /anthropic 前缀
+    const chat = paths.find((p) => p['id'] === 'deepseek.openai-chat');
+    expect(chat?.['base_url']).toBe('https://api.deepseek.com');
+    const messages = paths.find((p) => p['id'] === 'deepseek.anthropic-messages');
+    expect(messages?.['base_url']).toBe('https://api.deepseek.com/anthropic');
+
+    // 每条预设都带来源与置信度（不编造 base_url 的兜底：置信度字段必存在）
+    for (const p of items) {
+      expect(typeof p['source']).toBe('string');
+      expect(typeof p['confidence']).toBe('string');
     }
   });
 });

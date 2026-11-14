@@ -18,6 +18,10 @@
  * - **任何响应里都不出现完整 secret**——凭据只回掩码（见 MaskedCredential）。
  */
 
+// Provider 预设的权威形状在 providers/presets.ts（与定价表等同属 provider 参考数据），
+// 这里只做契约引用，避免在两处各写一份结构体后漂移。presets.ts 不依赖 node，纯数据。
+import type { ProviderPreset } from '../providers/presets.js';
+
 // ---------------------------------------------------------------------------
 // 通用
 // ---------------------------------------------------------------------------
@@ -339,6 +343,22 @@ export interface AccessPathDto {
 
 export interface AccessPathListResponse {
   items: AccessPathDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Provider 预设注册表（只读；「新建渠道」ComboBox 的数据源）
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /admin/api/provider-presets` —— 已知 Provider 预设（只读）。
+ *
+ * 前端「新建渠道」用它把 ComboBox 填出来：选中预设即带出 base_url / dialect /
+ * 默认模型 / 文档链接 / key 格式提示。纯便利端点，**不改变任何既有语义**：
+ * 没有它前端退化成自由手填（与旧版一致）。
+ */
+export interface ProviderPresetListResponse {
+  items: readonly ProviderPreset[];
+  total: number;
 }
 
 // ---------------------------------------------------------------------------
