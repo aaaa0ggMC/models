@@ -48,7 +48,7 @@
 | 阶段 | 输入 → 输出 | 可否流式 | 可否失败重试 | 插件 hook | 说明 |
 |---|---|---|---|---|---|
 | S0 Ingress | HTTP → `RequestContext` | 是 | 是（鉴权/限流拒绝直接返回，不进 S1） | `onError` | 识别客户端格式、鉴权、限流、分配 `request_id`、超时预算 |
-| S1 Decode | 原始 body → `CanonicalRequest` | 否（请求体必须完整） | 否（格式错误 = 400，不可重试） | `onError` | 客户端格式 codec 解码；产物带 `source_format` |
+| S1 Decode | 原始 body → `CanonicalRequest`（fast path 下只到**信封档**，见 §3 S1） | 否（请求体必须完整） | 否（格式错误 = 400，不可重试） | `onError` | 客户端格式 codec 解码；产物带 `source_format`；信封档只解析路由必需字段，完整档推迟到 S3/S4/S6 |
 | S2 Route | `CanonicalRequest` → `ResolvedRoute` | 否 | 是（路由失败 = 无可用 provider） | `onError` | 别名解析、provider 候选列表、健康/熔断过滤、fast path 判定 |
 | S3 onRequest | `CanonicalRequest` → `CanonicalRequest` | 否 | 否（插件短路算成功） | **`onRequest`**、`onError` | 插件链：压缩、注入、改写、短路返回 |
 | S4 Encode | `CanonicalRequest` → 上游 body | 否 | 否 | `onError` | provider codec 编码；fast path 时输出原始字节 |
@@ -104,7 +104,23 @@ interface RequestContext {
 
 ### S1 Decode（client → canonical）
 
-由 `client_format` 对应的 codec 执行。硬性要求：
+由 `client_format` 对应的 codec 执行，**分两档（review #8.3，作者已拍板定稿：D-fastpath-1）**：
+
+- **信封档（envelope-only）**：fast path 下只做这一档。只解析「信封 + 路由必需字段」——客户端格式识别
+  （`source_format`）、`model` / access_path、usage 信封位置、是否流式（`stream`）、请求体字节长度；
+  **不物化完整 canonical**，只保留原始字节引用；
+- **完整档（full-canonical）**：物化完整 `CanonicalRequest`。慢路径（或有 `full-canonical` 请求侧插件）
+  时才付这个代价。
+
+**完整 canonical 的物化推迟到真正需要它的阶段**：
+
+| 需要完整 canonical 的阶段 | 触发条件 |
+|---|---|
+| S3 onRequest 插件链 | 存在已启用的**请求侧**插件声明 `scope: "full-canonical"` |
+| S4 Encode | 不走 fast path（格式不同 / 插件改写 / 显式禁用） |
+| S6 ProviderDecode | 不走 fast path（需要 canonical 响应才能转回客户端格式） |
+
+硬性要求（两档都适用，完整档的全部语义）：
 
 - **不允许丢字段**。未建模的顶层键必须进入 `raw.unmapped`（见 [10-canonical-schema.md](./10-canonical-schema.md) §raw passthrough）；
 - 遇到**未知的 part 类型**时，降级为 `UnknownPart{ type: "unknown", raw }`，而不是报错——保证前向兼容（provider 新增 block 类型时网关不炸）；
@@ -219,35 +235,40 @@ type CanonicalStreamEvent =
 ### 4.1 判定条件
 
 ```typescript
+/** 准入条件由配置/组合根在启动时计算并缓存（D-fastpath-2），
+ *  运行中增删插件要失效重算——它不是每请求现场判断的。 */
+const FAST_PATH_PLUGIN_ADMISSION: boolean = computePluginAdmission(); // 见 §4.2
+
 function isFastPathEligible(ctx: RequestContext): boolean {
   return (
     ctx.client_format === ctx.provider_format &&          // 格式同一
     ctx.route.provider === referenceImplementationOf(ctx.client_format) && // 或显式声明兼容
     !ctx.state.requires_structural_change &&              // 无插件要求改写结构
-    ctx.client_raw_body_available                           // 保留了原始字节
+    ctx.client_raw_body_available &&                      // 保留了原始字节
+    FAST_PATH_PLUGIN_ADMISSION                            // 插件 manifest scope 准入（D-fastpath-2）
   );
 }
 ```
 
 第三条是核心：**插件有权关闭 fast path**。插件在 `onRequest` 里若改写了 canonical 中"没有 `_raw` 对应关系的部分"，或显式调用 `ctx.disableFastPath("reason")`，Runner 立即切到慢路径并记录原因（用于后续统计"多少请求因为插件/能力不支持而走了转换"）。
 
+第五条是**静态准入**（D-fastpath-2）：manifest `scope` 在启动时算一次并缓存，不是每请求现场判断——详见 §4.2。
+
 ### 4.2 fast path 下做什么 / 不做什么
 
 **不做**：任何结构转换、字段重命名、类型强转。请求体以上游原始字节透传（仅在必要场景做极小改写，见下）。
 
-> ⚠️ **设计风险（review #8.3，待作者拍板）**：按当前流程，**S1 先把请求完整解码成 canonical，S2 才判定走不走 fast path**。
-> 长上下文的大请求体在 fast path 下也要付"完整解码成 canonical"的代价，这与"附加延迟 < 3ms p99"
-> （[00-overview.md](./00-overview.md) §3、[70-roadmap.md](./70-roadmap.md) Phase 1 验收）存在张力。
-> **建议解法：惰性解码 / 只解析信封字段。**
->
-> 1. S1 只做"够用即可"的浅解析：识别 `source_format`、取出 `model` / `stream` / 端点必需的路由字段、保留原始字节引用；
-> 2. 真正的完整解码**推迟到确认不走 fast path 之后**（慢路径入口），或推迟到确实需要某个字段时（按访问器 lazy parse）；
-> 3. **插件依赖要写明**：插件拿到的必须是完整 canonical（这是"插件只面对 canonical"的硬约束），因此只要注册了
->    **任何** `onRequest` 插件，本请求就不能走"完全不解码"档。需要分三级：
->    - 无 `onRequest` 插件 + 同格式 → 完全不解码（只做信封级浅解析）；
->    - 有 `onRequest` 插件但插件只读路由相关字段 → 仍可浅解析（需插件在 manifest 里声明 `needs: "envelope_only"`）；
->    - 插件要改内容 → 必须完整解码（现有 `disableFastPath` 语义）。
-> **待拍板点**：① 是否引入 `needs: "envelope_only"` 这一档；② 浅解析的字段集合怎么定（建议就是 S2 路由 + 计费预检必需的最小集）；③ "完全不解码"档要不要保留字节级 diff 测试（[70-roadmap.md](./70-roadmap.md) Phase 1 验收要求同 provider fast path 与直连 diff 为空）。
+**请求侧惰性解码（review #8.3，作者已拍板定稿：D-fastpath-1）**：S1 只解析「信封 + 路由必需字段」（字段集合见 §3 S1），**完整 canonical 物化推迟到真正需要它的阶段**——S3 插件链 / S4 Encode / S6 ProviderDecode 的**非 fast path 分支**。长上下文的大请求体在 fast path 下不再付"完整解码成 canonical"的代价，这是"附加延迟 < 3ms p99"（[00-overview.md](./00-overview.md) §3、[70-roadmap.md](./70-roadmap.md) Phase 1 验收）能成立的前提。
+
+**响应侧**：只抽取 usage 信封（喂 S10）并**直通原始字节**，不物化完整 canonical 响应。
+
+**插件准入（review #8.3，作者已拍板定稿：D-fastpath-2）**：插件 manifest 声明 `scope: "envelope-only" | "full-canonical"`：
+
+- `envelope-only`——插件只读信封 + 路由相关字段，不做内容改写；
+- `full-canonical`——插件需要完整 canonical（**未声明时按此处理**，即默认最保守）。
+
+**仅当全部已启用的请求侧插件都是 `envelope-only`（或无请求侧插件）时，本请求才允许走 fast path。**
+该条件由**配置/组合根在启动时计算并缓存**（即 §4.1 的 `FAST_PATH_PLUGIN_ADMISSION`），**运行中增删插件必须失效重算**——它不是每请求现场判断的，否则每个请求都要遍历一遍插件表。
 
 **做**（这些都是"统计口径错位修正"，也是 canonical 的主要价值之一）：
 

@@ -56,7 +56,9 @@ interface Adaptor {
   readonly format: FormatId;
   readonly modalities: ModalityKind[];
 
-  /** 请求：wire → canonical */
+  /** 请求：wire → canonical。分两档：**信封档**只解析路由必需字段（fast path 用，见
+   *  [20-pipeline.md](./20-pipeline.md) §3 S1 与 §4.2），**完整档**物化全部 canonical（慢路径用）；
+   *  两档共用同一 codec，不是两套实现。 */
   decode(raw: unknown, ctx: RequestContext): CanonicalRequestEnvelope;
   /** 请求：canonical → wire（含 fast path 判定） */
   encode(req: CanonicalRequestEnvelope, ctx: RequestContext): EncodedRequest;

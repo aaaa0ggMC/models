@@ -21,6 +21,13 @@ interface PluginManifest {
   hooks: HookName[];               // 本插件关心的生命周期点
   capabilities?: PluginCapability[];
   config_schema?: JSONSchema;      // 配置项 schema，WebUI 据此自动生成配置表单
+  /** 请求侧插件需要 canonical 的哪一档（决定 fast path 能否准入，D-fastpath-2）：
+   *  - "envelope-only"：只读信封 + 路由相关字段，不做内容改写；
+   *  - "full-canonical"：需要完整 canonical（**默认，未声明按此处理**）。
+   *  仅当全部已启用的请求侧插件都是 "envelope-only"（或无请求侧插件）时才允许 fast path；
+   *  该条件由配置/组合根在启动时计算并缓存，运行中增删插件需失效重算。
+   *  见 20-pipeline.md §4.2。 */
+  scope?: "envelope-only" | "full-canonical";
   /** 需要全量响应才能工作（如内容审核、用量改写）。
    *  声明后 Runner 仍以流式转发，但会额外维护聚合视图传给插件。 */
   needs?: "aggregate";
@@ -175,6 +182,7 @@ class BillionContextAdaptor implements Plugin {
   manifest = {
     name: "billion-context",
     hooks: ["onRequest"],
+    scope: "full-canonical",           // 要改写 messages，fast path 因此对它关闭
     config_schema: {/* 见下 */},
     order: 10,                          // 尽早跑，后续插件看到的是压缩后历史
   };
