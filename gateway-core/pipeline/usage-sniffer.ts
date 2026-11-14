@@ -62,6 +62,9 @@ export class IncrementalUsageSniffer {
 
   constructor(private readonly opts: UsageSnifferOptions) {}
 
+  /** 未成形的 SSE 事件残片（真实网络里一个 JSON 负载可能被 TCP 分片切断）。 */
+  private pending = "";
+
   /** 喂一个上游 chunk（SSE 文本片段）。返回是否已超限。 */
   push(chunk: string): boolean {
     this.bytes += Buffer.byteLength(chunk, "utf8");
@@ -70,22 +73,34 @@ export class IncrementalUsageSniffer {
       this.truncated = true;
       return false;
     }
+    // SSE 事件以空行分隔；跨 chunk 的半帧先攒着，等完整了再解析
+    this.pending += chunk;
+    const boundary = this.pending.lastIndexOf("\n\n");
+    if (boundary === -1) return true;
+    const complete = this.pending.slice(0, boundary + 2);
+    this.pending = this.pending.slice(boundary + 2);
+    this.consume(complete);
+    return true;
+  }
+
+  /** 解析一段**完整**的 SSE 事件序列（已按空行切好）。 */
+  private consume(sseText: string): void {
     switch (this.opts.flavor) {
       case "openai_chat":
         this.lastOpenAiUsage = lastUsageFromSse(
-          chunk,
+          sseText,
           this.lastOpenAiUsage,
           (o) => asRecord(o["usage"]),
         );
         break;
       case "openai_responses":
-        this.lastOpenAiUsage = lastUsageFromSse(chunk, this.lastOpenAiUsage, (o) => {
+        this.lastOpenAiUsage = lastUsageFromSse(sseText, this.lastOpenAiUsage, (o) => {
           const r = asRecord(o["response"]);
           return r === undefined ? undefined : asRecord(r["usage"]);
         });
         break;
       case "anthropic":
-        for (const u of allUsagesFromSse(chunk)) {
+        for (const u of allUsagesFromSse(sseText)) {
           this.anthropicRaw = u;
           const t = tokenFromAnthropic(u);
           this.anthropicMerged =
@@ -93,16 +108,24 @@ export class IncrementalUsageSniffer {
         }
         break;
       case "gemini":
-        this.lastGeminiUsage = lastUsageFromSse(chunk, this.lastGeminiUsage, (o) => asRecord(o["usageMetadata"]));
+        this.lastGeminiUsage = lastUsageFromSse(
+          sseText,
+          this.lastGeminiUsage,
+          (o) => asRecord(o["usageMetadata"]),
+        );
         break;
       case "generic":
         break;
     }
-    return true;
   }
 
-  /** 流结束；产出归一 usage。 */
+  /** 流结束；冲刷残片并产出归一 usage。 */
   finish(): UsageSnifferResult {
+    if (this.pending.trim() !== "") {
+      const rest = this.pending;
+      this.pending = "";
+      this.consume(rest);
+    }
     switch (this.opts.flavor) {
       case "openai_chat":
       case "openai_responses": {
@@ -177,14 +200,23 @@ function lastUsageFromSse(
   return found;
 }
 
-/** 从一段 SSE 文本里抽出全部 usage 对象（Anthropic 分多次到达时要逐个合并）。 */
+/**
+ * 从一段 SSE 文本里抽出全部 usage 对象（Anthropic 分多次到达时要逐个合并）。
+ *
+ * 注意 Anthropic 的 usage **不在同一层**：`message_start` 的 usage 嵌在 `message.usage` 里
+ * （带 input_tokens + cache），`message_delta` 的 usage 在顶层（带 output_tokens + cache）。
+ * 两处都要取，否则会漏掉输入侧计量。
+ */
 function allUsagesFromSse(sseText: string): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const ev of parseSseEvents(sseText)) {
     const obj = asRecord(jsonOf(ev));
     if (obj === undefined) continue;
-    const usage = asRecord(obj["usage"]);
-    if (usage !== undefined) out.push(usage);
+    const message = asRecord(obj["message"]);
+    const fromMessage = message === undefined ? undefined : asRecord(message["usage"]);
+    if (fromMessage !== undefined) out.push(fromMessage);
+    const top = asRecord(obj["usage"]);
+    if (top !== undefined) out.push(top);
   }
   return out;
 }
