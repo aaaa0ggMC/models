@@ -1,21 +1,12 @@
 /**
  * src/pages/Settings.tsx —— 系统设置第一屏（P0-2）。
  *
- * 只放 8 个最常改的项（后端 `RUNTIME_SETTINGS` 白名单）。每一项都标**当前来源**：
+ * **只放表格与控件**：每一项的说明、白名单理由、四层优先级、env 锁的理由都在
+ * 「帮助 / 文档」页（`#/help`，见 pages/Help.tsx），页面顶部一句「改完即生效」
+ * + 「了解更多」入口。设计文档摘录的来源标注也在帮助页。
  *
- * | 来源 | 含义 | 能不能改 |
- * |---|---|---|
- * | `加密存储` | 你在界面里改的值，最高优先级 | ✅ |
- * | `env` | 部署环境变量，重启才变 | ❌（env 锁） |
- * | `配置文件` | `config/*.json` 里的非敏感默认值 | ✅（改了会造一个更高层的覆盖） |
- * | `默认值` | 编译期内置兜底 | ✅ |
- *
- * **env 锁**：被 env 覆盖的项照样显示当前值，但输入框禁用，并给出原因——
- * 环境变量是部署事实，界面写入会造出一个静默遮盖它的覆盖层，使同一份部署配置
- * 在不同机器上行为不同。服务端同样拒绝（409 `env_locked`），不是只在前端禁用。
- *
- * 改完**不用重启**：值直接写进 pipeline 读的那个 config 对象；重启后仍在
- * （落在加密存储里，启动时应用回来）。
+ * 每一项都标**当前来源**（加密存储 / 环境变量 / 配置文件 / 默认值），被 env 覆盖的项
+ * 显示当前值但输入框禁用，并给出原因（服务端同样回 409 `env_locked`）。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -28,12 +19,14 @@ import {
   Table,
   Tag,
   Toast,
+  Tooltip,
   Typography,
 } from '@douyinfe/semi-ui';
 import { IconRefresh } from '@douyinfe/semi-icons';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtTs } from '../format';
+import { helpHref } from '../router';
 import type { SettingDto, SettingSource } from '../api/types';
 
 const SOURCE_META: Record<
@@ -57,7 +50,7 @@ export function Settings(): JSX.Element {
   const [configFilePath, setConfigFilePath] = useState<string | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  /** 正在编辑的 key → 草稿值。 */
+  /** 正在编辑的 id → 草稿值。 */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
 
@@ -81,12 +74,12 @@ export function Settings(): JSX.Element {
   }, [load]);
 
   const save = async (s: SettingDto): Promise<void> => {
-    const raw = drafts[s.key];
+    const raw = drafts[s.id];
     if (raw === undefined) return;
     const value = s.type === 'int' ? Number(raw) : raw;
-    setSaving(s.key);
+    setSaving(s.id);
     try {
-      await call(`/settings/${encodeURIComponent(s.key)}`, {
+      await call(`/settings/${encodeURIComponent(s.id)}`, {
         method: 'PUT',
         body: { value },
       });
@@ -106,9 +99,19 @@ export function Settings(): JSX.Element {
       width: 150,
       render: (_: unknown, s: SettingDto) => (
         <div>
-          <div style={{ fontWeight: 600 }}>{s.label}</div>
+          <div style={{ fontWeight: 600 }}>
+            {/* 说明进行内 Tooltip：不占版面，鼠标停一下就能看到。 */}
+            <Tooltip content={s.description} position="topLeft">
+              <span style={{ cursor: 'help' }}>
+                {s.label}
+                <Typography.Text type="tertiary" style={{ marginLeft: 4, fontSize: 12 }}>
+                  ⓘ
+                </Typography.Text>
+              </span>
+            </Tooltip>
+          </div>
           <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
-            {s.key}
+            {s.id}
           </Typography.Text>
         </div>
       ),
@@ -130,17 +133,17 @@ export function Settings(): JSX.Element {
           return (
             <Select
               style={{ width: 150 }}
-              value={drafts[s.key] ?? String(s.value)}
+              value={drafts[s.id] ?? String(s.value)}
               optionList={(s.options ?? []).map((o) => ({ value: o, label: o }))}
-              onChange={(v) => setDrafts((d) => ({ ...d, [s.key]: String(v) }))}
+              onChange={(v) => setDrafts((d) => ({ ...d, [s.id]: String(v) }))}
             />
           );
         }
         return (
           <Input
             style={{ width: 150, fontFamily: 'monospace' }}
-            value={drafts[s.key] ?? String(s.value)}
-            onChange={(v) => setDrafts((d) => ({ ...d, [s.key]: v }))}
+            value={drafts[s.id] ?? String(s.value)}
+            onChange={(v) => setDrafts((d) => ({ ...d, [s.id]: v }))}
             placeholder={s.range ? `${s.range.min} – ${s.range.max}` : ''}
           />
         );
@@ -155,55 +158,54 @@ export function Settings(): JSX.Element {
     {
       title: '当前来源',
       dataIndex: 'source',
-      width: 120,
-      render: (_: unknown, s: SettingDto) => <SourceTag source={s.source} />,
+      width: 130,
+      render: (_: unknown, s: SettingDto) => (
+        <Tooltip
+          content={
+            <>
+              <div>{SOURCE_META[s.source]?.label ?? s.source}</div>
+              {s.reason ? <div style={{ marginTop: 4 }}>🔒 {s.reason}</div> : null}
+              {s.updated_at ? (
+                <div style={{ marginTop: 4 }}>
+                  上次修改：{fmtTs(s.updated_at)}（{s.updated_by}）
+                </div>
+              ) : null}
+            </>
+          }
+        >
+          <span>
+            {s.editable ? null : <span style={{ marginRight: 4 }}>🔒</span>}
+            <SourceTag source={s.source} />
+          </span>
+        </Tooltip>
+      ),
     },
     {
-      title: '说明 / 限制',
-      dataIndex: 'description',
-      render: (_: unknown, s: SettingDto) => (
-        <div>
-          <Typography.Text style={{ fontSize: 13 }}>{s.description}</Typography.Text>
-          {s.reason ? (
-            <Typography.Text
-              type="warning"
-              style={{ display: 'block', fontSize: 12, marginTop: 4 }}
-            >
-              🔒 {s.reason}
-            </Typography.Text>
-          ) : null}
-          {s.env_var ? (
-            <Typography.Text
-              type="tertiary"
-              style={{ display: 'block', fontSize: 12, marginTop: 2 }}
-            >
-              环境变量：<span style={{ fontFamily: 'monospace' }}>{s.env_var}</span>
-            </Typography.Text>
-          ) : null}
-          {s.updated_at ? (
-            <Typography.Text
-              type="tertiary"
-              style={{ display: 'block', fontSize: 12, marginTop: 2 }}
-            >
-              上次修改：{fmtTs(s.updated_at)}（{s.updated_by}）
-            </Typography.Text>
-          ) : null}
-        </div>
-      ),
+      title: '环境变量',
+      dataIndex: 'env_var',
+      width: 190,
+      render: (_: unknown, s: SettingDto) =>
+        s.env_var ? (
+          <Typography.Text style={{ fontSize: 12, fontFamily: 'monospace' }}>
+            {s.env_var}
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="tertiary">—</Typography.Text>
+        ),
     },
     {
       title: '操作',
       dataIndex: 'operate',
       width: 110,
       render: (_: unknown, s: SettingDto) => {
-        const dirty = drafts[s.key] !== undefined && drafts[s.key] !== String(s.value);
+        const dirty = drafts[s.id] !== undefined && drafts[s.id] !== String(s.value);
         return (
           <Button
             theme="solid"
             type="primary"
             size="small"
             disabled={!s.editable || !dirty}
-            loading={saving === s.key}
+            loading={saving === s.id}
             onClick={() => void save(s)}
           >
             保存
@@ -221,6 +223,9 @@ export function Settings(): JSX.Element {
         <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
           改完即时生效，不用重启；重启后仍在（落在加密存储里）。
         </Typography.Text>
+        <a href={helpHref('settings')} style={{ fontSize: 12 }}>
+          了解更多
+        </a>
         <div style={{ flex: 1 }} />
         <Button icon={<IconRefresh />} onClick={() => void load()}>
           刷新
@@ -234,12 +239,13 @@ export function Settings(): JSX.Element {
       {locked.length > 0 ? (
         <Banner
           type="warning"
-          title={`${locked.length} 项被环境变量锁定`}
+          title={`${locked.length} 项被环境变量锁定：只能看、不能改`}
           description={
             <>
-              这些项由部署环境变量提供，界面里只能看、不能改。原因是：环境变量是部署事实，
-              界面写入会造出一个静默遮盖它的覆盖层，使同一份部署配置在不同机器上行为不同。
-              请改环境变量并重启；要改用界面，先取消对应的 AG_* 变量。
+              环境变量是部署事实，界面写入会造出一个静默遮盖它的覆盖层。
+              <a href={helpHref('settings')} style={{ marginLeft: 8 }}>
+                为什么
+              </a>
             </>
           }
           style={{ marginBottom: 16 }}
@@ -250,32 +256,19 @@ export function Settings(): JSX.Element {
         <Table
           columns={columns}
           dataSource={items}
-          rowKey="key"
+          rowKey="id"
           loading={loading}
           pagination={false}
           empty="读不到设置项。"
         />
       </Card>
 
-      <Card title="这 8 项为什么是这 8 项">
-        <Typography.Text type="tertiary" style={{ fontSize: 13 }}>
-          白名单制，不是「所有配置都能热改」。可运行时改的项必须满足两个条件：
-          改错了不会让网关起不来（所以端口 / host / 密钥路径不在内），以及
-          有明确的取值范围（所以每一项都有 min–max 或枚举）。其余配置仍走环境变量
-          与配置文件——那两层是要入 git / 入部署清单的，本来就不该被界面随便改。
+      {configFilePath ? (
+        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
+          配置文件（第三层）：
+          <span style={{ fontFamily: 'monospace', marginLeft: 4 }}>{configFilePath}</span>
         </Typography.Text>
-        {configFilePath ? (
-          <Typography.Text type="tertiary" style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
-            配置文件（第三层）：<span style={{ fontFamily: 'monospace' }}>{configFilePath}</span>
-          </Typography.Text>
-        ) : null}
-        <Typography.Text type="tertiary" style={{ display: 'block', fontSize: 12, marginTop: 8 }}>
-          优先级（高 → 低）：加密存储 {'>'} 环境变量 {'>'} 配置文件 {'>'} 内置默认值。
-          敏感值不在这张表里——它们只以{' '}
-          <span style={{ fontFamily: 'monospace' }}>env:&lt;VAR&gt;</span>{' '}
-          引用的形态登记，值永远留在进程环境里。
-        </Typography.Text>
-      </Card>
+      ) : null}
     </div>
   );
 }

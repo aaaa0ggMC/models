@@ -4,6 +4,8 @@
 真正的 Vite 工程（React 18 + TypeScript + [Semi Design](https://semi.design/)），
 信息架构对标 [NewAPI / one-api 一系](https://github.com/Calcium-Ion/new-api)（同栈
 React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主、信息密度优先，不放说明段落。
+解释性内容（设计结论、优先级规则、代价说明）集中在**「帮助 / 文档」页**（`#/help`，
+支持 `?section=<id>` 小节深链），各功能页只留一句话摘要 + 「了解更多」入口。
 
 > 这取代了早先「单个手写 `app.js`、无框架、无构建」的版本（已删除）。安全约定全部保留，
 > 见下文「安全约定」。
@@ -26,10 +28,11 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
 | `src/App.tsx` | 外壳：Semi `Nav` 侧栏 + 内容区 + 未登录门 |
 | `src/auth.tsx` | 会话状态（**令牌只在内存**）+ 绑定好的 API 调用器 |
 | `src/api/client.ts` | fetch 封装：401 处理 + 密钥防泄漏兜底（tripwire） |
+| `src/api/client.test.ts` | secret tripwire 的回归测试（纯函数，不引 jsdom；判据是「值的形状」而不是字段名） |
 | `src/api/types.ts` | 管理面 HTTP 契约的**前端镜像**（权威在 `admin/api-types.ts`） |
-| `src/router.ts` | 最小 hash 路由（不引 react-router） |
+| `src/router.ts` | 最小 hash 路由（不引 react-router）；`helpHref()` 拼帮助页小节深链 |
 | `src/format.ts` | 时间 / 数字 / 金额格式化 |
-| `src/pages/*` | Login / Channels / Credentials / VirtualKeys / Aliases / ModelCatalog / Usage / Settings / System |
+| `src/pages/*` | Login / Channels / Credentials / VirtualKeys / Aliases / ModelCatalog / Usage / Settings / System / Help |
 | `src/components/ChannelFormModal.tsx` | 新建 / 编辑渠道弹窗（ComboBox 选 Provider + API Key） |
 
 ## 信息架构（NewAPI → 我们）
@@ -44,7 +47,14 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
 | 数据看板 | 用量看板 | `#/usage` |
 | 设置 | 系统设置（第一屏 8 项 + 来源标注） | `#/settings` |
 | 设置 / 关于 | 安全与密钥（密钥状态 / 代价说明 / 关于） | `#/system` |
+| — | 帮助 / 文档 | `#/help`（支持 `?section=<id>` 小节深链） |
 
+- **帮助 / 文档页**：全站解释性文字集中在这里（设计结论、优先级规则、代价说明），每节标注
+  来源——设计文档摘录标 `docs/design/<文件> §N`，实现摘录标 `config/settings.ts` /
+  `admin/aliases.ts` 这类**实现文件名**。小节锚点用 DOM `id` + `scrollIntoView` 定位，
+  不用 `<a href="#id">`（那会把 hash 路由判到未知路由上去）；各功能页用
+  `helpHref('<section>')` 拼深链指过来。小节清单：`settings` / `keystore` /
+  `client-key` / `aliases` / `catalog` / `usage`。
 - **渠道页**：顶栏「新建渠道」+ 搜索，主体表格（名称 / Provider / 状态 / 模型数 / 操作
   [编辑·删除·测试]），状态用 `Tag`。
 - **新建渠道弹窗**：ComboBox（可搜索、分组）选已知 Provider → 自动带出 base_url /
@@ -77,18 +87,31 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
    `localStorage` / `sessionStorage`——那会让令牌在关闭标签页后仍可被同源任意脚本读到，
    而管理面威胁模型里同源 XSS 是要防的。代价是刷新页面要重新登录，登录页与系统页都明示。
 2. **完整密钥永不渲染**（唯一例外见下）。凭据表只渲染服务端给的 `masked`；
-   `src/api/client.ts` 的 `secretTripwire` 在把响应交回页面前扫一遍，出现疑似完整密钥字段
-   就抛错并阻止渲染（只在 `console.warn` 记字段路径，绝不记值）。完整 key 只在录入 /
+   `src/api/client.ts` 的 `secretTripwire` 在把响应交回页面前扫一遍，出现疑似完整密钥的
+   **值**就抛错并阻止渲染（只在 `console.warn` 记字段路径，绝不记值）。完整 key 只在录入 /
    新建表单里出现一次。
-   **唯一例外**：`POST /virtual-keys` 的创建响应会带一次 `plaintext`（66-auth.md §2.2：
-   明文只在创建响应里返回一次）。那个调用显式传 `allowPlaintext: true`，且该选项**只对
-   字面名为 `plaintext` 的字段开口子**；其他任何 secret 形字段照样被拦。测试
-   `tests/ui-contract.test.ts` 断言全前端只有这一处使用它。
+   **判据以值的形状为主**：已知密钥前缀（`sk-ag-` / `AIza` / `ghp_` …，后面必须跟
+   ≥8 位 base62 随机位）+ 长度 + 字符集（一长串无分隔符 base62 且大小写数字俱全）。
+   **字段名只是辅助信号**——只对 `secret` / `api_key` / `access_token` / `password`
+   等命名生效，且**不含裸 `key`**。
+   **历史教训（别回退）**：旧版只认字段名，而 `GET /settings` 的每一项用 `key` 字段
+   承载设置项标识符（`global_timeout_ms`…），与虚拟 key 域撞名，整个设置页被误拦成
+   「读不到设置项」。设置项标识符已改名 `id`（`admin/api-types.ts` 的 `SettingDto`，
+   breaking change），守卫也改成了按值判断。
+   **两个开口子都只认字面字段名、各只有一个调用方**：`allowPlaintext` → `plaintext`
+   （`POST /virtual-keys`，唯一返回完整密钥的端点）；`allowSessionToken` → `token`
+   （`POST /login`：会话令牌是 43 位 base64url 随机串，与无前缀的 provider key 在值上
+   无法区分，只能显式放行；登录响应里其他字段照样过守卫）。
+   回归测试在 `src/api/client.test.ts`（前端工程内，vitest 覆盖得到；后端 tsconfig 是
+   NodeNext，解析不了前端省略扩展名的相对导入，所以不放 `tests/`）；`tests/ui-contract.test.ts`
+   断言全前端只有一处使用 `allowPlaintext`。
 3. **代价文案原样展示**。`keystore.tradeoff_note`
    （[`docs/design/65-storage-and-retention.md`](../docs/design/65-storage-and-retention.md)
    §3.2b「自动解锁换不来运行时防护」）系统页用单行 + 弹窗呈现，**不截断文本内容、不改写、
-   不"优化"**（单行只是 CSS 视觉截断，完整原文在弹窗里）。未登录 401 行为不变：带令牌仍
-   401 = 会话过期 → 清令牌回登录页；登录接口的 401 原样带给用户。
+   不"优化"**（单行只是 CSS 视觉截断，完整原文在弹窗里）；「帮助 / 文档」页的 keystore
+   小节直接渲染 `useAuth()` 拿到的 `bootstrap.keystore.tradeoff_note`，同样整段呈现、
+   不做任何改写。未登录 401 行为不变：带令牌仍 401 = 会话过期 → 清令牌回登录页；登录接口的
+   401 原样带给用户。
 
 ## 构建与部署
 
@@ -111,10 +134,14 @@ npm run build              # 后端 tsc + build:admin + copy-static-assets：
 ```bash
 npm run typecheck:admin     # tsc --noEmit -p webui/admin/tsconfig.json
 npm run typecheck           # 后端（不受前端影响）
-npm test                    # vitest（含 /admin/api/provider-presets 新端点测试）
+npm test                    # vitest（含 /admin/api/provider-presets 新端点测试、
+                            #   webui/admin/src/api/client.test.ts 的 tripwire 纯函数测试）
 npm run lint                # 后端 eslint（webui/** 已排除，走独立工具链）
 npm run format              # prettier --check（生成物 dist/ 与 webui/admin/dist/ 已忽略）
 ```
+
+`webui/admin/src/api/client.test.ts` 是前端工程内唯一的测试文件：纯函数、不引 jsdom，
+由仓库根的 vitest 一并跑到（`webui/**` 只被后端 eslint 排除，没有被 vitest 排除）。
 
 ## Provider 预设与来源
 

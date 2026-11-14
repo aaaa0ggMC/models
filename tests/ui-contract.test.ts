@@ -103,11 +103,41 @@ describe('UI 契约：完整密钥只有一条渲染路径', () => {
       'webui/admin/src/pages/Channels.tsx',
       'webui/admin/src/pages/Usage.tsx',
       'webui/admin/src/pages/System.tsx',
+      'webui/admin/src/pages/Aliases.tsx',
+      'webui/admin/src/pages/ModelCatalog.tsx',
+      'webui/admin/src/pages/Login.tsx',
+      'webui/admin/src/pages/Help.tsx',
       'webui/admin/src/auth.tsx',
     ];
     for (const f of readers) {
       expect(code(f), `${f} 的代码不该读 plaintext`).not.toContain('plaintext');
     }
+  });
+
+  it('会话令牌的开口子只有登录一处，且它就是 POST /login', () => {
+    const files = [
+      'webui/admin/src/api/client.ts',
+      'webui/admin/src/auth.tsx',
+      'webui/admin/src/pages/VirtualKeys.tsx',
+      'webui/admin/src/pages/Settings.tsx',
+      'webui/admin/src/pages/Credentials.tsx',
+      'webui/admin/src/pages/Channels.tsx',
+      'webui/admin/src/pages/Aliases.tsx',
+      'webui/admin/src/pages/Usage.tsx',
+      'webui/admin/src/pages/System.tsx',
+      'webui/admin/src/pages/ModelCatalog.tsx',
+      'webui/admin/src/pages/Help.tsx',
+    ];
+    // client.ts 是选项的定义处，不算使用点
+    const withOptIn = files
+      .filter((f) => f !== 'webui/admin/src/api/client.ts')
+      .filter((f) => read(f).includes('allowSessionToken'));
+    expect(withOptIn).toEqual(['webui/admin/src/auth.tsx']);
+    const auth = code('webui/admin/src/auth.tsx');
+    const idx = auth.indexOf('allowSessionToken');
+    expect(idx).toBeGreaterThanOrEqual(0);
+    const around = auth.slice(Math.max(0, idx - 200), idx + 200);
+    expect(around).toContain("'/login'");
   });
 
   it('VirtualKeys 页的表格列里没有 plaintext / secret 形字段', () => {
@@ -141,12 +171,50 @@ describe('UI 契约：设置页标注来源并对 env 覆盖项只读', () => {
 
   it('不可改时给出原因（env 锁的说明文案）', () => {
     expect(SETTINGS_PAGE).toContain('s.reason');
-    expect(SETTINGS_PAGE).toContain('AG_*');
+    // 理由的长文搬到帮助页了，页面只留一句 + 「为什么」入口
+    expect(SETTINGS_PAGE).toContain("helpHref('settings')");
   });
 
-  it('保存走 PUT /settings/{key}（不是 POST 全量覆盖）', () => {
+  it('保存走 PUT /settings/{id}（不是 POST 全量覆盖）', () => {
     expect(SETTINGS_PAGE).toContain("method: 'PUT'");
-    expect(SETTINGS_PAGE).toContain('`/settings/${encodeURIComponent(s.key)}`');
+    expect(SETTINGS_PAGE).toContain('`/settings/${encodeURIComponent(s.id)}`');
+  });
+
+  it('设置项标识符字段叫 id，不叫 key（与虚拟 key 域不撞名）', () => {
+    expect(SETTINGS_PAGE).toContain('rowKey="id"');
+    expect(SETTINGS_PAGE).not.toMatch(/s\.key\b/);
+    const dto = sliceInterface(ADMIN_TYPES, 'SettingDto');
+    expect(dto).toMatch(/\bid: string;/);
+    expect(dto).not.toMatch(/\bkey: string;/);
+    // 前端镜像同步改名
+    expect(WEB_TYPES).toContain('export interface SettingDto');
+    const webDto = sliceInterface(WEB_TYPES, 'SettingDto');
+    expect(webDto).toMatch(/\bid: string;/);
+    expect(webDto).not.toMatch(/\bkey: string;/);
+  });
+});
+
+describe('UI 契约：secret tripwire 按值判断，不按字段名', () => {
+  it('判据里有密钥前缀 / 长度 / 字符集，而不是只匹配字段名', () => {
+    // 前缀清单（值的形状）
+    expect(CLIENT).toMatch(/KEY_PREFIX_RE/);
+    expect(CLIENT).toMatch(/sk-ag-/);
+    // 长度阈值与字符集
+    expect(CLIENT).toMatch(/MIN_OPAQUE_LEN/);
+    expect(CLIENT).toContain('/^[A-Za-z0-9]+$/');
+  });
+
+  it('字段名判据里不再有裸 key（设置页误报的根因）', () => {
+    const secretish = CLIENT.slice(
+      CLIENT.indexOf('SECRETISH_NAME_RE'),
+      CLIENT.indexOf('isOpaqueCredentialish'),
+    );
+    expect(secretish).not.toMatch(/\^key\$/);
+    expect(secretish).not.toMatch(/\|key\|/);
+  });
+
+  it('守卫的回归测试在前端工程里（vitest 覆盖得到）', () => {
+    expect(read('webui/admin/src/api/client.test.ts')).toContain('looksLikeSecretValue');
   });
 });
 
@@ -182,7 +250,7 @@ describe('UI 契约：前端类型与后端契约同字段', () => {
 
   it('SettingDto 的每个字段都在 admin/api-types.ts 里', () => {
     const fields = [
-      'key',
+      'id',
       'label',
       'description',
       'unit',

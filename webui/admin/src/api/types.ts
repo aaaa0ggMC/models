@@ -362,8 +362,16 @@ export interface VirtualKeyUsage {
 
 export type SettingSource = 'encrypted_storage' | 'env' | 'config_file' | 'default';
 
+/**
+ * 一个运行时设置项（权威形状在 admin/api-types.ts 的 SettingDto）。
+ *
+ * `id` 是设置项标识符（`global_timeout_ms` … 共 8 项），也是 `PUT /settings/{id}`
+ * 路径里的那段。**原字段名叫 `key`，已改名 `id`**：与虚拟 key 域的 `key` 撞名，
+ * 前端脱敏守卫只认字段名时把整个设置页误拦了；守卫现已改为按值的形状判断，
+ * 字段名也一并改名（breaking change，见 admin/api-types.ts 的注释）。
+ */
 export interface SettingDto {
-  key: string;
+  id: string;
   label: string;
   description: string;
   unit: string;

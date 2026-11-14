@@ -2,14 +2,16 @@
  * src/pages/Usage.tsx —— 用量 / 对账看板页。
  *
  * 顶部汇总卡（Semi Statistic：请求数 / 输入 token / 输出 token / 现金 / 等价 API / 未定价），
- * 下面最近记录表格 + 余额探测。不用文字描述这些数字。
+ * 下面最近记录表格 + 余额探测。不用文字描述这些数字——双口径与对账的规则见
+ * 「帮助 / 文档」的 usage 小节。
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Col, Row, Table, Tag, Toast } from '@douyinfe/semi-ui';
+import { Button, Card, Col, Row, Table, Tag, Toast, Tooltip, Typography } from '@douyinfe/semi-ui';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtInt, fmtRatio, fmtTs, fmtUsd } from '../format';
+import { helpHref } from '../router';
 import type { UsageDashboardResponse } from '../api/types';
 
 const RANGES = [
@@ -83,6 +85,16 @@ export function Usage(): JSX.Element {
       ]
     : [];
 
+  /** 汇总卡的 Tooltip（口径说明不放版面，见帮助页 usage 小节）。 */
+  const STAT_TIP: Record<string, string> = {
+    请求数: '区间内的请求总数。',
+    '输入 tokens': '输入 token 合计（含 cache read 部分，口径以 provider 上报为准）。',
+    '输出 tokens': '输出 token 合计（部分 provider 把思考 token 计入这里）。',
+    现金费用: '实际现金支出：订阅路径为 0（那笔钱是月费，不随单次请求发生）。',
+    '等价 API 价值': '同样的 tokens 若走 API key 会花多少；订阅路径下它是唯一稳定的参考值。',
+    未定价请求: '拿不到价格的请求——只记 token，不扣也不拦额度。',
+  };
+
   const recentColumns = [
     {
       title: '时间',
@@ -145,6 +157,10 @@ export function Usage(): JSX.Element {
             {r.label}
           </Button>
         ))}
+        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
+          现金与等价 API 是两个口径，分开存储、不相加。
+        </Typography.Text>
+        <a href={helpHref('usage')}>了解更多</a>
         <div style={{ flex: 1 }} />
         <Button theme="solid" type="primary" onClick={() => void probeBalance()}>
           探测余额
@@ -159,7 +175,9 @@ export function Usage(): JSX.Element {
         {statCards.map((c) => (
           <Col key={c.title} span={4}>
             <Card bodyStyle={{ padding: 16 }}>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>{c.title}</div>
+              <Tooltip content={STAT_TIP[c.title] ?? ''}>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>{c.title}</div>
+              </Tooltip>
               <div style={{ fontSize: 22, fontWeight: 600, marginTop: 4 }}>
                 {c.value}
                 {c.suffix ? (
@@ -189,7 +207,14 @@ export function Usage(): JSX.Element {
       </Card>
 
       {data?.reconciliation ? (
-        <Card title="对账" style={{ marginTop: 16 }}>
+        <Card
+          title={
+            <Tooltip content="区间级对账：把区间内余额差与区间内估算现金总和对比，不做逐笔归因；偏差超阈值只告警，不改写历史。">
+              <span>对账</span>
+            </Tooltip>
+          }
+          style={{ marginTop: 16 }}
+        >
           <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 14 }}>
             <span>
               估算现金 <b>{fmtUsd(data.reconciliation.estimated_cash)}</b>

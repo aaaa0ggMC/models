@@ -2,15 +2,27 @@
  * src/pages/ModelCatalog.tsx —— 模型目录页（能力矩阵只读视图）。
  *
  * 数据与 ir/capability.ts 同源（GET /admin/api/capabilities）。支持按模态/关键词过滤，
- * 点行看详情（Drawer）。顶部可触发一次同步（上游发现 / 离线目录刷新）。
+ * 点行看详情（SideSheet）。顶部可触发一次同步（上游发现 / 离线目录刷新）。
+ * 三层来源与 stale 语义见「帮助 / 文档」的 catalog 小节。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Input, Select, SideSheet, Table, Tag, Toast } from '@douyinfe/semi-ui';
+import {
+  Button,
+  Input,
+  Select,
+  SideSheet,
+  Table,
+  Tag,
+  Toast,
+  Tooltip,
+  Typography,
+} from '@douyinfe/semi-ui';
 import { IconRefresh } from '@douyinfe/semi-icons';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtInt } from '../format';
+import { helpHref } from '../router';
 import type { CapabilityMatrixEntry } from '../api/types';
 
 export function ModelCatalog(): JSX.Element {
@@ -92,18 +104,30 @@ export function ModelCatalog(): JSX.Element {
       ),
     },
     {
-      title: '上下文',
+      title: (
+        <Tooltip content="该 access_path 的上下文窗口（token 数）。">
+          <span>上下文</span>
+        </Tooltip>
+      ),
       dataIndex: 'context_window',
       render: (_: unknown, e: CapabilityMatrixEntry) => fmtInt(e.context_window),
     },
     {
-      title: '最大输出',
+      title: (
+        <Tooltip content="单次请求允许的最大输出 token。">
+          <span>最大输出</span>
+        </Tooltip>
+      ),
       dataIndex: 'max_output_tokens',
       render: (_: unknown, e: CapabilityMatrixEntry) => fmtInt(e.max_output_tokens),
     },
     { title: '模态', dataIndex: 'modality' },
     {
-      title: '约束',
+      title: (
+        <Tooltip content="上游行为约束：sys = system_prompt_update，tool = tool_update（是否允许中途更新）。">
+          <span>约束</span>
+        </Tooltip>
+      ),
       dataIndex: 'constraints',
       render: (_: unknown, e: CapabilityMatrixEntry) => {
         const bits: string[] = [];
@@ -120,7 +144,11 @@ export function ModelCatalog(): JSX.Element {
       },
     },
     {
-      title: '合约测试',
+      title: (
+        <Tooltip content="该模型的格式互转是否有往返（round-trip）测试覆盖。">
+          <span>合约测试</span>
+        </Tooltip>
+      ),
       dataIndex: 'contract_tested',
       render: (_: unknown, e: CapabilityMatrixEntry) => (
         <Tag color={e.contract_tested ? 'green' : 'grey'}>
@@ -129,7 +157,11 @@ export function ModelCatalog(): JSX.Element {
       ),
     },
     {
-      title: '状态',
+      title: (
+        <Tooltip content="implemented = 已接入可用；planned = 计划中；其余 = 暂不可用。">
+          <span>状态</span>
+        </Tooltip>
+      ),
       dataIndex: 'status',
       render: (_: unknown, e: CapabilityMatrixEntry) => (
         <Tag
@@ -147,6 +179,10 @@ export function ModelCatalog(): JSX.Element {
         <Button icon={<IconRefresh />} onClick={() => void sync()}>
           同步上游
         </Button>
+        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
+          能力矩阵只读；字段由 offline / upstream / config 三层合并而来。
+        </Typography.Text>
+        <a href={helpHref('catalog')}>了解更多</a>
         <div style={{ flex: 1 }} />
         <Select
           placeholder="按模态过滤"

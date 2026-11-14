@@ -80,7 +80,15 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
     async (password?: string, accessToken?: string) => {
       const body =
         accessToken !== undefined ? { access_token: accessToken } : { password: password ?? '' }; // privacy-scan: ignore —— LoginRequest 契约字段，右侧是登录表单输入，无字面量
-      const res = await call<LoginResponse>('/login', { method: 'POST', body, auth: false });
+      const res = await call<LoginResponse>('/login', {
+        method: 'POST',
+        body,
+        auth: false,
+        // 会话令牌是登录响应里唯一该出现的东西，但它的形态（43 位 base64url 随机串）
+        // 与一把没有固定前缀的 provider key 无法从值上区分，只能显式开口子。
+        // 登录响应里的其他字段照样过 secretTripwire。
+        allowSessionToken: true,
+      });
       if (res.ok !== true || typeof res.token !== 'string' || res.token.length === 0) {
         throw new Error(res.error ?? '登录响应里没有会话令牌（token）。');
       }

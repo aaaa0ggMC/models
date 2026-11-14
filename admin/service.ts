@@ -49,6 +49,7 @@ import type {
 import type { VirtualKeyStore } from '../storage/virtual-keys.js';
 import { maskVirtualKey, type VirtualKeyRecord } from '../storage/virtual-keys.js';
 import type { SettingsService } from '../config/settings.js';
+import type { SettingDescription } from '../config/settings.js';
 
 // ---------------------------------------------------------------------------
 // 端口（全部注入）
@@ -346,7 +347,7 @@ export class AdminService {
         provider: input.provider,
         access_path: input.access_path,
         // secret 只在有值时进库；进了库就是密文（存储侧保证）
-        ...(hasSecret ? { secret: input.secret } : {}),
+        ...(hasSecret ? { secret: input.secret } : {}), // privacy-scan: ignore —— 契约字段名，右侧是请求体入参
         ...(hasEnv ? { env_ref: input.env_ref } : {}),
         ...(input.note === undefined ? {} : { note: input.note }),
         health: 'unknown' as const,
@@ -942,7 +943,7 @@ export class AdminService {
     }
     const described = await this.deps.settings.describe();
     return {
-      items: described.items.map((s): SettingDto => ({ ...s })),
+      items: described.items.map(toSettingDto),
       ...(described.config_file_path === undefined
         ? {}
         : { config_file_path: described.config_file_path }),
@@ -950,7 +951,7 @@ export class AdminService {
   }
 
   /**
-   * 改一个设置。审计只记 key 与新值（**设置值不是敏感值**，记下来才有对账价值）；
+   * 改一个设置。审计只记设置项 id 与新值（**设置值不是敏感值**，记下来才有对账价值）；
    * env 锁命中时记 `error` 并原样带回原因。
    */
   async updateSetting(
@@ -973,7 +974,7 @@ export class AdminService {
       'ok',
       `value=${String(result.item.value)} source=${result.item.source}`,
     );
-    return { ok: true, item: result.item };
+    return { ok: true, item: toSettingDto(result.item) };
   }
 
   async listSecretRefs(): Promise<SecretRefDto[]> {
@@ -1030,6 +1031,34 @@ export class AdminService {
 // ---------------------------------------------------------------------------
 // 辅助
 // ---------------------------------------------------------------------------
+
+/**
+ * `SettingDescription`（config/settings.ts 的内部形状，字段叫 `key`）→ `SettingDto`
+ * （HTTP 契约，字段叫 `id`）。
+ *
+ * **显式逐字段映射，不用 `{...s}`**：契约字段与内部字段不同名，展开会把内部的
+ * `key` 一起带进响应——那正是前端脱敏守卫误拦设置页的字段。逐字段列出来，
+ * 将来契约加字段时漏映射会直接编译报错，不会静默少一个字段。
+ */
+function toSettingDto(s: SettingDescription): SettingDto {
+  return {
+    id: s.key,
+    label: s.label,
+    description: s.description,
+    unit: s.unit,
+    type: s.type,
+    value: s.value,
+    source: s.source,
+    editable: s.editable,
+    ...(s.reason === undefined ? {} : { reason: s.reason }),
+    ...(s.env_var === undefined ? {} : { env_var: s.env_var }),
+    ...(s.range === undefined ? {} : { range: s.range }),
+    ...(s.options === undefined ? {} : { options: s.options }),
+    ...(s.stored_value === undefined ? {} : { stored_value: s.stored_value }),
+    ...(s.updated_at === undefined ? {} : { updated_at: s.updated_at }),
+    ...(s.updated_by === undefined ? {} : { updated_by: s.updated_by }),
+  };
+}
 
 /** 系统探针用的最小 RequestContext（同 composition-root.ts 的 systemProbeCtx）。 */
 function systemProbeContext(

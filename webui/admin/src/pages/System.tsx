@@ -3,7 +3,8 @@
  *
  * 密钥代价说明（keystore.tradeoff_note）是 65-storage-and-retention.md §3.2b 要求
  * **原样展示**的硬约束：这里压成**一行**（CSS 截断，不改写文本）+ 「查看详情」弹窗
- * 给完整原文——既满足「不得改写」，又不让大段文字占据版面。
+ * 给完整原文——既满足「不得改写」，又不让大段文字占据版面。同一段原文也在
+ * 「帮助 / 文档」的 keystore 小节整段呈现。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -16,11 +17,13 @@ import {
   Table,
   Tag,
   Toast,
+  Tooltip,
   Typography,
 } from '@douyinfe/semi-ui';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtBool, fmtInt } from '../format';
+import { helpHref } from '../router';
 import type { KeystoreStatusResponse } from '../api/types';
 
 const TRADEOFF_SOURCE =
@@ -112,29 +115,65 @@ export function System(): JSX.Element {
     ? [
         {
           key: 'mode',
-          label: '解锁模式',
+          label: (
+            <Tooltip content="passphrase = 启动口令（A 档）；key_file = 密钥文件（C 档）。">
+              <span>解锁模式</span>
+            </Tooltip>
+          ),
           value: status.mode === 'passphrase' ? '启动口令（passphrase）' : '密钥文件（key_file）',
         },
         {
           key: 'unlocked',
-          label: '已解锁',
+          label: (
+            <Tooltip content="未解锁时界面能打开，但任何需要读 secret 的操作都会失败。">
+              <span>已解锁</span>
+            </Tooltip>
+          ),
           value: <Tag color={status.unlocked ? 'green' : 'red'}>{fmtBool(status.unlocked)}</Tag>,
         },
         {
           key: 'dek',
-          label: '当前 DEK',
+          label: (
+            <Tooltip content="当前数据加密密钥（per-session DEK）；轮换它要重加密历史记录。">
+              <span>当前 DEK</span>
+            </Tooltip>
+          ),
           value: <span style={{ fontFamily: 'monospace' }}>{status.active_dek_id || '—'}</span>,
         },
-        { key: 'count', label: '已加密条数', value: fmtInt(status.encryption_count) },
-        { key: 'rotate_dek', label: '建议轮换 DEK', value: status.should_rotate_dek ? '是' : '否' },
+        {
+          key: 'count',
+          label: (
+            <Tooltip content="用当前 DEK 加密过的记录条数，用于判断是否该轮换。">
+              <span>已加密条数</span>
+            </Tooltip>
+          ),
+          value: fmtInt(status.encryption_count),
+        },
+        {
+          key: 'rotate_dek',
+          label: (
+            <Tooltip content="条数或时间达到阈值时置位；轮换会把历史记录用新 DEK 重加密。">
+              <span>建议轮换 DEK</span>
+            </Tooltip>
+          ),
+          value: status.should_rotate_dek ? '是' : '否',
+        },
         {
           key: 'argon2',
-          label: '建议重算 Argon2',
+          label: (
+            <Tooltip content="Argon2 参数已升级时置位；重新派生口令即可，数据不丢。">
+              <span>建议重算 Argon2</span>
+            </Tooltip>
+          ),
           value: status.argon2_rehash_recommended ? '是（重新派生口令即可，数据不丢）' : '否',
         },
         {
           key: 'kek',
-          label: 'KEK 指纹',
+          label: (
+            <Tooltip content="KEK 指纹（不含 KEK 本体）：轮换后它会变，可用于确认换没换。">
+              <span>KEK 指纹</span>
+            </Tooltip>
+          ),
           value: <span style={{ fontFamily: 'monospace' }}>{status.kek_fingerprint || '—'}</span>,
         },
       ]
@@ -177,7 +216,14 @@ export function System(): JSX.Element {
       </Card>
 
       {note.length > 0 ? (
-        <Card title="密钥自动解锁的代价" style={{ marginBottom: 16 }}>
+        <Card
+          title={
+            <Tooltip content="服务端原文，管理面不得改写；完整原文见「查看详情」与帮助页 keystore 小节。">
+              <span>密钥自动解锁的代价</span>
+            </Tooltip>
+          }
+          style={{ marginBottom: 16 }}
+        >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <Typography.Text
               type="warning"
@@ -194,6 +240,7 @@ export function System(): JSX.Element {
             <Button size="small" onClick={() => setShowNote(true)}>
               查看详情
             </Button>
+            <a href={helpHref('keystore')}>帮助页</a>
           </div>
           <div style={{ fontSize: 12, opacity: 0.6, marginTop: 6 }}>
             {TRADEOFF_SOURCE}（服务端原文，未作任何改写）
@@ -201,14 +248,20 @@ export function System(): JSX.Element {
         </Card>
       ) : null}
 
-      <Card title="密钥轮换（破坏性操作）" style={{ marginBottom: 16 }}>
+      <Card
+        title={
+          <Tooltip content="两者都会记入审计日志；网关没注入对应端口时会明确返回 501，不假装成功。">
+            <span>密钥轮换（破坏性操作）</span>
+          </Tooltip>
+        }
+        style={{ marginBottom: 16 }}
+      >
         <Typography.Text
           type="tertiary"
           style={{ display: 'block', marginBottom: 12, fontSize: 13 }}
         >
-          KEK 轮换只重包裹 DEK，数据密文不动；DEK
-          轮换会重加密历史记录。两者都会记入审计日志；网关没注入对应端口时会明确返回
-          501，不假装成功。
+          KEK 轮换只重包裹 DEK，数据密文不动；DEK 轮换会重加密历史记录。
+          <a href={helpHref('keystore')}>了解更多</a>
         </Typography.Text>
         <div style={{ display: 'flex', gap: 8 }}>
           <Button type="danger" theme="light" onClick={() => setKekOpen(true)}>
@@ -225,6 +278,7 @@ export function System(): JSX.Element {
           AgentGateway 管理面 · Vite + React 18 + Semi Design · 控制面 API{' '}
           {bootstrap?.api_version ?? '版本未知'}。 会话令牌只在页面内存中，刷新即失效。
         </Typography.Text>
+        <a href={helpHref('keystore')}>帮助 / 文档</a>
       </Card>
 
       <Modal

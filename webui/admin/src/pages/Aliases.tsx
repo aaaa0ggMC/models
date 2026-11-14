@@ -2,7 +2,8 @@
  * src/pages/Aliases.tsx —— 别名 / namespace 映射页。
  *
  * 表格 + 弹窗（别名 → provider / access_path / model）。页面只用**一句话**说明三级
- * 优先级（显式别名 > 前缀规则 > 原样 id），细节进 Tooltip，不占版面。
+ * 优先级（显式别名 > 前缀规则 > 原样 id），细节进「帮助 / 文档」的 aliases 小节，
+ * 不占版面。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -23,15 +24,11 @@ import { IconPlus } from '@douyinfe/semi-icons';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtInt } from '../format';
+import { helpHref } from '../router';
 import type { AliasRuleDto } from '../api/types';
 
 const PRIORITY_LINE =
   '解析优先级（高 → 低）：显式别名 exact ＞ 前缀规则 prefix ＞ 原样 model id（passthrough）';
-const PRIORITY_DETAIL =
-  'exact 全串相等，意图最强，永远最先命中。prefix 按 priority 升序、再按模式长度降序取第一个命中' +
-  '（最具体者优先）；支持 namespace/ 与 foo* 两种形态（* 不匹配 /）。passthrough 直接传上游 model id，' +
-  '但仅当该 model 在能力矩阵里才放行，否则报 no_available_provider。exact 高于 prefix 是为了防止一条宽前缀' +
-  '规则静默劫持所有显式别名。';
 
 export function Aliases(): JSX.Element {
   const { call } = useAuth();
@@ -154,26 +151,42 @@ export function Aliases(): JSX.Element {
 
   const columns = [
     {
-      title: '类型',
+      title: (
+        <Tooltip content="exact = 全串相等；prefix = 前缀 / 命名空间通配（支持 foo/ 与 foo* 两种形态，* 不匹配 /）。">
+          <span>类型</span>
+        </Tooltip>
+      ),
       dataIndex: 'kind',
       render: (_: unknown, r: AliasRuleDto) => (
         <Tag color={r.kind === 'exact' ? 'blue' : 'cyan'}>{r.kind}</Tag>
       ),
     },
     {
-      title: 'pattern',
+      title: (
+        <Tooltip content="要匹配的模型名 / 前缀；exact 填完整模型名，prefix 形如 fast/ 或 fast*。">
+          <span>pattern</span>
+        </Tooltip>
+      ),
       dataIndex: 'pattern',
       render: (_: unknown, r: AliasRuleDto) => (
         <span style={{ fontFamily: 'monospace' }}>{r.pattern}</span>
       ),
     },
     {
-      title: 'priority',
+      title: (
+        <Tooltip content="prefix 之间按 priority 升序、再按模式长度降序取第一个命中（最具体者优先）。">
+          <span>priority</span>
+        </Tooltip>
+      ),
       dataIndex: 'priority',
       render: (_: unknown, r: AliasRuleDto) => fmtInt(r.priority),
     },
     {
-      title: '目标',
+      title: (
+        <Tooltip content="命中后转发到的 provider / access_path / model；max_context_tokens 供压缩插件使用。">
+          <span>目标</span>
+        </Tooltip>
+      ),
       dataIndex: 'target',
       render: (_: unknown, r: AliasRuleDto) => (
         <span style={{ fontFamily: 'monospace', fontSize: 12 }}>
@@ -214,11 +227,10 @@ export function Aliases(): JSX.Element {
   return (
     <div>
       <div style={{ marginBottom: 12 }}>
-        <Tooltip content={PRIORITY_DETAIL}>
-          <Typography.Text type="tertiary" style={{ cursor: 'help' }}>
-            {PRIORITY_LINE}（悬停看详情）
-          </Typography.Text>
-        </Tooltip>
+        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
+          {PRIORITY_LINE}。
+        </Typography.Text>
+        <a href={helpHref('aliases')}>了解更多</a>
       </div>
       <div style={{ display: 'flex', marginBottom: 16 }}>
         <Button theme="solid" type="primary" icon={<IconPlus />} onClick={openCreate}>

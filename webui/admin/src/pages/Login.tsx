@@ -11,7 +11,7 @@ import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 
 export function Login(): JSX.Element {
-  const { login, bootstrap } = useAuth();
+  const { login } = useAuth();
   const [mode, setMode] = useState<'password' | 'token'>('password');
   const [password, setPassword] = useState('');
   const [accessToken, setAccessToken] = useState('');
@@ -53,7 +53,7 @@ export function Login(): JSX.Element {
       <Card style={{ width: 400, padding: 8 }} title="AgentGateway 管理面">
         <Typography.Text type="tertiary" style={{ display: 'block', marginBottom: 16 }}>
           登录后即可管理渠道、凭据、别名映射，并查看用量与对账。
-        </Typography.Text>
+        </Typography.Text>{' '}
         <Tabs
           activeKey={mode}
           onChange={(k) => setMode(k as 'password' | 'token')}
@@ -96,7 +96,6 @@ export function Login(): JSX.Element {
         </Button>
         <Typography.Text type="tertiary" style={{ display: 'block', marginTop: 16, fontSize: 12 }}>
           会话令牌只保存在本页内存中，刷新或关闭标签页即失效。
-          {bootstrap?.keystore?.mode ? ` 密钥模式：${bootstrap.keystore.mode}` : ''}
         </Typography.Text>
       </Card>
     </div>
