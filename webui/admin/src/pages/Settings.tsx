@@ -17,7 +17,6 @@ import {
   Input,
   Select,
   Table,
-  Tag,
   Toast,
   Tooltip,
   Typography,
@@ -27,21 +26,23 @@ import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 import { fmtTs } from '../format';
 import { helpHref } from '../router';
+import { PageHeader, StatusTag } from '../components/ui';
 import type { SettingDto, SettingSource } from '../api/types';
 
 const SOURCE_META: Record<
   SettingSource,
-  { label: string; color: 'blue' | 'green' | 'grey' | 'orange' }
+  { label: string; tone: 'info' | 'warning' | 'success' | 'neutral' }
 > = {
-  encrypted_storage: { label: '加密存储', color: 'blue' },
-  env: { label: '环境变量', color: 'orange' },
-  config_file: { label: '配置文件', color: 'green' },
-  default: { label: '默认值', color: 'grey' },
+  encrypted_storage: { label: '加密存储', tone: 'info' },
+  env: { label: '环境变量', tone: 'warning' },
+  config_file: { label: '配置文件', tone: 'success' },
+  default: { label: '默认值', tone: 'neutral' },
 };
 
+/** 来源标签。颜色 + 文字双编码，不靠颜色单独区分（色盲安全）。 */
 function SourceTag({ source }: { source: SettingSource }): JSX.Element {
   const meta = SOURCE_META[source] ?? SOURCE_META.default!;
-  return <Tag color={meta.color}>{meta.label}</Tag>;
+  return <StatusTag tone={meta.tone}>{meta.label}</StatusTag>;
 }
 
 export function Settings(): JSX.Element {
@@ -218,22 +219,27 @@ export function Settings(): JSX.Element {
   const locked = items.filter((s) => !s.editable);
 
   return (
-    <div style={{ maxWidth: 1080 }}>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, gap: 12 }}>
-        <Typography.Text type="tertiary" style={{ fontSize: 12 }}>
-          改完即时生效，不用重启；重启后仍在（落在加密存储里）。
-        </Typography.Text>
-        <a href={helpHref('settings')} style={{ fontSize: 12 }}>
-          了解更多
-        </a>
-        <div style={{ flex: 1 }} />
-        <Button icon={<IconRefresh />} onClick={() => void load()}>
-          刷新
-        </Button>
-      </div>
+    <div className="ag-stack">
+      <PageHeader
+        title="系统设置"
+        desc="运行时设置第一屏。改完即时生效，不用重启；重启后仍在（落在加密存储里）。被环境变量覆盖的项只能看、不能改。"
+        actions={
+          <Button icon={<IconRefresh />} onClick={() => void load()}>
+            刷新
+          </Button>
+        }
+        meta={
+          <div className="ag-row" style={{ fontSize: 12, color: 'var(--ag-text-3)' }}>
+            <span>共 {items.length} 项，其中 {locked.length} 项被 env 锁定</span>
+            <a href={helpHref('settings')}>四层优先级与白名单理由</a>
+          </div>
+        }
+      />
 
-      {error ? (
-        <div style={{ color: 'var(--semi-color-danger)', marginBottom: 12 }}>{error}</div>
+      {error !== null ? (
+        <div className="ag-banner ag-banner-danger" role="alert">
+          {error}
+        </div>
       ) : null}
 
       {locked.length > 0 ? (

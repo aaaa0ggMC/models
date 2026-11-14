@@ -6,7 +6,7 @@
  */
 
 import { useState } from 'react';
-import { Button, Card, Input, Tabs, Toast, Typography } from '@douyinfe/semi-ui';
+import { Button, Input, Tabs, Toast } from '@douyinfe/semi-ui';
 import { useAuth } from '../auth';
 import { errorText } from '../api/client';
 
@@ -41,19 +41,17 @@ export function Login(): JSX.Element {
   };
 
   return (
-    <div
-      style={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'var(--semi-color-bg-1)',
-      }}
-    >
-      <Card style={{ width: 400, padding: 8 }} title="AgentGateway 管理面">
-        <Typography.Text type="tertiary" style={{ display: 'block', marginBottom: 16 }}>
-          登录后即可管理渠道、凭据、别名映射，并查看用量与对账。
-        </Typography.Text>{' '}
+    <div className="ag-login">
+      <div className="ag-login-card ag-card">
+        <div className="ag-login-brand">
+          <span className="ag-brand-mark" aria-hidden>
+            AG
+          </span>
+          <div>
+            <div className="ag-login-title">AgentGateway 管理面</div>
+            <div className="ag-login-sub">登录后即可管理渠道、凭据、别名映射，并查看用量与对账。</div>
+          </div>
+        </div>
         <Tabs
           activeKey={mode}
           onChange={(k) => setMode(k as 'password' | 'token')}
@@ -94,10 +92,10 @@ export function Login(): JSX.Element {
         >
           登录
         </Button>
-        <Typography.Text type="tertiary" style={{ display: 'block', marginTop: 16, fontSize: 12 }}>
+        <div className="ag-login-note">
           会话令牌只保存在本页内存中，刷新或关闭标签页即失效。
-        </Typography.Text>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 }
