@@ -1,0 +1,544 @@
+# 15 · 多模态（TTS / ASR / Image / Embedding）
+
+> 版本：v1.0-draft ｜ 日期：2026-11-14 ｜ 状态：**draft（待 review）**
+> 上游依赖：[10-canonical-schema.md](./10-canonical-schema.md)（信封与媒体引用）、[25-streaming.md](./25-streaming.md)（跨模态流式）、[40-provider-adaptors.md](./40-provider-adaptors.md)（能力矩阵）
+> 下游被引用于：[60-billing-and-dogfooding.md](./60-billing-and-dogfooding.md)
+
+---
+
+## 0. 阅读指引
+
+§1 设计决策；§2 TTS canonical；§3 ASR canonical；§4 Image canonical；§5 Embedding；§6 能力矩阵；§7 端点与流式；§8 字段映射表；§9 Open Questions。
+
+`[v1.5]` = v1 之后第一个增量；`[later]` = 明确后续。
+
+---
+
+## 1. 设计决策
+
+### 决策 M1：模态 payload 独立，不塞进 chat 的 messages
+
+**决策**：TTS/ASR/Image/Embedding 各有独立 payload 类型（`TtsPayload` / `AsrPayload` / `ImagePayload` / `EmbeddingPayload`），挂在共享信封下用 `kind` 判别。chat 的 `parts` 里**不出现** TTS/ASR/Image 的顶层结构（但 chat 里可以有 `ImagePart` / `AudioPart` 作为多模态输入，那是另一回事）。
+
+**理由**：TTS 没有"消息"概念（输入是纯文本 + 声音规格）；ASR 的输出是带时间戳的分段而不是一段文本；Image 的参数（尺寸/seed/参考图）与对话无关。硬塞进 messages 会制造"假消息"。
+
+**代价**：路由、计费、UI 都要按 `kind` 分支。接受——这是多模态的固有复杂度，藏起来只会更糟。
+
+### 决策 M2：媒体引用三态统一（inline / uri / asset）
+
+**决策**：所有模态的二进制输入输出都用 `MediaRef`（见 [10-canonical-schema.md](./10-canonical-schema.md) §5）。**不允许**某个模态自己定义一种 base64 字段名。
+
+**理由**：OpenAI Images 用 `b64_json`，Stability 用 `image` 字段，Gemini 用 `inlineData.data`，ElevenLabs 直接返回裸字节。如果不统一，每个 mapper 都要发明一套媒体表示，去重与加密存储也无法跨模态做。
+
+**代价**：需要一层"从裸字节/字段构造 MediaRef"的适配代码。可接受。
+
+### 决策 M3：能力矩阵驱动路由，不支持就拒绝或降级
+
+**决策**：S2 路由阶段查 `(provider, modality, streaming)` 的能力矩阵。三种结果：`allow` / `degrade`（带 `degraded` 字段）/ `reject`（`streaming_mode_unsupported` 或 `capability_unsupported`）。
+
+**理由**：TTS/ASR 各家差异极大（MiniMax 用 `voice_setting`，Azure 用 SSML，Google 用 `audioConfig`），静默丢字段比报错更危险。
+
+### 决策 M4：v1.5 先做"少量 provider 深度打通"，不做"全厂商浅兼容"
+
+**决策**：v1.5 每模态接 2–3 家：
+- TTS：OpenAI `audio/speech`、ElevenLabs、MiniMax
+- ASR：OpenAI `audio/transcriptions`、Deepgram（一次性）
+- Image：OpenAI `images/generations|edits`、FLUX/BFL
+- Embedding：OpenAI、Gemini
+
+**理由**：多模态 mapper 的边际成本低但固定成本高；先用 2–3 家把 canonical 形状压稳，再扩。一次接 10 家会导致 canonical 被某家的怪字段带偏。
+
+---
+
+## 2. TTS Canonical `[v1.5]`
+
+### 2.1 请求 payload
+
+```typescript
+interface TtsPayload {
+  /** 要合成的文本 */
+  input: string;
+  /** 声音规格 */
+  voice: VoiceSpec;
+  /** 输出音频格式 */
+  output: AudioOutputSpec;
+  /** 语言（BCP-47，如 "zh-CN"） */
+  language?: string;
+  /** 语速 0.25–4.0，1.0 = 正常 */
+  speed?: number;
+  /** 音调 / 音量 / 稳定性等，按 target 映射 */
+  prosody?: ProsodySpec;
+  /** 流式 */
+  stream?: StreamOptions;
+  /** 上游专有配置逃逸阀 */
+  native?: Record<string, unknown>;
+  raw: RawEnvelope;
+}
+
+interface VoiceSpec {
+  /** 上游 voice id（alloy / nova / 21m00Tcm4TlvDq8ikWAM / ...） */
+  voice_id: string;
+  /** 声音性别/年龄等元信息（仅记录，不映射） */
+  gender?: "male" | "female" | "neutral";
+  /** 参考音频（声音克隆）——三态引用 */
+  reference_audio?: MediaRef;
+  /** 相似度/稳定性等（ElevenLabs voice_settings） */
+  settings?: {
+    stability?: number;
+    similarity_boost?: number;
+    style?: number;
+    use_speaker_boost?: boolean;
+  };
+}
+
+interface AudioOutputSpec {
+  /** 容器/编码：mp3 / opus / aac / flac / wav / pcm / mulaw / alaw */
+  format: string;
+  sample_rate?: number;      // 24000 / 44100 ...
+  bit_depth?: number;        // 16 / 24
+  channels?: number;         // 1 / 2
+  bitrate?: number;          // kbps
+  /** 一次性 or 流式 */
+  mode: "once" | "stream";
+}
+
+interface ProsodySpec {
+  /** 音调（Azure prosody pitch / Google pitch，相对量或半音） */
+  pitch?: number;
+  /** 音量（Google volumeGain, dB） */
+  volume_gain?: number;
+  /** 情感/风格指令（OpenAI gpt-4o-mini-tts instructions） */
+  instructions?: string;
+  /** SSML 原文（Azure 路线；给了就走 SSML，忽略结构化字段） */
+  ssml?: string;
+  /** 发音词典（MiniMax pronunciation_dict） */
+  pronunciation_dict?: Array<{ word: string; pronunciation: string }>;
+  /** 前后文（ElevenLabs previous_text / next_text，用于连贯性） */
+  context?: { previous?: string; next?: string };
+  seed?: number;
+}
+```
+
+**设计说明**：`prosody.ssml` 是一个**逃生舱**——Azure 的 SSML 表达力远超结构化字段，硬建模 SSML 会让 canonical 爆炸。给了 `ssml` 就走 Azure 路线，结构化字段忽略并在 `warnings` 声明。
+
+### 2.2 响应 payload
+
+```typescript
+interface TtsResponsePayload {
+  /** 合成的音频 */
+  audio: MediaRef;
+  /** 上游返回的格式（可能与请求不同） */
+  actual_format: AudioOutputSpec;
+  /** 音频时长（秒），用于计费兜底 */
+  duration_seconds?: number;
+  /** 上游原始响应头里的 id（history-item-id / request-id） */
+  upstream_request_id?: string;
+}
+```
+
+### 2.3 流式
+
+见 [25-streaming.md](./25-streaming.md) §3.2 与 §6：TTS 流式分两种上游形态——**SSE 信封**（少数）与**裸 chunked 字节**（ElevenLabs `/stream`、OpenAI、MiniMax）。网关统一输出 `StreamFrame{kind:"tts", data:{audio: MediaChunk}}`，音频分片**严格 append-only**，客户端断开立即取消上游止损。
+
+---
+
+## 3. ASR Canonical `[v1.5]`
+
+### 3.1 请求 payload
+
+```typescript
+interface AsrPayload {
+  /** 音频输入 */
+  audio: MediaRef;
+  /** 语言提示（BCP-47；不给则上游自动检测） */
+  language?: string;
+  /** 提示词/领域词（OpenAI prompt / Deepgram keywords / AssemblyAI word_boost） */
+  prompt?: string;
+  keywords?: string[];
+  /** 输出粒度 */
+  granularity?: ("word" | "segment" | "utterance")[];
+  /** 说话人分离 */
+  diarization?: {
+    enabled: boolean;
+    speakers_expected?: number;
+    min_speakers?: number;
+    max_speakers?: number;
+  };
+  /** 标点/格式化 */
+  punctuate?: boolean;
+  format_text?: boolean;
+  /** 去口语填充词（AssemblyAI disfluencies） */
+  remove_disfluencies?: boolean;
+  /** 流式（实时） */
+  stream?: StreamOptions;
+  native?: Record<string, unknown>;
+  raw: RawEnvelope;
+}
+```
+
+### 3.2 响应 payload
+
+```typescript
+interface AsrResponsePayload {
+  /** 全文（最终） */
+  text: string;
+  /** 检测到的语言 */
+  language?: string;
+  /** 音频时长（秒）——ASR 计费主单位 */
+  duration_seconds?: number;
+  /** 分段 */
+  segments?: AsrSegment[];
+  /** 话语段（按说话人/静音切分） */
+  utterances?: AsrUtterance[];
+  /** 整段置信度 */
+  confidence?: number;
+}
+
+interface AsrSegment {
+  id: number;
+  start: number;      // 秒
+  end: number;
+  text: string;
+  confidence?: number;
+  words?: AsrWord[];
+  speaker?: number;
+}
+
+interface AsrUtterance {
+  /** 话语段 id，中间态语义见 25-streaming.md §5 */
+  utterance_id: string;
+  start: number;
+  end: number;
+  text: string;
+  confidence?: number;
+  speaker?: number;
+  words?: AsrWord[];
+}
+
+interface AsrWord {
+  text: string;
+  start: number;
+  end: number;
+  confidence?: number;
+  speaker?: number;
+  /** 词是否已 final（流式下） */
+  is_final?: boolean;
+}
+```
+
+### 3.3 中间态（interim）语义
+
+实时 ASR 的 interim result **不是 append-only**，后续音频可能改写它。canonical 帧带 `utterance_id` + `revision` + `is_final`，客户端按"定位 + 覆盖"处理。详见 [25-streaming.md](./25-streaming.md) §5。
+
+---
+
+## 4. Image Canonical `[v1.5]`
+
+### 4.1 请求 payload
+
+```typescript
+interface ImagePayload {
+  prompt: string;
+  negative_prompt?: string;
+
+  /** 尺寸：显式像素 or 比例（aspect_ratio）二选一 */
+  size?: { width: number; height: number };
+  aspect_ratio?: string;         // "1:1" / "16:9" / "21:9" / "auto"
+  /** 生成数量 */
+  n?: number;
+
+  /** 质量/风格 */
+  quality?: "low" | "medium" | "high" | "hd" | "auto";
+  style?: string;                // vivid / natural / style_preset
+  /** 采样参数（Stability / FLUX） */
+  sampling?: {
+    steps?: number;
+    guidance?: number;           // cfg_scale
+    sampler?: string;
+    seed?: number;
+  };
+  /** 是否允许 prompt 自动改写（dall-e-3 revised_prompt） */
+  allow_prompt_rewrite?: boolean;
+
+  /** 图生图 / 局部重绘 */
+  edit?: {
+    /** 原图（img2img） */
+    image?: MediaRef;
+    /** mask（inpaint） */
+    mask?: MediaRef;
+    /** 改动强度 0–1 */
+    strength?: number;
+    /** 多参考图 */
+    reference_images?: Array<{ image: MediaRef; weight?: number; mode?: "style" | "content" }>;
+  };
+
+  /** 输出 */
+  output: {
+    format: "png" | "jpeg" | "webp";
+    /** 响应形态：base64 或 URL */
+    response_type: "b64_json" | "url";
+    /** 背景透明（gpt-image-1） */
+    transparent_background?: boolean;
+  };
+
+  /** 内容审核强度 */
+  moderation?: "auto" | "low" | "high";
+  native?: Record<string, unknown>;
+  raw: RawEnvelope;
+}
+```
+
+### 4.2 响应 payload
+
+```typescript
+interface ImageResponsePayload {
+  images: Array<{
+    /** 生成的图 */
+    image: MediaRef;
+    /** 上游改写后的 prompt（dall-e-3） */
+    revised_prompt?: string;
+    /** 内容寻址 hash（去重） */
+    sha256?: string;
+  }>;
+  /** 异步轮询型上游（FLUX/BFL）的中间态 */
+  polling?: { url: string; status: string };
+}
+```
+
+**设计说明（FLUX/BFL 是异步轮询）**：BFL 的 `flux-pro-1.1` 返回 `{id, polling_url, status}` 而不是图本身。canonical 用 `polling` 字段承载，网关在 S5 内部完成轮询（对客户端呈现为同步），轮询过程写进 `RequestTrace.attempts`。**待验证**：BFL 是否有同步返回模式或 webhook 模式可选。
+
+---
+
+## 5. Embedding Canonical `[v1]`
+
+```typescript
+interface EmbeddingPayload {
+  input: string | string[] | MediaRef[];    // 文本或多模态 embedding
+  dimensions?: number;                       // 截断维度（OpenAI dimensions）
+  encoding_format?: "float" | "base64";
+  user?: string;
+  native?: Record<string, unknown>;
+  raw: RawEnvelope;
+}
+
+interface EmbeddingResponsePayload {
+  embeddings: Array<{ index: number; vector: number[] | string }>;
+  model: string;
+}
+```
+
+计费单位：`usage.units.tokens`。Gemini 的 embedding 有独立的 `taskType`（`RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY` 等），进 `native.gemini.task_type`。**待验证**：Gemini embedding 的 usage 字段名。
+
+---
+
+## 6. 能力矩阵（三态：已实现 / 计划 / 按需）
+
+每个 `(access_path, model, modality)` 必须登记。**注意矩阵的键是 `(access_path, model)` 而不是 `model`**——同一个 `gpt-5.4` 在 `openai`（API key）与 `openai-codex`（订阅 OAuth）两条路径下能力与限额完全不同，见 [45-credentials.md](./45-credentials.md) §6。这是路由决策的唯一依据。
+
+```typescript
+interface CapabilityEntry {
+  provider: string;
+  modality: ModalityKind;
+  /** 支持的具体端点/模型 */
+  models: string[];
+  /** 流式形态，见 25-streaming.md §9 */
+  streaming?: {
+    mode: "none" | "sse" | "chunked-binary" | "ws-duplex";
+    partial_results?: boolean;
+    usage_in_stream?: boolean;
+    cancellable?: boolean;
+    framing?: "json-sse" | "raw-bytes" | "ws-messages";
+  };
+  /** 该模态的 usage 单位 */
+  usage_units: Array<keyof UsageUnits>;
+  /** 不支持的 canonical 字段（用于 on_unsupported 策略） */
+  unsupported_fields?: string[];
+  /** 已知的口径怪癖 */
+  quirks?: string[];
+  /** 契约测试状态 */
+  contract_tested: boolean;
+}
+```
+
+### 6.1 v1.5 目标矩阵（初版，字段待 mapper 实现时校准）
+
+**图例**：**[实]** = 已实现（v1.5 写透）；**[计]** = 计划（当前 Phase 交付物）；**[需]** = 按需（用到再写）；**✗** = 明确不支持（路由会拒绝）。
+
+| access_path | chat | embedding | tts | asr | image |
+|---|---|---|---|---|---|
+| openai | **[实]** chat+responses | **[实]** | **[计]** speech | **[计]** transcriptions | **[计]** generations/edits |
+| anthropic | **[实]** messages | ✗ | ✗ | ✗ | ✗ |
+| gemini | **[计]** generateContent | **[需]** | **[需]**（待验证） | **[需]**（待验证） | **[需]**（待验证） |
+| elevenlabs | ✗ | ✗ | **[计]** tts | **[需]**（STT，待验证） | ✗ |
+| openai-codex | **[计]**（订阅路径，见 45-credentials） | ✗ | ✗ | ✗ | ✗ |
+| xai-supergrok | **[计]**（订阅路径） | ✗ | ✗ | ✗ | ✗ |
+| minimax | **[需]** | **[需]** | **[需]** t2a_v2 | **[需]** | **[需]** |
+| azure | **[需]** | **[需]** | **[需]** SSML | **[需]** | **[需]** |
+| google-cloud | ✗ | **[需]** | **[需]** synthesize | **[需]** | **[需]** |
+| deepgram | ✗ | ✗ | ✗ | **[需]** listen（一次性+WS） | ✗ |
+| assemblyai | ✗ | ✗ | ✗ | **[需]** transcript | ✗ |
+| stability | ✗ | ✗ | ✗ | ✗ | **[需]** |
+| bfl (flux) | ✗ | ✗ | ✗ | ✗ | **[需]** |
+| bedrock / vertex | **[需]** | **[需]** | **[需]** | **[需]** | **[需]** |
+
+**规则**：`[计]` 只允许存在于当前 Phase 的交付物清单里；不在当前 Phase 的一律 `[需]`。防止 roadmap 膨胀成饼。
+
+---
+
+## 7. 端点形态与流式
+
+### 7.1 端点
+
+```
+TTS:    POST /v1/audio/speech                  （once，返回二进制或 base64）
+        POST /v1/audio/speech:stream           （SSE，StreamFrame kind:"tts"）
+ASR:    POST /v1/audio/transcriptions          （once，multipart 或 JSON+MediaRef）
+        WS   /v1/realtime                      （实时，见 25-streaming.md §3.3 双路径）
+IMAGE:  POST /v1/images/generations
+        POST /v1/images/edits
+        POST /v1/images/generations:stream     （进度流，StreamFrame kind:"image"）
+EMBED:  POST /v1/embeddings
+```
+
+### 7.2 流式在非 chat 模态怎么走
+
+| 模态 | 上游形态 | 网关输出 | 说明 |
+|---|---|---|---|
+| TTS | chunked-binary（多数）/ SSE（少数） | SSE `ag.frame` 或 `application/octet-stream` 直通 | 首包延迟关键；音频分片 append-only |
+| ASR（一次性） | 无流式 | 无流式 | 只能 once |
+| ASR（实时） | WebSocket 双向 | WS 透传（默认）或 WS + canonical 帧（插件介入时） | 见 [25-streaming.md](./25-streaming.md) §3.3 |
+| Image | 轮询 / SSE 进度 | SSE `ag.frame{kind:"image", progress}` | 部分上游（BFL）只能轮询，网关内部轮询后转成进度流 |
+
+### 7.3 "能兼容吗"的结论
+
+| 需求 | 结论 |
+|---|---|
+| TTS 流式 | ✅ 无损（网关只切帧不解码） |
+| ASR 一次性 | ✅ 无损 |
+| ASR 实时 + 插件 | ⚠️ 必须切 canonical 模式，客户端改用 `ag.frame` 协议 |
+| ASR 实时 + 严格上游协议保真 | ✅ 但只能透传，插件不可见 |
+| Image 流式进度 | ✅ 但 BFL 类轮询型有额外延迟（轮询间隔） |
+| 视频 | ❌ v1.5 不做 |
+
+---
+
+## 8. 字段映射（方法论 + 每模态一个完整示例 + 按需补充简表）
+
+> **结构说明**：每个模态给 **canonical payload 定义（§2–§5）+ 一个完整映射示例 + 一张"待按需补充"简表**。
+> 不穷举所有厂商——adaptor 是按需写的（[40-provider-adaptors.md](./40-provider-adaptors.md) §1.0），但 canonical 是全量的（[12-coverage-survey.md](./12-coverage-survey.md) §2）。
+> 新增 adaptor 时走 [40-provider-adaptors.md](./40-provider-adaptors.md) §1.6 的检查清单。
+
+### 8.1 TTS
+
+**完整示例（v1.5 写透）：`openai.audio.speech` + `elevenlabs.tts`**
+
+| canonical | OpenAI `audio/speech` | ElevenLabs `text-to-speech/{voice_id}` |
+|---|---|---|
+| `input` | `input` | `text` |
+| `voice.voice_id` | `voice` | URL path 参数 |
+| `voice.settings.stability` | ❌ drop | `voice_settings.stability` |
+| `voice.settings.similarity_boost` | ❌ drop | `voice_settings.similarity_boost` |
+| `voice.settings.style` | ❌ drop | `voice_settings.style` |
+| `voice.settings.use_speaker_boost` | ❌ drop | `voice_settings.use_speaker_boost` |
+| `prosody.instructions` | `instructions`（仅 gpt-4o-mini-tts） | ❌ drop |
+| `speed` | `speed` | ❌ drop |
+| `prosody.pitch` / `volume_gain` | ❌ drop | ❌ drop |
+| `prosody.seed` | ❌ drop | `seed` |
+| `prosody.context.previous/next` | ❌ drop | `previous_text` / `next_text` |
+| `prosody.pronunciation_dict` | ❌ drop | ❌ drop（`[待验证]`） |
+| `language` | ❌ drop（voice 隐含） | `language_code` |
+| `output.format` | `response_format` | 编码进 `output_format` |
+| `output.sample_rate` | ❌ drop | 编码进 `output_format`（如 `mp3_44100_128`） |
+| `output.channels` | ❌ drop | ❌ drop |
+| `stream.mode` | chunked 二进制 | `/stream` 端点，chunked 二进制 |
+| 响应 audio | 裸字节 | 裸字节 |
+| 响应 `upstream_request_id` | ❌ | 响应头 `history-item-id` / `request-id` |
+
+**`[待验证]`**：OpenAI `audio/speech` 是否支持流式分片返回（以及是否要 `stream: true`）；ElevenLabs 发音字典的可用端点。
+
+**待按需补充简表**（动工前查这些已知差异点即可，不必提前写 adaptor）：
+
+| 厂商 | 关键差异点 |
+|---|---|
+| **MiniMax** `t2a_v2` | 参数在 `voice_setting{voice_id,speed,vol,pitch}` 与 `audio_setting{sample_rate,bitrate,format,channel}` 两个子对象里；响应 base64 在 `data` 字段 + `extra_info{audio_length,audio_size,bitrate}`；有 `language_boost` / `timber_weights`；流式形态 `[待验证]` |
+| **Azure Speech** | 走 **SSML**（`<speak><voice><prosody rate pitch>`）——用 `prosody.ssml` 逃生舱，结构化字段忽略；`X-Microsoft-OutputFormat` 头指定编码 |
+| **Google Cloud TTS** | `input.text` / `input.ssml`；`voice{languageCode,name,ssmlGender}`；`audioConfig{audioEncoding: LINEAR16/MP3/OGG_OPUS/MULAW/ALAW, speakingRate, pitch, volumeGain, sampleRateHertz, effectsProfileId}`；响应 base64 在 `audioContent` |
+| **Gemini TTS** | `[待验证]` 是否有原生 TTS 端点（如 `models/gemini-*-tts`） |
+
+### 8.2 ASR
+
+**完整示例（v1.5 写透）：`openai.audio.transcription`**
+
+| canonical | OpenAI `audio/transcriptions` |
+|---|---|
+| `audio` | `file`（multipart） |
+| `language` | `language` |
+| `prompt` | `prompt` |
+| `granularity` | `timestamp_granularities[]`（word / segment） |
+| `diarization` | ❌ drop + warn（Whisper 无说话人分离） |
+| `punctuate` | 默认开，无开关 |
+| 响应 `text` | `text` |
+| 响应 `segments[]` | `segments[]`（id/seek/start/end/text/tokens） |
+| 响应 `words[]` | `words[]`（`timestamp_granularities: ["word"]` 时） |
+| 响应 `duration_seconds` | `duration` |
+| 响应 `confidence` | ❌ drop |
+| 流式 | ❌ 无（一次性） |
+
+**`[待验证]`**：`chunking_strategy`（长音频分块）与 `include[]`（如 `logprobs`）的字段；`translations` 端点的额外参数。
+
+**待按需补充简表**：
+
+| 厂商 | 关键差异点 |
+|---|---|
+| **Deepgram** `listen` | 裸音频 body + query 参数 `encoding`/`sample_rate`/`channels`；`diarize` / `smart_format` / `utterances` / `keywords` / `multichannel`；响应深嵌在 `results.channels[0].alternatives[0]{transcript,confidence,words[]}`，`results.utterances[]` 单独；`metadata.duration` 给时长；**支持 WS 实时（边说边传）与 chunked 一次性** |
+| **AssemblyAI** `transcript` | **仅接受 `audio_url`，不能直接传文件** → 网关必须代传（需要一个可公网访问的临时 URL 或网关代理，`[待验证]`）；`speaker_labels` / `speakers_expected` / `auto_chapters` / `sentiment_analysis` / `entity_detection` / `word_boost` / `disfluencies` / `speech_model`；响应 `text` / `words[]` / `utterances[]` / `confidence` / `audio_duration`；流式是 WS v3（`Begin`/`Turn`/`Termination`） |
+| **Gemini ASR** | `[待验证]` 是否有原生端点；Part 里有 `audioTranscription` 字段值得关注 |
+
+### 8.3 Image
+
+**完整示例（v1.5 写透）：`openai.images.generations` + `openai.images.edits`**
+
+| canonical | OpenAI Images |
+|---|---|
+| `prompt` | `prompt` |
+| `negative_prompt` | ❌ drop + warn |
+| `size` | `size` |
+| `aspect_ratio` | ❌ drop |
+| `n` | `n` |
+| `quality` | `quality` |
+| `style` | `style`（dall-e-3） |
+| `sampling.*` | ❌ drop |
+| `allow_prompt_rewrite` | 隐含（dall-e-3 恒改写） |
+| `edit.image` | `image[]`（multipart） |
+| `edit.mask` | `mask`（multipart） |
+| `edit.strength` | ❌ drop |
+| `output.format` | 由端点/model 决定 |
+| `output.response_type` | `response_format`（b64_json / url） |
+| `output.transparent_background` | gpt-image-1 支持 |
+| `moderation` | `moderation` |
+| 响应图 | `data[].b64_json` / `url` |
+| `revised_prompt` | `data[].revised_prompt` |
+| 同步/异步 | 同步 |
+
+**`[待验证]`**：gpt-image-1 的 usage 形状（token-based：`input_tokens` / `output_tokens` / `input_tokens_details.image_tokens` / `total_tokens`）。
+
+**待按需补充简表**：
+
+| 厂商 | 关键差异点 |
+|---|---|
+| **Stability** | `negative_prompt` / `aspect_ratio` / `style_preset` / `strength`（img2img）/ `cfg_scale` / `steps` / `sampler`；multipart 传 `image` / `mask`；credit 计费（按次）；响应形态 `[待验证]`（二进制还是 base64 JSON） |
+| **BFL / FLUX** | `width`/`height`（无 aspect_ratio）/ `steps` / `guidance` / `seed` / `prompt_upsampling` / `safety_tolerance` / `output_format` / `raw`；img2img 用 `image_prompt`（base64 或 url）+ `image_prompt_strength`；**异步轮询**：返回 `{id, polling_url, status}`，图在 `result.sample`；`[待验证]` 是否有同步模式或 webhook |
+| **Gemini Imagen** | `[待验证]` 端点与字段（Imagen 系列是否走 generateContent） |
+
+---
+
+## 9. Open Questions
+
+1. **OpenAI `audio/speech` 流式**：是否支持分片返回、如何触发（`stream: true`？独立端点？）。
+2. **AssemblyAI 音频上传**：能否直接传文件而非 URL；不能则网关代传方案。
+3. **BFL 同步模式**：是否有非轮询的返回方式。
+4. **Gemini 的 TTS/ASR/Image**：Gemini 是否有原生 TTS（如 `models/gemini-*-tts`）、原生图像生成（`imagen` 系列是否走 generateContent）、原生 ASR。
+5. **各模态 usage 原始字段**：OpenAI Images（gpt-image-1）的 token usage 形状；ElevenLabs 是否返回字符数；Deepgram/AssemblyAI 的时长字段精度。
+6. **TTS 按字符计费的字符口径**：是否含 SSML 标签、是否按"请求字符"还是"实际合成字符"计费。
+7. **多模态 `n` 参数**：chat 的 `n`（候选数）与 image 的 `n`（张数）同名不同义，是否要在 canonical 里改名（见 [10-canonical-schema.md](./10-canonical-schema.md) §10 Q7）。
+8. **声音克隆的合规**：`voice.reference_audio` 涉及个人声纹，是否需要单独的开关与更强的访问控制。
