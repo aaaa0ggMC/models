@@ -111,18 +111,18 @@ export class EnvCredentialResolver implements CredentialResolver {
   private registerEnvCredentials(): void {
     for (const [accessPath, envVar] of Object.entries(KEY_ENV_BY_ACCESS_PATH)) {
       const secret = this.env[envVar];
-      if (secret === undefined || secret === "") continue;
+      if (secret === undefined || secret === '') continue;
       this.registerCredential({
         id: `env:${accessPath}`,
         name: `${accessPath} (env ${envVar})`,
-        type: "api_key",
+        type: 'api_key',
         access_path: accessPath,
         model_namespace: accessPath,
-        storage: { location: "env", ref: envVar, encrypted: false },
-        health: { status: "unknown", last_checked: 0 },
+        storage: { location: 'env', ref: envVar, encrypted: false },
+        health: { status: 'unknown', last_checked: 0 },
         priority: 100,
         enabled: true,
-        refresh: { kind: "static", on_refresh_failure: "alert_only" },
+        refresh: { kind: 'static', on_refresh_failure: 'alert_only' },
       });
     }
   }

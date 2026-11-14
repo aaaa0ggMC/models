@@ -75,6 +75,26 @@ function openAiSseStream(): string[] {
   ];
 }
 
+/** 读出一段 JSON 响应体；用 Record<string, unknown> 而不是 any，避免 lint 警告。 */
+function jsonBody(text: string): Record<string, unknown> {
+  return JSON.parse(text) as Record<string, unknown>;
+}
+
+/** 取 choices[0]。 */
+function firstChoice(body: Record<string, unknown>): Record<string, unknown> {
+  const choices = body['choices'];
+  if (!Array.isArray(choices) || choices.length === 0) throw new Error('响应没有 choices');
+  return choices[0] as Record<string, unknown>;
+}
+
+/** 取 choices[0].message。 */
+function firstMessage(body: Record<string, unknown>): Record<string, unknown> {
+  const choice = firstChoice(body);
+  const message = choice['message'];
+  if (typeof message !== 'object' || message === null) throw new Error('choice 没有 message');
+  return message as Record<string, unknown>;
+}
+
 function runOnce(
   transport: ScriptedTransport,
   clientFormat: 'openai.chat' | 'anthropic.messages',
@@ -135,10 +155,10 @@ describe('端到端：OpenAI Chat 客户端 → 同格式上游（fast path）',
     expect(out.error).toBeUndefined();
 
     // 回程：客户端格式响应体
-    const body = JSON.parse(sink.text()) as Record<string, any>;
-    expect(body.object).toBe('chat.completion');
-    expect(body.choices[0].message.content).toBe('端到端跑通了。');
-    expect(body.choices[0].finish_reason).toBe('stop');
+    const body = jsonBody(sink.text());
+    expect(body['object']).toBe('chat.completion');
+    expect(firstMessage(body)['content']).toBe('端到端跑通了。');
+    expect(firstChoice(body)['finish_reason']).toBe('stop');
 
     // 旁路：usage 已归一（fast path 下唯一必做的事之一，20 §4.2）
     expect(out.usage?.units.tokens).toMatchObject({
@@ -190,11 +210,12 @@ describe('端到端：Anthropic Messages 客户端 → OpenAI Chat 上游（慢�
     expect(out.trace.conversion_chain).toEqual(['anthropic.messages', 'openai.chat']);
 
     // 回程是 Anthropic Messages 格式
-    const body = JSON.parse(sink.text()) as Record<string, any>;
-    expect(body.type).toBe('message');
-    expect(body.role).toBe('assistant');
-    expect(body.content[0].type).toBe('text');
-    expect(body.stop_reason).toBe('end_turn');
+    const body = jsonBody(sink.text());
+    expect(body['type']).toBe('message');
+    expect(body['role']).toBe('assistant');
+    const content = body['content'];
+    expect(Array.isArray(content) && (content[0] as Record<string, unknown>)['type']).toBe('text');
+    expect(body['stop_reason']).toBe('end_turn');
     // Anthropic wire 格式没有 total_tokens 字段（40 §2.1「需自算」），因此断言 canonical 侧
     // 的归一值：total = input + cache_creation + cache_read + output（40 §2.2 官方口径）
     expect(out.usage?.units.tokens).toMatchObject({
@@ -204,18 +225,23 @@ describe('端到端：Anthropic Messages 客户端 → OpenAI Chat 上游（慢�
       total_tokens: 18 + 0 + 0 + 11,
     });
     // wire 侧是 Anthropic 原生 usage 形态
-    expect(body.usage).toMatchObject({ input_tokens: 18, output_tokens: 11, cache_read_input_tokens: 4 });
+    expect(body['usage'] as Record<string, unknown>).toMatchObject({
+      input_tokens: 18,
+      output_tokens: 11,
+      cache_read_input_tokens: 4,
+    });
 
     // 上游收到的是 OpenAI Chat 格式
     expect(transport.requests).toHaveLength(1);
-    const upstreamBody = JSON.parse(transport.requests[0]!.body!.toString('utf8')) as Record<
-      string,
-      any
-    >;
-    expect(upstreamBody.model).toBe('gpt-test-1');
-    expect(upstreamBody.messages[0].role).toBe('system');
-    expect(upstreamBody.messages[0].content).toBe('你是一个简洁的助手。');
-    expect(upstreamBody.messages[1].role).toBe('user');
+    const upstreamBody = jsonBody(transport.requests[0]!.body!.toString('utf8'));
+    expect(upstreamBody['model']).toBe('gpt-test-1');
+    const upstreamMessages = upstreamBody['messages'];
+    expect(Array.isArray(upstreamMessages)).toBe(true);
+    const first = (upstreamMessages as unknown[])[0] as Record<string, unknown>;
+    const second = (upstreamMessages as unknown[])[1] as Record<string, unknown>;
+    expect(first['role']).toBe('system');
+    expect(first['content']).toBe('你是一个简洁的助手。');
+    expect(second['role']).toBe('user');
 
     await gateway.usageEmitter.flush();
     expect(gateway.usageSink?.records).toHaveLength(1);
@@ -280,8 +306,8 @@ describe('端到端：错误映射', () => {
     expect(out.error?.http_status).toBe(500);
     expect(sink.startStatus).toBe(500);
     // 错误体由客户端格式 codec 生成，不透传上游错误体（20 §7.2）
-    const body = JSON.parse(sink.text()) as Record<string, any>;
-    expect(body.error).toBeDefined();
+    const body = jsonBody(sink.text());
+    expect(body['error']).toBeDefined();
 
     // 失败也记账
     await gateway.usageEmitter.flush();
@@ -349,8 +375,8 @@ describe('端到端：插件短路', () => {
     expect(out.short_circuit).toBe(true);
     // 没有打上游
     expect(transport.requests).toHaveLength(0);
-    const body = JSON.parse(sink.text()) as Record<string, any>;
-    expect(body.choices[0].message.content).toBeDefined();
+    const body = jsonBody(sink.text());
+    expect(firstMessage(body)['content']).toBeDefined();
 
     await gateway.usageEmitter.flush();
     expect(gateway.usageSink?.records[0]?.status).toBe('short_circuit');
@@ -482,11 +508,12 @@ describe('端到端：工具调用多轮循环', () => {
     expect(out.turns).toBeGreaterThanOrEqual(2);
     expect(transport.requests.length).toBeGreaterThanOrEqual(2);
     // 第二轮请求体里应带上 tool_result
-    const secondBody = JSON.parse(transport.requests[1]!.body!.toString('utf8')) as Record<
-      string,
-      any
-    >;
-    expect(secondBody.messages.some((m: any) => m.role === 'tool')).toBe(true);
+    const secondBody = jsonBody(transport.requests[1]!.body!.toString('utf8'));
+    const secondMessages = secondBody['messages'];
+    expect(
+      Array.isArray(secondMessages) &&
+        secondMessages.some((m) => (m as Record<string, unknown>)['role'] === 'tool'),
+    ).toBe(true);
 
     await gateway.usageEmitter.flush();
     const rec = gateway.usageSink!.records[0]!;

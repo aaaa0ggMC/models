@@ -34,14 +34,7 @@ export interface StreamFrame<E extends StreamEventType = StreamEventType> {
 export type CanonicalStreamFrame<E extends StreamEventType = StreamEventType> = StreamFrame<E>;
 
 export type FrameData =
-  | StartData
-  | DeltaData
-  | PartBeginData
-  | PartEndData
-  | EndData
-  | ErrorData
-  | UsageData
-  | MetaData;
+  StartData | DeltaData | PartBeginData | PartEndData | EndData | ErrorData | UsageData | MetaData;
 
 export interface StartData {
   /** 会话/轮次标识；ASR 下为 utterance_id 的容器。 */

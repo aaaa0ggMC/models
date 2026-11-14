@@ -173,7 +173,7 @@ export async function runToolLoop(
  */
 export function shouldUseGatewayLoop(req: CanonicalRequestEnvelope): boolean {
   if (req.gateway?.agentic_loop === true) return true;
-  return req.raw.unmapped?.["ag_agentic_loop"] === true;
+  return req.raw.unmapped?.['ag_agentic_loop'] === true;
 }
 
 /** 从 ctx.state.tool_id_map 维护 provider 侧 id ↔ canonical id 的映射（20 §5.2）。 */

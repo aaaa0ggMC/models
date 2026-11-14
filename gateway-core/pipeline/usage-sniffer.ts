@@ -409,7 +409,10 @@ function overrideTokenUsage(base: TokenUsage, next: TokenUsage): TokenUsage {
   };
   // 40 §2.2：Anthropic 总输入 = input + cache_creation + cache_read，总 token 再加 output
   merged.total_tokens =
-    merged.input_tokens + merged.cache_write_tokens + merged.cache_read_tokens + merged.output_tokens;
+    merged.input_tokens +
+    merged.cache_write_tokens +
+    merged.cache_read_tokens +
+    merged.output_tokens;
   if (base.pricing_state !== undefined || next.pricing_state !== undefined) {
     merged.pricing_state = { ...(base.pricing_state ?? {}), ...(next.pricing_state ?? {}) };
   }

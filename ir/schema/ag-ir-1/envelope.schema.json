@@ -32,22 +32,13 @@
     "stream": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "enabled",
-        "mode",
-        "on_mismatch"
-      ],
+      "required": ["enabled", "mode", "on_mismatch"],
       "properties": {
         "enabled": {
           "type": "boolean"
         },
         "mode": {
-          "enum": [
-            "sse",
-            "chunked-binary",
-            "ws-duplex",
-            "none"
-          ]
+          "enum": ["sse", "chunked-binary", "ws-duplex", "none"]
         },
         "include_usage": {
           "type": "boolean"
@@ -56,11 +47,7 @@
           "type": "boolean"
         },
         "on_mismatch": {
-          "enum": [
-            "reject",
-            "bridge",
-            "buffer"
-          ]
+          "enum": ["reject", "bridge", "buffer"]
         }
       }
     },
@@ -132,24 +119,15 @@
     "calibration": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "calibration"
-      ],
+      "required": ["calibration"],
       "properties": {
         "calibration": {
-          "enum": [
-            "native",
-            "degraded"
-          ]
+          "enum": ["native", "degraded"]
         },
         "degraded_by": {
           "type": "object",
           "additionalProperties": false,
-          "required": [
-            "reason",
-            "model",
-            "chat_adaptor"
-          ],
+          "required": ["reason", "model", "chat_adaptor"],
           "properties": {
             "reason": {
               "type": "string"
@@ -192,13 +170,7 @@
     "ConversionDiagnostic": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "code",
-        "from",
-        "to",
-        "level",
-        "message"
-      ],
+      "required": ["code", "from", "to", "level", "message"],
       "properties": {
         "code": {
           "type": "string"
@@ -213,11 +185,7 @@
           "type": "string"
         },
         "level": {
-          "enum": [
-            "info",
-            "warning",
-            "error"
-          ]
+          "enum": ["info", "warning", "error"]
         },
         "message": {
           "type": "string"

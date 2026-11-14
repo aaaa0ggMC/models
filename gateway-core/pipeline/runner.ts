@@ -287,7 +287,6 @@ export class PipelineRunner {
     state.bytes_written = true;
   }
 
-
   private successOutcome(state: PipelineState): PipelineOutcome {
     const { ctx } = state;
     state.trace.fast_path = ctx.fast_path;

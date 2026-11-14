@@ -32,8 +32,8 @@ export class S3OnRequest implements Stage {
     // （长上下文大请求体在 fast path 下也不该为"一个空插件链"付出全量解码）。
     const requestSidePlugins = deps.pluginHost.requestSide();
     if (requestSidePlugins.length === 0) {
-      ctx.recordStage(this.id, deps.clock.now() - started, "no-request-side-plugin");
-      deps.metrics.increment("pipeline.stage", 1, { stage: this.id, result: "noop" });
+      ctx.recordStage(this.id, deps.clock.now() - started, 'no-request-side-plugin');
+      deps.metrics.increment('pipeline.stage', 1, { stage: this.id, result: 'noop' });
       return;
     }
 

@@ -136,7 +136,11 @@ async function* singleFrameStream(
 function eventToFrameData(ev: CanonicalStreamEvent): FrameData {
   switch (ev.type) {
     case 'start':
-      return { model: ev.message.model, client_format: 'openai.chat', provider_format: 'openai.chat' };
+      return {
+        model: ev.message.model,
+        client_format: 'openai.chat',
+        provider_format: 'openai.chat',
+      };
     case 'part.begin':
       return { kind: 'chat', index: ev.index, part: ev.part };
     case 'part.end':
