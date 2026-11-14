@@ -7,3 +7,6 @@ scripts/check-docs.mjs
 .github/
 *.md
 .markdownlint-cli2.jsonc
+# 生成物：models.dev 离线快照由 scripts/fetch-models-dev.mjs 生成，重排它会让
+# 「上游改了 → 我们重新生成」的 diff 里混进纯格式噪音，看不出来真正变了什么。
+catalog/vendor/
