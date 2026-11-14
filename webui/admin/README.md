@@ -29,7 +29,7 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
 | `src/api/types.ts` | 管理面 HTTP 契约的**前端镜像**（权威在 `admin/api-types.ts`） |
 | `src/router.ts` | 最小 hash 路由（不引 react-router） |
 | `src/format.ts` | 时间 / 数字 / 金额格式化 |
-| `src/pages/*` | Login / Channels / Credentials / Aliases / ModelCatalog / Usage / System |
+| `src/pages/*` | Login / Channels / Credentials / VirtualKeys / Aliases / ModelCatalog / Usage / Settings / System |
 | `src/components/ChannelFormModal.tsx` | 新建 / 编辑渠道弹窗（ComboBox 选 Provider + API Key） |
 
 ## 信息架构（NewAPI → 我们）
@@ -38,10 +38,12 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
 | --- | --- | --- |
 | 渠道 | 渠道（Provider） | `#/channels` |
 | —（渠道内 key） | 凭据（掩码） | `#/credentials` |
+| API 密钥 / 令牌 | 客户端密钥（virtual key，掩码） | `#/virtual-keys` |
 | — | 别名映射 | `#/aliases` |
 | 模型 / 渠道测试 | 模型目录（能力矩阵只读） | `#/catalog` |
 | 数据看板 | 用量看板 | `#/usage` |
-| 设置 / 关于 | 系统（密钥状态 / 代价说明 / 关于） | `#/system` |
+| 设置 | 系统设置（第一屏 8 项 + 来源标注） | `#/settings` |
+| 设置 / 关于 | 安全与密钥（密钥状态 / 代价说明 / 关于） | `#/system` |
 
 - **渠道页**：顶栏「新建渠道」+ 搜索，主体表格（名称 / Provider / 状态 / 模型数 / 操作
   [编辑·删除·测试]），状态用 `Tag`。
@@ -51,12 +53,22 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
   （落库后打一次上游探测，回报成败与耗时）。Provider 预设来自只读端点
   `GET /admin/api/provider-presets`（数据在 `providers/presets.ts`）。
 - **凭据页**：只显示掩码 + 创建时间 + 所属 provider；支持录入 / 删除 / 探测；**绝不明文回显**。
+- **客户端密钥页**：virtual key 列表（掩码 + key_id + 模型/provider 限制 + 过期 + 状态）/
+  新建 / 撤销 / 删除 / 看该 key 用量。**完整密钥只在新建响应的「仅此一次」模态框里出现**，
+  关掉即从 state 消失；列表与用量接口一律只回掩码与前 8 位（66-auth.md §2.2）。
+  页面顶部按 `GET /admin/api/auth-mode` 展示当前数据面认证模式，配置冲突时直接说清
+  （虚拟 key 与 `AG_ACCESS_TOKEN` 互斥，见后端 `auth/data-plane.ts`）。
 - **别名页**：表格 + 弹窗；一句话说明三级优先级（显式别名 > 前缀规则 > 原样 id），细节进 Tooltip。
 - **模型目录页**：表格（模型 / provider / 上下文 / 模态 / 约束 / 合约测试 / 状态），按模态 /
   关键词过滤，点行看 `SideSheet` 详情；顶栏可触发一次上游同步。
 - **用量看板页**：顶部汇总卡（请求数 / 输入 token / 输出 token / 现金 / 等价 API / 未定价），
   下面最近记录表格 + 对账 + 余额探测。
-- **系统页**：密钥状态表（模式 / 解锁 / DEK / 加密条数 / 是否建议轮换 / KEK 指纹）；
+- **系统设置页**：第一屏 8 个最常改项（全局超时 / TTFB / 流式空闲超时 / 最大重试 /
+  退避基数 / loss policy / 模型同步间隔 / 插件超时），每项标注**当前来源**
+  （加密存储 / 环境变量 / 配置文件 / 默认值）；被环境变量覆盖的项显示当前值但输入框禁用，
+  并给出原因（服务端同样回 409 `env_locked`，不是只在前端禁用）。改完即时生效、不用重启，
+  重启后仍在（值落在加密存储里）。
+- **安全与密钥页**：密钥状态表（模式 / 解锁 / DEK / 加密条数 / 是否建议轮换 / KEK 指纹）；
   **代价说明压成一行 + 「查看详情」弹窗**（原文案一字不改）；KEK/DEK 轮换（破坏性，二次确认）。
 
 ## 安全约定（三条，写进代码，不得弱化）
@@ -64,9 +76,14 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
 1. **会话令牌只在内存**（`src/auth.tsx` 的 React state/ref）。不写
    `localStorage` / `sessionStorage`——那会让令牌在关闭标签页后仍可被同源任意脚本读到，
    而管理面威胁模型里同源 XSS 是要防的。代价是刷新页面要重新登录，登录页与系统页都明示。
-2. **完整密钥永不渲染**。凭据表只渲染服务端给的 `masked`；`src/api/client.ts` 的
-   `secretTripwire` 在把响应交回页面前扫一遍，出现疑似完整密钥字段就抛错并阻止渲染
-   （只在 `console.warn` 记字段路径，绝不记值）。完整 key 只在录入 / 新建表单里出现一次。
+2. **完整密钥永不渲染**（唯一例外见下）。凭据表只渲染服务端给的 `masked`；
+   `src/api/client.ts` 的 `secretTripwire` 在把响应交回页面前扫一遍，出现疑似完整密钥字段
+   就抛错并阻止渲染（只在 `console.warn` 记字段路径，绝不记值）。完整 key 只在录入 /
+   新建表单里出现一次。
+   **唯一例外**：`POST /virtual-keys` 的创建响应会带一次 `plaintext`（66-auth.md §2.2：
+   明文只在创建响应里返回一次）。那个调用显式传 `allowPlaintext: true`，且该选项**只对
+   字面名为 `plaintext` 的字段开口子**；其他任何 secret 形字段照样被拦。测试
+   `tests/ui-contract.test.ts` 断言全前端只有这一处使用它。
 3. **代价文案原样展示**。`keystore.tradeoff_note`
    （[`docs/design/65-storage-and-retention.md`](../docs/design/65-storage-and-retention.md)
    §3.2b「自动解锁换不来运行时防护」）系统页用单行 + 弹窗呈现，**不截断文本内容、不改写、

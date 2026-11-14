@@ -13,7 +13,9 @@ import {
   IconKey,
   IconLink,
   IconList,
+  IconLock,
   IconSetting,
+  IconUserCircle,
 } from '@douyinfe/semi-icons';
 import { useAuth } from './auth';
 import { ROUTES, useHashRoute } from './router';
@@ -24,14 +26,18 @@ import { Aliases } from './pages/Aliases';
 import { ModelCatalog } from './pages/ModelCatalog';
 import { Usage } from './pages/Usage';
 import { System } from './pages/System';
+import { VirtualKeys } from './pages/VirtualKeys';
+import { Settings } from './pages/Settings';
 
 const NAV_ITEMS: Array<{ itemKey: string; text: string; icon: React.ReactNode }> = [
   { itemKey: ROUTES.channels, text: '渠道', icon: <IconCloud /> },
   { itemKey: ROUTES.credentials, text: '凭据', icon: <IconKey /> },
+  { itemKey: ROUTES.virtualKeys, text: '客户端密钥', icon: <IconUserCircle /> },
   { itemKey: ROUTES.aliases, text: '别名映射', icon: <IconLink /> },
   { itemKey: ROUTES.catalog, text: '模型目录', icon: <IconList /> },
   { itemKey: ROUTES.usage, text: '用量看板', icon: <IconHistogram /> },
-  { itemKey: ROUTES.system, text: '系统', icon: <IconSetting /> },
+  { itemKey: ROUTES.settings, text: '系统设置', icon: <IconSetting /> },
+  { itemKey: ROUTES.system, text: '安全与密钥', icon: <IconLock /> },
 ];
 
 export function App(): JSX.Element {
@@ -53,8 +59,12 @@ export function App(): JSX.Element {
         return <ModelCatalog />;
       case ROUTES.usage:
         return <Usage />;
+      case ROUTES.settings:
+        return <Settings />;
       case ROUTES.system:
         return <System />;
+      case ROUTES.virtualKeys:
+        return <VirtualKeys />;
       case ROUTES.channels:
       default:
         return <Channels />;

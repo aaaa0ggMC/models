@@ -36,9 +36,15 @@ export interface ClientHooks {
   onUnauthorized(): void;
 }
 
-/** 疑似「完整密钥」的字段名。掩码字段（masked / head / length）不在内。 */
+/**
+ * 疑似「完整密钥」的字段名。掩码字段（masked / head / length）不在内。
+ *
+ * `plaintext` 也在内：管理面**只有一个**端点会返回完整密钥（新建 virtual key），
+ * 那个调用必须显式带 `allowPlaintext: true` 才能渲染。默认挡住意味着将来谁
+ * 再加一个返回明文的端点，会在开发时就被拦下，而不是静默渲染出去。
+ */
 const SECRET_KEY_RE =
-  /(secret|api[_-]?key|access[_-]?token|^key$|password|passphrase|authorization|bearer|private[_-]?key|client[_-]?secret)/i;
+  /(secret|api[_-]?key|access[_-]?token|^key$|password|passphrase|authorization|bearer|private[_-]?key|client[_-]?secret|plaintext)/i;
 
 /** 看起来已被掩码过（含 * 或 …）的值不算泄漏。 */
 function looksMasked(value: string): boolean {
@@ -48,16 +54,30 @@ function looksMasked(value: string): boolean {
 /**
  * 在响应体里找疑似完整密钥字段，返回 `路径[]`（**只回路径，不回值**——
  * 回值就等于把密钥写进控制台）。
+ *
+ * `allowPlaintext` 只对**字名叫 `plaintext`** 的字段开口子，且只由
+ * `POST /virtual-keys` 使用（那是管理面唯一返回完整密钥的地方，见
+ * api/types.ts 的 VirtualKeyCreateResponse）。其他任何 secret 形字段照样拦。
  */
-function findSecretLike(value: unknown, path = '', depth = 0, out: string[] = []): string[] {
+function findSecretLike(
+  value: unknown,
+  path = '',
+  depth = 0,
+  out: string[] = [],
+  allowPlaintext = false,
+): string[] {
   if (depth > 4 || value === null || typeof value !== 'object') return out;
   if (Array.isArray(value)) {
-    value.forEach((item, i) => findSecretLike(item, `${path}[${i}]`, depth + 1, out));
+    value.forEach((item, i) =>
+      findSecretLike(item, `${path}[${i}]`, depth + 1, out, allowPlaintext),
+    );
     return out;
   }
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
     const here = path ? `${path}.${key}` : key;
+    const exempt = allowPlaintext && key === 'plaintext';
     if (
+      !exempt &&
       typeof item === 'string' &&
       item.length >= 8 &&
       SECRET_KEY_RE.test(key) &&
@@ -65,15 +85,15 @@ function findSecretLike(value: unknown, path = '', depth = 0, out: string[] = []
     ) {
       out.push(here);
     } else {
-      findSecretLike(item, here, depth + 1, out);
+      findSecretLike(item, here, depth + 1, out, allowPlaintext);
     }
   }
   return out;
 }
 
 /** 渲染前检查：命中就抛 ApiFailure（调用方据此阻止渲染该对象）。 */
-function secretTripwire(data: unknown, label: string): void {
-  const hits = findSecretLike(data);
+function secretTripwire(data: unknown, label: string, allowPlaintext = false): void {
+  const hits = findSecretLike(data, '', 0, [], allowPlaintext);
   if (hits.length === 0) return;
   console.warn(`[admin] ${label} 返回了疑似完整密钥字段，已阻止渲染：${hits.join(', ')}`);
   throw new ApiFailure(
@@ -105,9 +125,21 @@ export interface RequestOptions {
   auth?: boolean;
   /** 跳过的 secret tripwire 标签（默认用 path）。 */
   tripwireLabel?: string;
+  /**
+   * 允许响应里出现字面名为 `plaintext` 的字段。
+   *
+   * **只有 `POST /virtual-keys` 可以用**——那是管理面唯一返回完整密钥的端点
+   * （66 §2.2：明文只在创建响应里返回一次）。其他 secret 形字段照样被拦。
+   */
+  allowPlaintext?: boolean;
 }
 
-async function decode(res: Response, hooks: ClientHooks, label: string): Promise<unknown> {
+async function decode(
+  res: Response,
+  hooks: ClientHooks,
+  label: string,
+  allowPlaintext: boolean,
+): Promise<unknown> {
   const text = await res.text();
   let data: unknown = null;
   if (text.length > 0) {
@@ -127,7 +159,7 @@ async function decode(res: Response, hooks: ClientHooks, label: string): Promise
     const code = (data as ApiError | null)?.error?.code ?? `http_${res.status}`;
     throw new ApiFailure(code, message, res.status);
   }
-  secretTripwire(data, label);
+  secretTripwire(data, label, allowPlaintext);
   return data ?? {};
 }
 
@@ -137,7 +169,7 @@ export async function api<T>(
   options: RequestOptions,
   hooks: ClientHooks,
 ): Promise<T> {
-  const { method = 'GET', body, auth = true, tripwireLabel } = options;
+  const { method = 'GET', body, auth = true, tripwireLabel, allowPlaintext = false } = options;
   const token = auth ? hooks.getToken() : null;
   let res: Response;
   try {
@@ -156,7 +188,7 @@ export async function api<T>(
       0,
     );
   }
-  const data = await decode(res, hooks, tripwireLabel ?? `${method} ${path}`);
+  const data = await decode(res, hooks, tripwireLabel ?? `${method} ${path}`, allowPlaintext);
   // `{ ok:false, error }` 以 HTTP 200 返回的端点，靠这个把失败翻出来。
   if (data && typeof data === 'object' && (data as { ok?: unknown }).ok === false) {
     const obj = data as { error?: unknown; errors?: unknown };
