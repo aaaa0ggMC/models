@@ -1,12 +1,14 @@
 # webui/admin —— AgentGateway 管理面前端（Vite + React 18 + Semi Design）
 
 网关自带的管理界面：**静态产物由网关自己托管，无独立服务、无 CDN**。本目录是一个
-真正的 Vite 工程（React 18 + TypeScript + [Semi Design](https://semi.design/)），
-信息架构对标 [NewAPI / one-api 一系](https://github.com/Calcium-Ion/new-api)（同栈
-React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主、信息密度优先，不放说明段落。
-解释性内容（设计结论、优先级规则、代价说明）集中在**「帮助 / 文档」页**（`#/help`，
-支持 `?section=<id>` 小节深链），各功能页只留一句话摘要 + 「了解更多」入口。
+真正的 Vite 工程（React 18 + TypeScript + [Semi Design](https://semi.design/)）。
 
+> **2026-11-14 UI 现代化改版**：信息架构从「九个平铺页」重排成「四组侧栏 + 概览主场」；
+> 视觉基座换成「中性灰画布 + 白卡片 + 发丝边 + indigo 强调色 + 明暗主题」；
+> 并补上了 Semi 没有的图表（自绘 SVG，零新增依赖）。设计依据与调研结论见
+> [`docs/design/90-admin-ui-redesign.md`](../docs/design/90-admin-ui-redesign.md)。
+> 全部既有路由（`#/channels` 等九条）一字未改，老书签继续有效。
+>
 > 这取代了早先「单个手写 `app.js`、无框架、无构建」的版本（已删除）。安全约定全部保留，
 > 见下文「安全约定」。
 
@@ -16,6 +18,16 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
 - 选 Semi 的理由：NewAPI/one-api 的前端正是 React + Semi，组件覆盖
   （Table/Form/Select/Modal/Toast/Banner/Layout/Nav/SideSheet）与信息密度都对标得上，
   「学它就连栈一起学」。默认 Semi，不自建组件库（AGENTS.md：`webui/` 不从零画）。
+- **继续用 Semi，不换栈**（改版后的结论，依据见设计文档 §2）：Semi 2.105 的 354 个设计
+  令牌全是 CSS 自定义属性、暗色模式开箱可用、`Nav` 原生支持分组；"旧观感"来自六个可改的
+  默认值（饱和 azure 主色、3px 圆角、亮色背景六个全是纯白、1px 黑边投影、全边框表格、
+  Inter 只声明未打包），不是能力不足。换 shadcn/ui + Tailwind 估算 4–6 周，改令牌 + 补图表
+   加重排 IA 是 1.5–3 周。
+- **图表库一个都不引，自绘 SVG**。实测：Recharts 3.10.1 要多 **126 KB gzip** 与 **32 个
+  传递依赖**（react-redux / @reduxjs/toolkit / immer / victory-vendor / d3 …）；
+  ECharts 6.1.0 即使按需裁剪也要 **184 KB gzip**。自绘 SVG 的净增是 **12 KB gzip**，
+  且颜色直接吃 `--ag-*` 令牌、暗色零成本、交互（十字准星 + 键盘准星 + 等距空桶）正好够。
+  详见设计文档 §2.5。
 
 ## 目录
 
@@ -24,30 +36,55 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
 | `index.html` | Vite 入口（SPA 外壳，`#root` 挂载点） |
 | `vite.config.ts` | `base: '/admin/'`、root 指向本目录、产物落 `dist/` |
 | `tsconfig.json` | 前端专用 tsconfig（DOM lib、`react-jsx`；与后端 tsconfig 独立） |
-| `src/main.tsx` | React 根 + 引入 Semi 全量样式 |
-| `src/App.tsx` | 外壳：Semi `Nav` 侧栏 + 内容区 + 未登录门 |
+| `src/main.tsx` | React 根 + Semi 全量样式 + 视觉基座样式 + `ThemeProvider` |
+| `src/App.tsx` | 外壳：分组 `Nav` 侧栏 + 顶栏（面包屑/主题切换）+ 内容区 + 未登录门 |
 | `src/auth.tsx` | 会话状态（**令牌只在内存**）+ 绑定好的 API 调用器 |
+| `src/theme.tsx` | 明暗主题（只负责给 `body` 挂/摘 `theme-mode`；配色全在 CSS） |
+| `src/styles/theme.css` | **视觉基座**：`--ag-*` 设计令牌 + Semi 令牌覆盖 + 外壳与组件样式 |
 | `src/api/client.ts` | fetch 封装：401 处理 + 密钥防泄漏兜底（tripwire） |
 | `src/api/client.test.ts` | secret tripwire 的回归测试（纯函数，不引 jsdom；判据是「值的形状」而不是字段名） |
 | `src/api/types.ts` | 管理面 HTTP 契约的**前端镜像**（权威在 `admin/api-types.ts`） |
-| `src/router.ts` | 最小 hash 路由（不引 react-router）；`helpHref()` 拼帮助页小节深链 |
-| `src/format.ts` | 时间 / 数字 / 金额格式化 |
-| `src/pages/*` | Login / Channels / Credentials / VirtualKeys / Aliases / ModelCatalog / Usage / Settings / System / Help |
+| `src/router.ts` | 最小 hash 路由（不引 react-router）；`helpHref()` 拼帮助页小节深链；范围进 `?range=` |
+| `src/format.ts` | 时间 / 数字 / 金额 / 紧凑数字格式化 |
+| `src/charts/series.ts` | 图表几何纯函数：nice 刻度 / 坐标映射 / path / LTTB 抽样 / topN 聚合 / sparkline |
+| `src/charts/series.test.ts` | 上面的回归测试（26 例） |
+| `src/charts/usage.ts` | 用量契约 → 图表系列：范围档位 / 桶→点 / 排行桶 / 轴标签 / 环比语义 |
+| `src/charts/usage.test.ts` | 上面的回归测试（25 例） |
+| `src/charts/TimeSeriesChart.tsx` | 自绘 SVG 折线/面积图（十字准星 + 键盘准星 + tooltip） |
+| `src/charts/RankedBarChart.tsx` | 横向条形排行（DOM 文本，标签可省略号） |
+| `src/charts/Sparkline.tsx` | 卡片迷你走势线（无轴无刻度，Tufte sparkline） |
+| `src/charts/useElementWidth.ts` | ResizeObserver 量容器宽度（SVG 1:1 画，不用 viewBox 缩放） |
+| `src/components/ui.tsx` | 自封装**业务组件**：PageHeader / StatCard / ChartCard / StatusTag / ProviderBadge / EmptyState / 骨架 / RangeSwitch |
 | `src/components/ChannelFormModal.tsx` | 新建 / 编辑渠道弹窗（ComboBox 选 Provider + API Key） |
+| `src/pages/*` | Overview / Channels / Credentials / VirtualKeys / Aliases / ModelCatalog / Usage / Settings / System / Help / Login |
 
-## 信息架构（NewAPI → 我们）
+## 信息架构（改版前 → 改版后）
 
-| NewAPI | 我们 | 路由 |
-| --- | --- | --- |
-| 渠道 | 渠道（Provider） | `#/channels` |
-| —（渠道内 key） | 凭据（掩码） | `#/credentials` |
-| API 密钥 / 令牌 | 客户端密钥（virtual key，掩码） | `#/virtual-keys` |
-| — | 别名映射 | `#/aliases` |
-| 模型 / 渠道测试 | 模型目录（能力矩阵只读） | `#/catalog` |
-| 数据看板 | 用量看板 | `#/usage` |
-| 设置 | 系统设置（第一屏 8 项 + 来源标注） | `#/settings` |
-| 设置 / 关于 | 安全与密钥（密钥状态 / 代价说明 / 关于） | `#/system` |
-| — | 帮助 / 文档 | `#/help`（支持 `?section=<id>` 小节深链） |
+改版前是**九个平铺**的导航项，没有分组、没有主次，默认落地页是「渠道」。
+改版后按 NewAPI 的四组式侧边栏分组（总览 / 上游接入 / 模型与用量 / 系统），
+主场换成「概览」。分组用 Semi `Nav` 的嵌套 `items` 实现，不自己画侧栏。
+
+| 组 | 页面 | 路由 | 回答什么问题 |
+| --- | --- | --- | --- |
+| **总览** | 概览 | `#/overview` | 网关此刻正常吗、钱在涨吗 |
+| **上游接入** | 渠道（Provider） | `#/channels` | 请求打到哪个上游 |
+| | 凭据（掩码） | `#/credentials` | 用哪把 key 访问上游 |
+| | 别名映射 | `#/aliases` | 客户端写的 model id 落到哪 |
+| **模型与用量** | 模型目录（能力矩阵只读） | `#/catalog` | 有哪些模型、什么能力 |
+| | 用量看板 | `#/usage` | 花了多少、怎么花的（可下钻） |
+| **系统** | 客户端密钥（virtual key，掩码） | `#/virtual-keys` | 客户端怎么接进来 |
+| | 系统设置（第一屏 8 项 + 来源标注） | `#/settings` | 运行时参数怎么配 |
+| | 安全与密钥（密钥状态 / 代价说明 / 关于） | `#/system` | 密钥存储什么状态 |
+| | 帮助 / 文档 | `#/help`（支持 `?section=<id>` 小节深链） | 规则与代价的完整说明 |
+
+- **概览页是 operational dashboard**（NN/g 的分类）：一屏回答"正常吗、钱在涨吗"，
+  几乎不用交互。**用量页是 analytical report**：同一批数据，但允许切更细的范围、
+  看全部维度、逐条翻记录。两者不混。
+- **时间范围进 hash 查询串**：`#/usage?range=7d`、`#/overview?range=30d`。
+  刷新与分享链接不丢状态（OpenRouter / Vercel 的做法）。查询串在路由匹配前被剥掉，
+  永远不会把路由判到未知页上去。
+- 全部既有路由一字未改（`tests/ui-contract.test.ts` 守着这条）；`/`（无 hash）的归一
+  目标从 `/channels` 改成 `/overview`。
 
 - **帮助 / 文档页**：全站解释性文字集中在这里（设计结论、优先级规则、代价说明），每节标注
   来源——设计文档摘录标 `docs/design/<文件> §N`，实现摘录标 `config/settings.ts` /
@@ -71,8 +108,13 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
 - **别名页**：表格 + 弹窗；一句话说明三级优先级（显式别名 > 前缀规则 > 原样 id），细节进 Tooltip。
 - **模型目录页**：表格（模型 / provider / 上下文 / 模态 / 约束 / 合约测试 / 状态），按模态 /
   关键词过滤，点行看 `SideSheet` 详情；顶栏可触发一次上游同步。
-- **用量看板页**：顶部汇总卡（请求数 / 输入 token / 输出 token / 现金 / 等价 API / 未定价），
-  下面最近记录表格 + 对账 + 余额探测。
+- **概览页**：4 张统计卡（现金费用 / 请求数 / tokens / 未定价，各带 sparkline 与环比），
+  加上成本趋势、请求量趋势（面积图）、按模型/provider 花费（横向条形，前 8 + 其他）、
+  余额与对账、系统状态体检。数据来自 `/usage` 与 `/usage/timeseries`。
+- **用量看板页**：6 张统计卡，加上成本/请求量趋势（面积图）、token 构成（堆叠柱）、
+  按模型花费、按 provider 花费、按模型请求数（均为横向条形）、最近 50 条明细、对账、余额探测。
+- **延迟分位与错误率时序没有数据源**（`UsageRecord` 无 `duration_ms` / `http_status`），
+  两页都放「待 P0-4 请求日志」的说明卡，**不放假数据**。
 - **系统设置页**：第一屏 8 个最常改项（全局超时 / TTFB / 流式空闲超时 / 最大重试 /
   退避基数 / loss policy / 模型同步间隔 / 插件超时），每项标注**当前来源**
   （加密存储 / 环境变量 / 配置文件 / 默认值）；被环境变量覆盖的项显示当前值但输入框禁用，
@@ -80,6 +122,26 @@ React + Semi）：左侧一列导航 + 右侧功能页，页面以表格为主�
   重启后仍在（值落在加密存储里）。
 - **安全与密钥页**：密钥状态表（模式 / 解锁 / DEK / 加密条数 / 是否建议轮换 / KEK 指纹）；
   **代价说明压成一行 + 「查看详情」弹窗**（原文案一字不改）；KEK/DEK 轮换（破坏性，二次确认）。
+
+## 视觉基座（`src/styles/theme.css` + `src/theme.tsx`）
+
+Semi 亮色模式下 `--semi-color-bg-0` 到 `bg-4` **六个全是纯白**，没有明度分层，
+于是整站只能靠边框"框"出区域——这是"上世纪观感"的主因。基座做四件事：
+
+1. **补一层画布**：页面 `--ag-canvas`（亮 `#f6f7f9` / 暗 `#0e0e11`），卡片 `--ag-surface`
+   （亮 `#fff` / 暗 `#17171c`）+ 发丝边 + 14px 圆角 + 一层几乎看不见的投影。
+2. **换强调色与圆角**：Semi 默认 primary 是字节蓝 `#0064FA`（new-api 同款，因为它俩都吃
+   Semi 默认主题）→ indigo `#4f46e5`；圆角 3/6px → 6/10/14px。
+3. **定义图表与状态语义**（`--ag-*`）：Semi 没有任何图表组件，图表色板另立
+   （`--ag-chart-1..6`，按亮度差排序以保证色盲可辨）。
+4. **暗色只写 CSS**：Semi 的暗色靠 `body[theme-mode="dark"]` 上的 CSS 变量翻转，
+   **React 侧没有主题 API**（`ConfigProvider` 2.105 没有 `theme` prop）。
+   所以 `--ag-*` 也只在 CSS 里分亮/暗两份，JS 只负责挂/摘那个属性。
+   主题偏好存 `localStorage`（**不是凭据**，与"会话令牌只在内存"不冲突）。
+
+边界：只覆盖 Semi 官方暴露的语义令牌；Semi 组件优先用 props 而不是选择器；
+**唯一**改 Semi 内部结构的地方是 `.semi-navigation-item` 的圆角与选中态
+（Nav 不暴露选中态样式 prop，而它又是每页都看得见的门面）。
 
 ## 安全约定（三条，写进代码，不得弱化）
 
@@ -140,8 +202,13 @@ npm run lint                # 后端 eslint（webui/** 已排除，走独立工�
 npm run format              # prettier --check（生成物 dist/ 与 webui/admin/dist/ 已忽略）
 ```
 
-`webui/admin/src/api/client.test.ts` 是前端工程内唯一的测试文件：纯函数、不引 jsdom，
-由仓库根的 vitest 一并跑到（`webui/**` 只被后端 eslint 排除，没有被 vitest 排除）。
+前端工程**刻意零测试依赖**（不引 jsdom / @testing-library）。可测的全放纯函数模块：
+`src/api/client.test.ts`（tripwire）、`src/charts/series.test.ts`（26 例）、
+`src/charts/usage.test.ts`（25 例）。渲染层由 `tests/ui-contract.test.ts` 的源码断言守契约
+（新页面接上了路由与导航、完整密钥只有一条渲染路径、前端类型与后端契约同字段、
+趋势图的数据来源、缺数据源的图表标注了依赖）。
+这些测试都在仓库根的 vitest 覆盖范围内（`webui/**` 只被后端 eslint 排除，
+没有被 vitest 排除）。
 
 ## Provider 预设与来源
 
