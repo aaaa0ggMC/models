@@ -446,7 +446,22 @@ export class EnvCredentialResolver implements CredentialResolver {
   }
 
   formatFor(accessPath: string): FormatId {
-    return (this.paths.get(accessPath)?.format ?? 'openai.chat') as FormatId;
+    const registered = this.paths.get(accessPath)?.format;
+    if (registered !== undefined) return registered as FormatId;
+    if (
+      accessPath.endsWith('.anthropic-messages') ||
+      accessPath === 'anthropic' ||
+      accessPath === 'mock-anthropic'
+    ) {
+      return 'anthropic.messages';
+    }
+    if (accessPath.endsWith('.openai-responses') || accessPath === 'openai.responses') {
+      return 'openai.responses';
+    }
+    if (accessPath.endsWith('.gemini-generateContent') || accessPath === 'gemini') {
+      return 'gemini.generateContent';
+    }
+    return 'openai.chat';
   }
 
   baseUrlFor(accessPath: string): string {
@@ -478,10 +493,17 @@ export class EnvCredentialResolver implements CredentialResolver {
     credential?: UpstreamCredential,
   ): Promise<ResolvedHeaders> {
     const path = this.paths.get(accessPath);
-    if (path === undefined || !path.requires_credential) {
+    if (path !== undefined && !path.requires_credential) {
       return { headers: {} };
     }
     const cred = credential ?? this.credentialsFor(accessPath)[0];
+    if (
+      path === undefined &&
+      cred === undefined &&
+      (accessPath === 'mock' || accessPath.startsWith('mock-'))
+    ) {
+      return { headers: {} };
+    }
     const secret = cred === undefined ? undefined : await this.readSecret(cred);
     if (secret === undefined) {
       throw new Error(
@@ -502,8 +524,9 @@ export class EnvCredentialResolver implements CredentialResolver {
       activeSecret = oauthPayload.access_token;
     }
 
-    const headers = authHeadersFor(accessPath, activeSecret, path.format);
-    const hints = path.transport_hints;
+    const resolvedFormat = path?.format ?? this.formatFor(accessPath);
+    const headers = authHeadersFor(accessPath, activeSecret, resolvedFormat);
+    const hints = path?.transport_hints;
     if (hints?.extra_headers !== undefined) {
       for (const [k, v] of Object.entries(hints.extra_headers)) {
         if (headers[k] === undefined) headers[k] = v;
@@ -517,14 +540,20 @@ export class EnvCredentialResolver implements CredentialResolver {
         _ctx.request_id ||
         'ag-default-session';
     }
-    if (oauthPayload?.provider === 'openai-codex' || isCodexBaseUrl(path.base_url)) {
+    if (
+      oauthPayload?.provider === 'openai-codex' ||
+      isCodexBaseUrl(path?.base_url ?? this.baseUrlFor(accessPath))
+    ) {
       if (oauthPayload?.account_id !== undefined && oauthPayload.account_id !== '') {
         headers['chatgpt-account-id'] = oauthPayload.account_id;
       }
       if (headers['OpenAI-Beta'] === undefined) headers['OpenAI-Beta'] = 'responses=experimental';
       if (headers['originator'] === undefined) headers['originator'] = 'ag';
     }
-    if (isOpenCodeBaseUrl(path.base_url) && headers['x-opencode-session'] === undefined) {
+    if (
+      isOpenCodeBaseUrl(path?.base_url ?? this.baseUrlFor(accessPath)) &&
+      headers['x-opencode-session'] === undefined
+    ) {
       headers['x-opencode-session'] =
         _ctx.client_raw_headers?.['x-opencode-session'] ||
         _ctx.client_raw_headers?.['x-session-id'] ||
