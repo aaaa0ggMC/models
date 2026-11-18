@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { helpHref, navigate, type HelpSectionId, type RouteId } from '../router.js';
 import type { ActionableError } from '../api/client.js';
@@ -433,6 +433,31 @@ export function BrandLogo({ size = 24 }: { size?: number }): React.JSX.Element {
       <circle cx="16" cy="17.5" r="2.2" fill="#FFFFFF" />
     </svg>
   );
+}
+
+/**
+ * 为长耗时异步按钮提供平滑的百分比进度指示（0% → 92% 渐近推进，完成时归位）。
+ */
+export function useSimulatedProgress(active: boolean): number {
+  const [progress, setProgress] = useState<number>(0);
+
+  useEffect(() => {
+    if (!active) {
+      setProgress(0);
+      return;
+    }
+    setProgress(8);
+    const timer = window.setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 92) return 92;
+        const step = prev < 50 ? 12 : prev < 78 ? 5 : 2;
+        return Math.min(92, prev + step);
+      });
+    }, 220);
+    return () => window.clearInterval(timer);
+  }, [active]);
+
+  return progress;
 }
 
 export type { RouteId };

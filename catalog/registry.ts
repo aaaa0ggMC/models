@@ -402,16 +402,31 @@ export class ModelCatalog {
       ensure(this.providerResolver(entry.access_path), entry.model).entries.push(entry);
     }
 
+    type LayerContrib = { sourceId: string; layer: MetadataLayer; meta: ModelMetadata };
+    const offlineByKey = new Map<string, LayerContrib[]>();
+    const offlineById = new Map<string, LayerContrib[]>();
+
     for (const source of this.sources) {
       const snapshot = this.snapshots.get(source.id);
       if (snapshot === undefined) continue;
       for (const meta of snapshot.models) {
         const provider = meta.provider ?? source.providers?.[0] ?? 'unknown';
-        ensure(provider, meta.id).contributions.push({
+        const contrib: LayerContrib = {
           sourceId: source.id,
           layer: source.layer,
           meta,
-        });
+        };
+        ensure(provider, meta.id).contributions.push(contrib);
+        if (source.layer === 'offline') {
+          const k = `${provider.toLowerCase()}\0${meta.id}`;
+          const byKey = offlineByKey.get(k);
+          if (byKey) byKey.push(contrib);
+          else offlineByKey.set(k, [contrib]);
+
+          const byId = offlineById.get(meta.id);
+          if (byId) byId.push(contrib);
+          else offlineById.set(meta.id, [contrib]);
+        }
       }
     }
 
@@ -424,6 +439,24 @@ export class ModelCatalog {
           layer: 'upstream',
           meta,
         });
+      }
+    }
+
+    // 兼容自带上游命名空间/前缀/变体后缀的模型名（如 OpenRouter 的
+    // `anthropic/claude-haiku-4-5`、`~anthropic/claude-haiku-4-5`、`openai/gpt-4o:free`）：
+    // 若矩阵中真实存在的模型在当前 provider 下没有精确命中的 offline 贡献，
+    // 按通用语法拆解命名空间与裸模型 ID，回落匹配离线快照中对应的元数据。
+    for (const group of grouped.values()) {
+      if (group.entries.length === 0) continue;
+      if (group.contributions.some((c) => c.layer === 'offline')) continue;
+      const fallback = findOfflineFallbackContributions(
+        group.provider,
+        group.model,
+        offlineByKey,
+        offlineById,
+      );
+      if (fallback.length > 0) {
+        group.contributions.push(...fallback);
       }
     }
 
@@ -1162,4 +1195,69 @@ function synthesizeRouteGraphAbilities(
     ...(custom.input_modalities === undefined ? {} : { input_modalities: custom.input_modalities }),
     ...(custom.output_modalities === undefined ? {} : { output_modalities: custom.output_modalities }),
   };
+}
+
+/**
+ * 拆解带上游命名空间/前缀/变体后缀的模型 ID（通用语法，不硬编码特定聚合商）：
+ * - 去掉前导修饰符（如 `~anthropic/claude-haiku-4-5` 中的 `~`）
+ * - 去掉尾部路由标签（如 `openai/gpt-4o:free`、`anthropic/claude-sonnet-4-5:beta` 中的 `:tag`）
+ * - 拆出可选 `<upstreamNs>/<bareId>`
+ */
+export function parseModelMetadataLookupCandidates(rawModel: string): {
+  upstreamNamespace?: string;
+  bareIds: string[];
+} {
+  const trimmed = rawModel.trim().replace(/^~+/, '');
+  const tagMatch = /^(.+):[a-zA-Z0-9._-]+$/.exec(trimmed);
+  const withoutTag = tagMatch?.[1] ?? trimmed;
+
+  const slashIdx = withoutTag.indexOf('/');
+  const upstreamNamespace =
+    slashIdx > 0 ? withoutTag.slice(0, slashIdx).toLowerCase() : undefined;
+  const bare = slashIdx > 0 ? withoutTag.slice(slashIdx + 1) : withoutTag;
+
+  const bareIds: string[] = [];
+  if (bare !== '') {
+    bareIds.push(bare);
+    const dotToDash = bare.replace(/(\d)\.(\d)/g, '$1-$2');
+    if (dotToDash !== bare) bareIds.push(dotToDash);
+  }
+  return { upstreamNamespace, bareIds };
+}
+
+function findOfflineFallbackContributions<
+  T extends { sourceId: string; layer: MetadataLayer; meta: ModelMetadata },
+>(
+  channelProvider: string,
+  rawModel: string,
+  offlineByKey: ReadonlyMap<string, T[]>,
+  offlineById: ReadonlyMap<string, T[]>,
+): T[] {
+  const { upstreamNamespace, bareIds } = parseModelMetadataLookupCandidates(rawModel);
+  const channelLower = channelProvider.toLowerCase();
+
+  for (const bareId of bareIds) {
+    if (upstreamNamespace !== undefined) {
+      const exactNs = offlineByKey.get(`${upstreamNamespace}\0${bareId}`);
+      if (exactNs && exactNs.length > 0) return exactNs;
+    }
+
+    const sameProvider = offlineByKey.get(`${channelLower}\0${bareId}`);
+    if (sameProvider && sameProvider.length > 0) return sameProvider;
+
+    const byId = offlineById.get(bareId);
+    if (byId && byId.length > 0) {
+      if (upstreamNamespace !== undefined) {
+        const prefixMatched = byId.filter((c) =>
+          (c.meta.provider ?? '').toLowerCase().startsWith(upstreamNamespace),
+        );
+        if (prefixMatched.length > 0) return prefixMatched;
+      } else {
+        const providers = new Set(byId.map((c) => c.meta.provider ?? ''));
+        if (providers.size === 1) return byId;
+      }
+    }
+  }
+
+  return [];
 }

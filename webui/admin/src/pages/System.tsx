@@ -289,7 +289,7 @@ export function SystemPage(): React.JSX.Element {
                 <StatusBadge tone="warning">待升级口令哈希参数</StatusBadge>
               )}
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button
                 type="button"
                 className="ag-btn ag-btn-sm"
@@ -369,19 +369,12 @@ export function SystemPage(): React.JSX.Element {
           </label>
         </div>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(180px, 1fr) minmax(240px, 2fr)',
-            gap: 16,
-            alignItems: 'end',
-          }}
-        >
+        <div className="ag-grid-stealth">
           <div>
             <label className="ag-secondary" style={{ display: 'block', marginBottom: 6 }}>
               伪装请求头
             </label>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <input
                 type="text"
                 className="ag-input ag-mono"
@@ -405,11 +398,12 @@ export function SystemPage(): React.JSX.Element {
             <label className="ag-secondary" style={{ display: 'block', marginBottom: 6 }}>
               伪装密钥
             </label>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <input
                 type="text"
                 readOnly
                 className="ag-input ag-mono"
+                style={{ flex: '1 1 180px', minWidth: 0 }}
                 value={stealthKey}
                 placeholder="开启后自动生成"
               />

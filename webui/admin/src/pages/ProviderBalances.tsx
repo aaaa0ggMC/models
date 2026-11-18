@@ -6,7 +6,13 @@ import type {
   SubscriptionWindowQuotaDto,
 } from '../api/types.js';
 import { ProviderIcon } from '../components/ProviderIcon.js';
-import { EmptyState, ErrorBanner, PageHeader, StatusBadge } from '../components/ui.js';
+import {
+  EmptyState,
+  ErrorBanner,
+  PageHeader,
+  StatusBadge,
+  useSimulatedProgress,
+} from '../components/ui.js';
 import { formatUsd } from '../format.js';
 
 function formatTokens(n: number): string {
@@ -106,11 +112,15 @@ export function ProviderBalancesPage(): React.JSX.Element {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const refreshProgress = useSimulatedProgress(refreshing);
   const [error, setError] = useState<ActionableError | null>(null);
 
   const loadData = useCallback(async (doRefresh = false) => {
-    if (doRefresh) setRefreshing(true);
-    else setLoading(true);
+    if (doRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError(null);
     try {
       const [telRes, pRes] = await Promise.all([
@@ -132,7 +142,17 @@ export function ProviderBalancesPage(): React.JSX.Element {
   }, []);
 
   useEffect(() => {
-    void loadData(true);
+    // 先立即展示本地缓存/统计卡片，再异步后台拉取最新上游余额，避免单个上游慢或出错阻塞整页
+    let cancelled = false;
+    void (async () => {
+      await loadData(false);
+      if (!cancelled) {
+        await loadData(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [loadData]);
 
   const providerNameMap = useMemo(() => {
@@ -175,11 +195,11 @@ export function ProviderBalancesPage(): React.JSX.Element {
         actions={
           <button
             type="button"
-            className="ag-btn ag-btn-primary"
+            className="ag-btn ag-btn-primary ag-tabular"
             disabled={refreshing}
             onClick={() => void loadData(true)}
           >
-            {refreshing ? '刷新中…' : '刷新余量'}
+            {refreshing ? `刷新中 ${refreshProgress}%` : '刷新余量'}
           </button>
         }
       />
@@ -198,7 +218,7 @@ export function ProviderBalancesPage(): React.JSX.Element {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 320px), 1fr))',
             gap: 14,
           }}
         >

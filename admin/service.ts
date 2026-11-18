@@ -33,7 +33,7 @@ import {
 import type { RoutingTelemetryHub } from '../gateway-core/routing-telemetry.js';
 import {
   enrichModelsWithCachedOrOfflineMetadata,
-  enrichModelsWithOfflineMetadata,
+  syncModelsWithOnlineModelsDev,
 } from './provider-models.js';
 import {
   accessPathIdForDialect,
@@ -1750,7 +1750,7 @@ export class AdminService {
         ns !== undefined && ns !== ''
           ? { namespace: ns, namespaced_id: `${ns}/${entry.model}` }
           : {};
-      const offline = enrichModelsWithOfflineMetadata([{ id: entry.model }])[0];
+      const offline = enrichModelsWithCachedOrOfflineMetadata([{ id: entry.model }])[0];
       const metaFields: Partial<CapabilityMatrixItem> = {
         ...(entry.context_window === undefined && offline?.context_window !== undefined
           ? { context_window: offline.context_window }
@@ -1758,10 +1758,14 @@ export class AdminService {
         ...(entry.max_output_tokens === undefined && offline?.max_output_tokens !== undefined
           ? { max_output_tokens: offline.max_output_tokens }
           : {}),
-        ...(offline?.input_modalities !== undefined && offline.input_modalities.length > 0
+        ...(entry.input_modalities === undefined &&
+        offline?.input_modalities !== undefined &&
+        offline.input_modalities.length > 0
           ? { input_modalities: offline.input_modalities }
           : {}),
-        ...(offline?.output_modalities !== undefined && offline.output_modalities.length > 0
+        ...(entry.output_modalities === undefined &&
+        offline?.output_modalities !== undefined &&
+        offline.output_modalities.length > 0
           ? { output_modalities: offline.output_modalities }
           : {}),
         ...(offline?.reasoning !== undefined ? { reasoning: offline.reasoning } : {}),
@@ -1912,14 +1916,90 @@ export class AdminService {
     }
     try {
       const result = await this.deps.metadataSync.refresh();
+      const discovered = new Set(result.discovered);
+      const updated = new Set(result.updated);
+      const added = new Set(result.added);
+
+      // 同步刷新在线 models.dev 缓存，并并行拉取各已启用渠道的 /models 元数据回填能力矩阵
+      const onlinePromise = syncModelsWithOnlineModelsDev([]).catch(() => undefined);
+      const providerModelsPort = this.deps.providerModels;
+      const providerOf = this.deps.providerOfAccessPath ?? providerFromAccessPath;
+      const enabledProviders =
+        providerModelsPort !== undefined
+          ? (await this.listProviders()).filter((p) => p.enabled && p.base_url !== '')
+          : [];
+
+      const [, channelResults] = await Promise.all([
+        onlinePromise,
+        Promise.allSettled(
+          enabledProviders.map(async (p) => {
+            const res = await providerModelsPort!.fetch({
+              provider_id: p.id,
+              dialect: p.dialect,
+              base_url: p.base_url,
+            });
+            return { provider: p, res };
+          }),
+        ),
+      ]);
+
+      for (const settled of channelResults) {
+        if (settled.status !== 'fulfilled') continue;
+        const { provider, res } = settled.value;
+        if (!res.ok) continue;
+
+        const byId = new Map(res.models.map((m) => [m.id, m]));
+        for (const m of res.models) discovered.add(m.id);
+
+        for (const entry of this.deps.capabilityRegistry.list()) {
+          if (providerOf(entry.access_path) !== provider.id) continue;
+          const meta = byId.get(entry.model);
+          if (meta === undefined) continue;
+
+          const nextInputModalities = meta.input_modalities?.filter(
+            (v): v is 'text' | 'image' => v === 'text' || v === 'image',
+          );
+          const nextOutputModalities = meta.output_modalities?.filter(
+            (v): v is 'text' => v === 'text',
+          );
+          const nextEntry: CapabilityEntry = {
+            ...entry,
+            ...(meta.context_window !== undefined ? { context_window: meta.context_window } : {}),
+            ...(meta.max_output_tokens !== undefined
+              ? { max_output_tokens: meta.max_output_tokens }
+              : {}),
+            ...(nextInputModalities !== undefined && nextInputModalities.length > 0
+              ? { input_modalities: nextInputModalities }
+              : {}),
+            ...(nextOutputModalities !== undefined && nextOutputModalities.length > 0
+              ? { output_modalities: nextOutputModalities }
+              : {}),
+          };
+          const changed =
+            nextEntry.context_window !== entry.context_window ||
+            nextEntry.max_output_tokens !== entry.max_output_tokens ||
+            nextEntry.input_modalities?.join(',') !== entry.input_modalities?.join(',') ||
+            nextEntry.output_modalities?.join(',') !== entry.output_modalities?.join(',');
+          if (changed) {
+            this.deps.capabilityRegistry.register(nextEntry);
+            updated.add(entry.model);
+          }
+        }
+      }
+
+      const mergedResult = {
+        discovered: [...discovered],
+        updated: [...updated],
+        added: [...added],
+      };
       await this.audit(
         actor,
         'sync.upstream_discovery',
         'capability-matrix',
         'ok',
-        `discovered=${result.discovered.length} updated=${result.updated.length} added=${result.added.length}`,
+        `discovered=${mergedResult.discovered.length} updated=${mergedResult.updated.length} added=${mergedResult.added.length}`,
       );
-      return { ok: true, result };
+      return { ok: true, result: mergedResult };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await this.audit(actor, 'sync.upstream_discovery', 'capability-matrix', 'error', message);

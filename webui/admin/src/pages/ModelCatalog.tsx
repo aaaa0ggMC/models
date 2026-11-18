@@ -16,6 +16,7 @@ import {
   PageHeader,
   StatusBadge,
   Switch,
+  useSimulatedProgress,
 } from '../components/ui.js';
 import { navigate, updateQueryParams } from '../router.js';
 
@@ -123,6 +124,7 @@ export function ModelCatalogPage({
   const [search, setSearch] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [syncing, setSyncing] = useState<boolean>(false);
+  const syncProgress = useSimulatedProgress(syncing);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [togglingModel, setTogglingModel] = useState<string | null>(null);
   const [error, setError] = useState<ActionableError | null>(null);
@@ -243,11 +245,11 @@ export function ModelCatalogPage({
             </div>
             <button
               type="button"
-              className="ag-btn ag-btn-primary"
+              className="ag-btn ag-btn-primary ag-tabular"
               disabled={syncing}
               onClick={() => void handleSync()}
             >
-              {syncing ? '同步中…' : '从上游同步'}
+              {syncing ? `同步中 ${syncProgress}%` : '从上游同步'}
             </button>
           </>
         }

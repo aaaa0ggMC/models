@@ -429,7 +429,7 @@ export function RouteGraphCanvas({
       };
     };
 
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       const panDrag = panDragRef.current;
       if (panDrag) {
         setPan({
@@ -474,12 +474,14 @@ export function RouteGraphCanvas({
       setConnectingFrom((prev) => (prev?.dragging ? null : prev));
     };
     const onWinClick = () => setContextMenu(null);
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     window.addEventListener('click', onWinClick);
     return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
       window.removeEventListener('click', onWinClick);
     };
   }, []);
@@ -1253,17 +1255,11 @@ export function RouteGraphCanvas({
             )}
 
             {/* 主编辑区：左侧 2D 节点画布 + 右侧属性检查器 */}
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'minmax(480px, 1fr) 360px',
-                gap: 16,
-                alignItems: 'stretch',
-              }}
-            >
+            <div className="ag-route-editor-grid">
               {/* 2D 画布（支持右键菜单、DEL 删除、缩放与拖拽连线） */}
               <div
                 ref={canvasRef}
+                className="ag-route-canvas"
                 tabIndex={0}
                 onKeyDown={(e) => {
                   const tag = (document.activeElement?.tagName ?? '').toUpperCase();
@@ -1291,7 +1287,7 @@ export function RouteGraphCanvas({
                   e.preventDefault();
                   setZoom((z) => Math.min(1.5, Math.max(0.5, Number((z - e.deltaY * 0.001).toFixed(2)))));
                 }}
-                onMouseDown={(e) => {
+                onPointerDown={(e) => {
                   if (e.button === 1) {
                     e.preventDefault();
                     panDragRef.current = {
@@ -1336,6 +1332,7 @@ export function RouteGraphCanvas({
                   position: 'relative',
                   height: 540,
                   overflow: 'hidden',
+                  touchAction: 'none',
                   outline: 'none',
                   cursor: isPanning ? 'grabbing' : 'default',
                   borderRadius: 'var(--ag-radius-md)',
@@ -1605,7 +1602,7 @@ export function RouteGraphCanvas({
                     return (
                       <div
                         key={node.id}
-                        onMouseDown={(e) => {
+                        onPointerDown={(e) => {
                           if (e.button !== 0) return;
                           if ((e.target as HTMLElement).closest('button, [data-socket]')) return;
                           setSelectedNodeId(node.id);
@@ -1709,7 +1706,7 @@ export function RouteGraphCanvas({
                                 <div
                                   data-socket="in"
                                   title="拖拽至此连入主控制流 (in)"
-                                  onMouseUp={(e) => {
+                                  onPointerUp={(e) => {
                                     e.stopPropagation();
                                     if (isConnectingTarget) {
                                       connectNodes(connectingFrom.nodeId, connectingFrom.port, node.id);
@@ -1748,7 +1745,7 @@ export function RouteGraphCanvas({
                                 <div
                                   data-socket="script"
                                   title="固定 JS 脚本钩子端口 (script)"
-                                  onMouseUp={(e) => {
+                                  onPointerUp={(e) => {
                                     e.stopPropagation();
                                     if (isConnectingTarget) {
                                       connectNodes(connectingFrom.nodeId, 'script', node.id);
@@ -1795,7 +1792,7 @@ export function RouteGraphCanvas({
                                 key={p}
                                 data-socket={`out:${p}`}
                                 title={`从 ${portLabel(p)} 拖出连线`}
-                                onMouseDown={(e) => {
+                                onPointerDown={(e) => {
                                   if (e.button !== 0) return;
                                   e.stopPropagation();
                                   const pos = getOutputSocketPos(node, p);

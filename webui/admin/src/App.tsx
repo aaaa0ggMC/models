@@ -30,8 +30,27 @@ export function App(): React.JSX.Element {
   const [bootstrapping, setBootstrapping] = useState<boolean>(true);
   /** 门户一键进入失败的原因（链接里的访问令牌无效）；null = 没失败。 */
   const [urlLoginError, setUrlLoginError] = useState<ActionableError | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState<boolean>(false);
   // 一键登录只试一次：失败后留给用户手动输，不要每次渲染都重打登录接口。
   const urlLoginTried = useRef(false);
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [route]);
+
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMobileNavOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [mobileNavOpen]);
 
   const checkBootstrap = useCallback(async () => {
     setBootstrapping(true);
@@ -117,7 +136,43 @@ export function App(): React.JSX.Element {
 
   return (
     <div className="ag-shell">
-      <aside className="ag-sidebar" aria-label="主导航">
+      <header className="ag-mobile-topbar">
+        <div className="ag-mobile-topbar-left">
+          <button
+            type="button"
+            className="ag-btn ag-btn-sm ag-icon-btn ag-mobile-menu-btn"
+            aria-label="打开导航"
+            aria-expanded={mobileNavOpen}
+            onClick={() => setMobileNavOpen(true)}
+          >
+            <span className="ag-hamburger" aria-hidden="true">
+              <span className="ag-hamburger-line" />
+              <span className="ag-hamburger-line" />
+              <span className="ag-hamburger-line" />
+            </span>
+          </button>
+          <a href={buildHref('overview')} className="ag-mobile-brand">
+            <BrandLogo size={20} />
+            <span>AgentGateway</span>
+          </a>
+        </div>
+        {bootstrap && !bootstrap.storage_unlocked && (
+          <StatusBadge tone="warning">未解锁</StatusBadge>
+        )}
+      </header>
+
+      {mobileNavOpen && (
+        <div
+          className="ag-sidebar-backdrop"
+          aria-hidden="true"
+          onClick={() => setMobileNavOpen(false)}
+        />
+      )}
+
+      <aside
+        className={`ag-sidebar${mobileNavOpen ? ' is-open' : ''}`}
+        aria-label="主导航"
+      >
         <div className="ag-brand">
           <div>
             <div className="ag-brand-title">
@@ -126,11 +181,19 @@ export function App(): React.JSX.Element {
             </div>
             <div className="ag-brand-sub">控制面</div>
           </div>
-          {bootstrap && (
-            <StatusBadge tone={bootstrap.storage_unlocked ? 'success' : 'warning'}>
-              {bootstrap.storage_unlocked ? '已解锁' : '未解锁'}
-            </StatusBadge>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {bootstrap && !bootstrap.storage_unlocked && (
+              <StatusBadge tone="warning">未解锁</StatusBadge>
+            )}
+            <button
+              type="button"
+              className="ag-btn ag-btn-sm ag-icon-btn ag-mobile-close-btn"
+              aria-label="关闭导航"
+              onClick={() => setMobileNavOpen(false)}
+            >
+              ×
+            </button>
+          </div>
         </div>
 
         <nav className="ag-nav">
@@ -142,6 +205,7 @@ export function App(): React.JSX.Element {
                   key={node.item.id}
                   href={buildHref(node.item.id)}
                   className={`ag-nav-item${active ? ' is-active' : ''}`}
+                  onClick={() => setMobileNavOpen(false)}
                 >
                   <span>{node.item.label}</span>
                 </a>
@@ -157,6 +221,7 @@ export function App(): React.JSX.Element {
                       key={sub.id}
                       href={buildHref(sub.id)}
                       className={`ag-nav-item${active ? ' is-active' : ''}`}
+                      onClick={() => setMobileNavOpen(false)}
                     >
                       <span>{sub.label}</span>
                     </a>

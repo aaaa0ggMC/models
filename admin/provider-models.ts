@@ -23,6 +23,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { parseModelMetadataLookupCandidates } from '../catalog/registry.js';
 import { parseOAuthSecret } from '../credentials/oauth.js';
 import { fileURLToPath } from 'node:url';
 import type { Transport } from '../gateway-core/transport.js';
@@ -561,6 +562,24 @@ export function enrichModelsWithCachedOrOfflineMetadata(
   return enrichModelsWithIndex(afterOnline, getOfflineModelsDevIndex()).models;
 }
 
+function lookupIndexWithCandidates(
+  index: Map<string, OfflineModelMeta>,
+  rawId: string,
+): OfflineModelMeta | undefined {
+  const exact = index.get(rawId);
+  if (exact !== undefined) return exact;
+  const { upstreamNamespace, bareIds } = parseModelMetadataLookupCandidates(rawId);
+  for (const bareId of bareIds) {
+    if (upstreamNamespace !== undefined) {
+      const withNs = index.get(`${upstreamNamespace}/${bareId}`);
+      if (withNs !== undefined) return withNs;
+    }
+    const bare = index.get(bareId);
+    if (bare !== undefined) return bare;
+  }
+  return undefined;
+}
+
 function enrichModelsWithIndex(
   models: UpstreamModelDto[],
   index: Map<string, OfflineModelMeta>,
@@ -573,7 +592,7 @@ function enrichModelsWithIndex(
       m.max_output_tokens !== undefined ||
       (m.input_modalities !== undefined && m.input_modalities.length > 0);
 
-    const offline = index.get(m.id);
+    const offline = lookupIndexWithCandidates(index, m.id);
     let filledFromOffline = false;
     if (offline !== undefined) {
       matchedCount += 1;

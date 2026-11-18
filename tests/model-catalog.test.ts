@@ -832,3 +832,61 @@ describe('ModelCatalog · 列表紧凑字段集', () => {
     expect(compact.length).toBeLessThan(full.length / 3);
   });
 });
+
+describe('ModelCatalog · 带上游命名空间与变体后缀的模型（如 OpenRouter）', () => {
+  it('~anthropic/claude-haiku-4-5 与 openai/gpt-4o:free 跨渠道回落命中离线元数据，同时保留原 provider 与 id', async () => {
+    const registry = new InMemoryCapabilityRegistry();
+    registry.register({
+      access_path: 'openrouter.openai-chat',
+      model: '~anthropic/claude-haiku-4-5',
+      modality: 'chat',
+      format: 'openai.chat',
+      usage_source: 'provider',
+      contract_tested: true,
+      status: 'implemented',
+    });
+    registry.register({
+      access_path: 'openrouter.openai-chat',
+      model: 'openai/gpt-4o:free',
+      modality: 'chat',
+      format: 'openai.chat',
+      usage_source: 'provider',
+      contract_tested: true,
+      status: 'implemented',
+    });
+    registry.register({
+      access_path: 'openrouter.openai-chat',
+      model: '~anthropic/claude-haiku-latest',
+      modality: 'chat',
+      format: 'openai.chat',
+      usage_source: 'provider',
+      contract_tested: true,
+      status: 'implemented',
+    });
+
+    const catalog = catalogWith(
+      registry,
+      [createModelsDevSource({ clock: fixedClock(T0) })],
+      { providerAvailability: (p) => p === 'openrouter' },
+    );
+
+    const list = await catalog.list();
+    const haiku = list.data.find((r) => r.id === '~anthropic/claude-haiku-4-5');
+    expect(haiku).toBeDefined();
+    expect(haiku?.provider).toBe('openrouter');
+    expect(haiku?.context_window).toBeGreaterThan(0);
+    expect(haiku?.tool_call).toBe(true);
+
+    const gpt4oFree = list.data.find((r) => r.id === 'openai/gpt-4o:free');
+    expect(gpt4oFree).toBeDefined();
+    expect(gpt4oFree?.provider).toBe('openrouter');
+    expect(gpt4oFree?.context_window).toBeGreaterThan(0);
+    expect(gpt4oFree?.tool_call).toBe(true);
+
+    // 未在离线快照中精确存在的浮动别名（如 -latest）保持诚实未声明，不瞎猜版本号
+    const haikuLatest = list.data.find((r) => r.id === '~anthropic/claude-haiku-latest');
+    expect(haikuLatest).toBeDefined();
+    expect(haikuLatest?.provider).toBe('openrouter');
+    expect(haikuLatest?.context_window).toBeUndefined();
+  });
+});

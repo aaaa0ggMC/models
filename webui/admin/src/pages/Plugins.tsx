@@ -449,10 +449,10 @@ export function PluginsPage(): React.JSX.Element {
                   })}
                 </div>
 
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <input
                     className="ag-input"
-                    style={{ width: 190, height: 30 }}
+                    style={{ flex: '1 1 180px', minWidth: 0, height: 32 }}
                     placeholder="搜索工具名或说明…"
                     value={toolSearch}
                     onChange={(e) => setToolSearch(e.target.value)}
@@ -479,7 +479,7 @@ export function PluginsPage(): React.JSX.Element {
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))',
                   gap: 12,
                 }}
               >

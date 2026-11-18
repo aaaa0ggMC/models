@@ -84,7 +84,9 @@ export function ChatPage(): React.JSX.Element {
 
   const [savingSettingId, setSavingSettingId] = useState<string | null>(null);
   const [error, setError] = useState<ActionableError | null>(null);
-  const [showRightPanel, setShowRightPanel] = useState<boolean>(true);
+  const [showRightPanel, setShowRightPanel] = useState<boolean>(() =>
+    typeof window === 'undefined' ? true : window.innerWidth > 860,
+  );
   const [showHistoryModal, setShowHistoryModal] = useState<boolean>(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState<boolean>(false);
 
@@ -467,15 +469,15 @@ export function ChatPage(): React.JSX.Element {
       {/* 中间对话工作区 */}
       <div className="ag-chat-center">
         <div className="ag-chat-topbar">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <strong style={{ fontSize: 16 }}>内置助手</strong>
+          <div className="ag-chat-title-group">
+            <strong style={{ fontSize: 16, whiteSpace: 'nowrap' }}>内置助手</strong>
             <StatusBadge tone={currentModelOption ? 'info' : 'warning'}>
               {currentModelOption
                 ? `${currentModelOption.model} (${currentModelOption.providerLabel})`
                 : '无可用模型'}
             </StatusBadge>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <button
               type="button"
               className="ag-btn ag-btn-sm"
@@ -648,6 +650,14 @@ export function ChatPage(): React.JSX.Element {
           </form>
         </div>
       </div>
+
+      {showRightPanel && (
+        <div
+          className="ag-run-panel-backdrop"
+          aria-hidden="true"
+          onClick={() => setShowRightPanel(false)}
+        />
+      )}
 
       {/* 右侧运行设置面板（与系统设置同源同状态，97 §2.6 #3 & §4.5） */}
       <div
