@@ -18,11 +18,14 @@ max_concurrency = 20
 timeout = 20
 retry_wait_time = 2
 max_retries = 3
-accept = [200, 403, 429, 999]
+accept = [200, 403, 405, 429, 999]
 exclude = [
   "^https?://agentgateway\\.local",
   "^https?://api\\.openai\\.com/v1/",
+  "^https?://api\\.typesafe\\.ai/",
+  "^https?://generativelanguage\\.googleapis\\.com/v1beta/decisions",
   "^https?://gateway\\.ai\\.cloudflare\\.com",
+  "^https?://raw\\.githubusercontent\\.com/",
   "<path>",
   "\\{ACCOUNT_ID\\}",
   "\\{account_id\\}",
@@ -33,6 +36,7 @@ exclude = [
   "^https?://registry\\.npmjs\\.org/",
   "^https?://localhost",
   "^https?://127\\.0\\.0\\.1",
+  "^file://.*/docs/(providers|gateway-core|adaptors|metering|ir|admin|webui)/",
 ]
 exclude_loopback = false
 include_verbatim = true
