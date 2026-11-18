@@ -1,0 +1,165 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "chat",
+  "model": "gpt-test-1",
+  "source_format": "openai.responses",
+  "stream": { "enabled": true, "mode": "sse", "on_mismatch": "bridge" },
+  "payload": {
+    "system": [
+      {
+        "text": "You are a helpful assistant that can search the web.",
+        "_raw": "You are a helpful assistant that can search the web."
+      }
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "type": "text",
+            "text": "Summarise the attached notes and check today's weather in Paris."
+          },
+          {
+            "type": "document",
+            "source": { "kind": "uri", "mime": "application/octet-stream", "uri": "" },
+            "media_type": "text/plain",
+            "title": "notes",
+            "_raw": {
+              "type": "input_file",
+              "file_id": "file_test_1",
+              "media_type": "text/plain",
+              "title": "notes"
+            }
+          }
+        ],
+        "_raw": {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Summarise the attached notes and check today's weather in Paris."
+            },
+            {
+              "type": "input_file",
+              "file_id": "file_test_1",
+              "media_type": "text/plain",
+              "title": "notes"
+            }
+          ]
+        }
+      },
+      {
+        "role": "assistant",
+        "parts": [
+          {
+            "type": "thinking",
+            "thinking": "The user wants a summary plus the weather; the web_search builtin is available.",
+            "_raw": {
+              "type": "reasoning",
+              "id": "rs_test_1",
+              "summary": [],
+              "content": [
+                {
+                  "type": "reasoning_text",
+                  "text": "The user wants a summary plus the weather; the web_search builtin is available."
+                }
+              ]
+            }
+          },
+          {
+            "type": "tool_use",
+            "id": "call_test_search_1",
+            "name": "web_search",
+            "input": {},
+            "_raw": {
+              "type": "function_call",
+              "id": "fc_test_search_1",
+              "call_id": "call_test_search_1",
+              "name": "web_search",
+              "arguments": "{}",
+              "status": "completed"
+            }
+          }
+        ],
+        "_raw": {
+          "type": "message",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "Let me look that up." }]
+        }
+      },
+      {
+        "role": "tool",
+        "parts": [
+          {
+            "type": "tool_result",
+            "tool_use_id": "call_test_search_1",
+            "content": "Paris: 18C, light rain.",
+            "_raw": {
+              "type": "function_call_output",
+              "call_id": "call_test_search_1",
+              "output": "Paris: 18C, light rain."
+            }
+          }
+        ],
+        "_raw": {
+          "type": "function_call_output",
+          "call_id": "call_test_search_1",
+          "output": "Paris: 18C, light rain."
+        }
+      }
+    ],
+    "tools": [
+      {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Get the current weather for a city.",
+        "parameters": {
+          "type": "object",
+          "properties": { "city": { "type": "string" } },
+          "required": ["city"],
+          "additionalProperties": false
+        },
+        "strict": true
+      },
+      {
+        "type": "builtin",
+        "name": "web_search",
+        "config": { "search_context_size": "medium" },
+        "executor": "provider",
+        "native": { "provider_tool_type": "web_search" },
+        "_raw": { "type": "web_search", "search_context_size": "medium" }
+      }
+    ],
+    "tool_choice": { "type": "builtin", "name": "web_search" },
+    "params": {
+      "max_output_tokens": 512,
+      "temperature": 0.2,
+      "top_logprobs": 4,
+      "parallel_tool_calls": false,
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "weather_summary",
+          "description": "A one-line weather summary.",
+          "schema": {
+            "type": "object",
+            "properties": { "summary": { "type": "string" } },
+            "required": ["summary"],
+            "additionalProperties": false
+          },
+          "strict": true
+        }
+      },
+      "thinking": { "enabled": true, "effort": "high", "include_summary": true }
+    }
+  },
+  "raw": {
+    "source_provider": "openai.responses",
+    "unmapped": {
+      "truncation": "auto",
+      "prompt_cache_key": "cache-key-test"
+    },
+    "nodes": { "reasoning.summary": "auto" }
+  }
+}

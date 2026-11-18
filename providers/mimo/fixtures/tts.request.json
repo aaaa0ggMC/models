@@ -1,0 +1,18 @@
+{
+ "model": "mimo-v2.5-tts",
+ "messages": [
+  {
+   "role": "user",
+   "content": "朗读以下文本"
+  },
+  {
+   "role": "assistant",
+   "content": "你好，我是小米 MiMo 语音合成。"
+  }
+ ],
+ "audio": {
+  "format": "wav",
+  "voice": "mimo_default"
+ },
+ "max_tokens": 2048
+}

@@ -1,0 +1,169 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/image.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ImagePayload / ImageResponsePayload",
+  "description": "docs/design/15-modalities.md §4 image 模态。请求侧字段对应 OpenAI Images（generations/edits）+ Stability/BFL 的超集；响应侧 images[] 用 MediaRef 三态（决策 M2：不允许某个模态自己定义 base64 字段名）。2026-11 增量（只加不改，12 §3 规则 F1）：quality 增 standard、新增 user / background / output_compression / 响应 background。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "prompt": {
+      "type": "string"
+    },
+    "negative_prompt": {
+      "type": "string"
+    },
+    "size": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        }
+      }
+    },
+    "aspect_ratio": {
+      "type": "string"
+    },
+    "n": {
+      "type": "integer"
+    },
+    "quality": {
+      "enum": ["low", "medium", "high", "hd", "standard", "auto"]
+    },
+    "style": {
+      "type": "string"
+    },
+    "sampling": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "steps": {
+          "type": "number"
+        },
+        "guidance": {
+          "type": "number"
+        },
+        "sampler": {
+          "type": "string"
+        },
+        "seed": {
+          "type": "number"
+        }
+      }
+    },
+    "allow_prompt_rewrite": {
+      "type": "boolean"
+    },
+    "background": {
+      "enum": ["transparent", "opaque", "auto"],
+      "description": "请求侧：背景三态（gpt-image-1+）；响应侧：上游回显的最终背景决策。同一个键服务两个方向（请求/响应信封按 kind 分派到本 schema，与 decision.schema.json 同构）"
+    },
+    "edit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "$ref": "media.schema.json"
+        },
+        "mask": {
+          "$ref": "media.schema.json"
+        },
+        "strength": {
+          "type": "number"
+        },
+        "reference_images": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "image": {
+                "$ref": "media.schema.json"
+              },
+              "weight": {
+                "type": "number"
+              },
+              "mode": {
+                "enum": ["style", "content"]
+              }
+            },
+            "required": ["image"]
+          }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "response_type"],
+      "properties": {
+        "format": {
+          "enum": ["png", "jpeg", "webp"]
+        },
+        "response_type": {
+          "enum": ["b64_json", "url"]
+        },
+        "transparent_background": {
+          "type": "boolean"
+        },
+        "output_compression": {
+          "type": "number",
+          "description": "0–100；gpt-image 系 webp/jpeg 的压缩档位"
+        }
+      }
+    },
+    "moderation": {
+      "enum": ["auto", "low", "high"]
+    },
+    "user": {
+      "type": "string"
+    },
+    "native": {
+      "type": "object"
+    },
+    "raw": {
+      "$ref": "envelope.schema.json#/$defs/RawEnvelope"
+    },
+    "images": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ImageResult"
+      }
+    },
+    "polling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "status"],
+      "properties": {
+        "url": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ImageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image"],
+      "properties": {
+        "image": {
+          "$ref": "media.schema.json"
+        },
+        "revised_prompt": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

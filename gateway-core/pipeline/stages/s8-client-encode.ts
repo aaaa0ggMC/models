@@ -1,0 +1,204 @@
+/**
+ * gateway-core/pipeline/stages/s8-client-encode.ts —— S8 ClientEncode。
+ *
+ * 职责（20 §S8）：canonical → 客户端格式字节；fast path 时直通。
+ *
+ * 关键约束（20 §S8）：**一旦向客户端写出第一个字节，就不能再改变 HTTP 状态码**；
+ * 因此所有错误都必须在首字节前转成 200 + SSE `error` 事件或直接非 2xx。
+ *
+ * fast path（D-fastpath-1）：上游原始字节直接转发给客户端，网关不改写。
+ *
+ * ⚠️ 非流式的写出时机（2026-11-16）：非流式下本阶段**只编码不写出**，字节暂存在
+ * `state.client_bytes`，由 Runner 在 S9 之后 flush。理由见 types.ts 的
+ * `client_bytes` 注释——S8 排在 S9 之前，先写就让 `onResponse` 的改写没了落点。
+ * 流式不受影响：流式本来就逐帧写出，S9 在流关闭后只能观测（20 §S9）。
+ */
+
+import type { PipelineDeps, PipelineState, Stage } from '../types.js';
+import type { CanonicalStreamEvent, FrameData, StreamFrame } from '../../../ir/index.js';
+import { AG_FRAME_EVENT_NAME, emptyUsage } from '../../../ir/index.js';
+
+export class S8ClientEncode implements Stage {
+  readonly id = 'S8';
+  readonly name = 'ClientEncode';
+
+  async execute(state: PipelineState, deps: PipelineDeps): Promise<void> {
+    const started = deps.clock.now();
+    const { ctx } = state;
+    const streaming = state.shallow?.stream === true;
+    const clientAdaptor = state.clientAdaptor;
+    if (clientAdaptor === undefined) throw new Error('S8 需要 S1 的客户端 adaptor');
+
+    if (streaming) {
+      deps.sink.start(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache',
+        connection: 'keep-alive',
+        'x-request-id': ctx.request_id,
+      });
+      state.bytes_written = true;
+
+      if (ctx.fast_path) {
+        // fast path：**边收边发**。上游 SSE 字节不落 canonical、不改写，直接转发给客户端；
+        // 同时旁路喂给 S6 布防的嗅探器（D-fastpath-1 + 20 §4.2 流式 fast path）。
+        const sniffer = state.sniffer;
+        const upstreamChunks = state.upstream?.chunks;
+        if (upstreamChunks !== undefined) {
+          for await (const chunk of upstreamChunks) {
+            if (deps.sink.closed) {
+              // 客户端断开：立刻停止读上游（25 §6 第 3 条止损）
+              break;
+            }
+            const text = chunk.toString('utf8');
+            deps.sink.write(text);
+            sniffer?.push(text);
+          }
+        }
+        if (sniffer !== undefined) {
+          const sniffed = sniffer.finish();
+          state.usage = sniffed.usage;
+          if (sniffed.truncated) ctx.warn('usage_sniffer_truncated');
+          if (sniffed.empty) ctx.warn('usage_missing');
+        }
+        ctx.recordStage(this.id, deps.clock.now() - started, 'fast_path:passthrough');
+        deps.metrics.increment('pipeline.stage', 1, { stage: this.id, mode: 'fast_path' });
+        return;
+      }
+
+      // 慢路径：把 CanonicalStreamEvent 编码成客户端格式的 SSE 事件序列（实时边收边转边发）
+      if (state.canonical_stream !== undefined) {
+        let count = 0;
+        for await (const ev of state.canonical_stream) {
+          if (deps.sink.closed) break;
+          count += 1;
+          const frames = clientAdaptor.encodeStream(singleFrameStream(ev, ctx.request_id), ctx);
+          for await (const wire of frames) {
+            deps.sink.write(serializeWireEvent(wire));
+          }
+        }
+        ctx.recordStage(this.id, deps.clock.now() - started, `slow:events=${count}`);
+        deps.metrics.increment('pipeline.stage', 1, { stage: this.id, mode: 'slow' });
+        return;
+      }
+
+      const events = state.stream_events ?? [];
+      for (const ev of events) {
+        const frames = clientAdaptor.encodeStream(singleFrameStream(ev, ctx.request_id), ctx);
+        for await (const wire of frames) {
+          deps.sink.write(serializeWireEvent(wire));
+        }
+      }
+      ctx.recordStage(this.id, deps.clock.now() - started, `slow:events=${events.length}`);
+      deps.metrics.increment('pipeline.stage', 1, { stage: this.id, mode: 'slow' });
+      return;
+    }
+
+    // 非流式
+    if (ctx.fast_path) {
+      const raw = state.upstream?.body?.toString('utf8') ?? '{}';
+      deps.sink.start(state.upstream_status ?? 200, {
+        'content-type': 'application/json',
+        'x-request-id': ctx.request_id,
+      });
+      deps.sink.write(raw);
+      state.bytes_written = true;
+      ctx.recordStage(this.id, deps.clock.now() - started, 'fast_path:passthrough');
+      deps.metrics.increment('pipeline.stage', 1, { stage: this.id, mode: 'fast_path' });
+      return;
+    }
+
+    // 非流式慢路径：只**编码**，不写出。
+    //
+    // 字节交给 sink 的时机在 S9 之后（Runner 的 flushClientBytes）——否则
+    // `onResponse` 插件对响应的改写会落在字节上线之后，静默丢失（§4.3）。
+    // 代价是一次多余的 JSON.stringify；收益是插件链与客户端看到同一份响应。
+    //
+    // `state.final_response` 在这里**读不到**：它是 S9 的产物，而 S9 排在 S8 之后
+    // （工具循环路径里 Runner 会把它与 `state.response` 设成同一个对象，因此
+    // 两者等价）。这里只读 S6 的解码产物。
+    const response = state.response;
+    if (response === undefined) throw new Error('S8 需要 S6 的响应信封');
+    const body = JSON.stringify(clientAdaptor.encodeResponse(response, ctx));
+    state.client_bytes = {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': ctx.request_id,
+      },
+      body,
+    };
+    ctx.recordStage(this.id, deps.clock.now() - started, 'slow:encodeResponse(deferred)');
+    deps.metrics.increment('pipeline.stage', 1, { stage: this.id, mode: 'slow' });
+  }
+}
+
+export async function* singleFrameStream(
+  ev: CanonicalStreamEvent,
+  requestId: string,
+): AsyncIterable<StreamFrame> {
+  yield {
+    event:
+      ev.type === 'part.begin' || ev.type === 'part.delta' || ev.type === 'part.end'
+        ? 'delta'
+        : ev.type === 'finish'
+          ? 'end'
+          : ev.type === 'error'
+            ? 'error'
+            : ev.type === 'usage'
+              ? 'usage'
+              : 'start',
+    seq: 0,
+    request_id: requestId,
+    kind: 'chat',
+    data: eventToFrameData(ev),
+    ts: Date.now(),
+  };
+}
+
+/**
+ * `CanonicalStreamEvent` → `FrameData`（20 §S8 反向执行 10 §9 的映射表）。
+ *
+ * part 边界**必须**保留：`part.begin` 带 tool_use 的 id/name（Anthropic 的
+ * `content_block_start`），`part.end` 带完整 part（流式 tool_use 靠它保证 JSON 完整，
+ * 20 §S6）。此前把两者折叠成 `{kind:"chat", text:""}` 会产出多余的空 text delta
+ * 并丢掉 tool_use 的开户信息——那是慢路径流式 round-trip 的实质损坏。
+ */
+function eventToFrameData(ev: CanonicalStreamEvent): FrameData {
+  switch (ev.type) {
+    case 'start':
+      return {
+        model: ev.message.model,
+        client_format: 'openai.chat',
+        provider_format: 'openai.chat',
+      };
+    case 'part.begin':
+      return { kind: 'chat', index: ev.index, part: ev.part, phase: 'begin' };
+    case 'part.end':
+      return { kind: 'chat', index: ev.index, part: ev.part, phase: 'end' };
+    case 'part.delta':
+      if (ev.delta.type === 'text') return { kind: 'chat', index: ev.index, text: ev.delta.text };
+      if (ev.delta.type === 'thinking') {
+        return { kind: 'chat', index: ev.index, thinking: ev.delta.thinking };
+      }
+      if (ev.delta.type === 'tool_input_json') {
+        return { kind: 'chat', index: ev.index, tool_input_json: ev.delta.partial_json };
+      }
+      return { kind: 'chat', index: ev.index, refusal: ev.delta.refusal };
+    case 'usage':
+      return { usage: ev.usage };
+    case 'finish':
+      return { finish_reason: ev.finish_reason, usage: ev.usage ?? emptyUsage('provider') };
+    case 'error':
+      return { error: ev.error, fatal: true };
+  }
+}
+
+/** codec 的 encodeStream 产出的是 wire 侧事件；这里统一包成 SSE 文本。 */
+export function serializeWireEvent(wire: unknown): string {
+  if (typeof wire === 'string') return wire;
+  const frame = wire as { event?: string; data?: unknown };
+  if (frame.event !== undefined) {
+    return `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`;
+  }
+  return `event: ${AG_FRAME_EVENT_NAME}\ndata: ${JSON.stringify(frame.data)}\n\n`;
+}

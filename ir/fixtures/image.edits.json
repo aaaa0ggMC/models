@@ -1,0 +1,36 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "image",
+  "model": "gpt-image-2.6",
+  "source_format": "openai.images.edits",
+  "stream": { "enabled": false, "mode": "none", "on_mismatch": "reject" },
+  "payload": {
+    "prompt": "把背景换成日落时的海滩，保留主体不变",
+    "edit": {
+      "image": {
+        "kind": "inline",
+        "mime": "image/png",
+        "data": "iVBORw0KGgoAAAANSUhEUg==",
+        "byte_length": 32,
+        "width": 1024,
+        "height": 1024
+      },
+      "mask": {
+        "kind": "inline",
+        "mime": "image/png",
+        "data": "iVBORw0KGgoAAAANSUhEUg==",
+        "byte_length": 16,
+        "width": 1024,
+        "height": 1024
+      },
+      "strength": 0.8
+    },
+    "output": {
+      "format": "webp",
+      "response_type": "b64_json",
+      "transparent_background": false
+    },
+    "native": {}
+  },
+  "raw": { "source_provider": "openai-images" }
+}

@@ -1,0 +1,15 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "embedding",
+  "model": "text-embedding-3-large",
+  "source_format": "openai.embeddings",
+  "stream": { "enabled": false, "mode": "none", "on_mismatch": "reject" },
+  "payload": {
+    "input": ["水獺宝宝", "A cute baby sea otter"],
+    "dimensions": 1536,
+    "encoding_format": "float",
+    "user": "end-user-123",
+    "native": {}
+  },
+  "raw": { "source_provider": "openai-embeddings" }
+}

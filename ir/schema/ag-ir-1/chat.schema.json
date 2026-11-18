@@ -1,0 +1,135 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/chat.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatPayload / ChatResponsePayload",
+  "description": "docs/design/10-canonical-schema.md §4.1 消息与 parts、§4.3 工具、§4.4 参数。canonical 的 chat payload 是四家格式表达能力的并集（决策 D2）。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "system": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["text"],
+        "properties": {
+          "text": { "type": "string" },
+          "cache_control": { "$ref": "tools.schema.json#/$defs/CacheControl" },
+          "_raw": {}
+        }
+      },
+      "description": "系统提示提升为一级字段；多条 system 必须全部保留（40 §7.2 llm-bridge 缺陷回归）"
+    },
+    "messages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "parts"],
+        "properties": {
+          "role": { "enum": ["user", "assistant", "system", "tool"] },
+          "parts": { "type": "array", "items": { "$ref": "parts.schema.json" } },
+          "id": { "type": "string" },
+          "_raw": {}
+        }
+      }
+    },
+    "tools": { "type": "array", "items": { "$ref": "tools.schema.json" } },
+    "tool_choice": {
+      "description": "auto / required / none，或强制某个（内置）工具",
+      "anyOf": [
+        { "enum": ["auto", "required", "none"] },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "name"],
+          "properties": {
+            "type": { "enum": ["tool", "builtin"] },
+            "name": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "params": { "$ref": "#/$defs/ChatParams" },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "parts"],
+      "properties": {
+        "role": { "enum": ["user", "assistant", "system", "tool"] },
+        "parts": { "type": "array", "items": { "$ref": "parts.schema.json" } },
+        "id": { "type": "string" },
+        "_raw": {}
+      }
+    },
+    "model": { "type": "string" },
+    "index": { "type": "integer" }
+  },
+  "$defs": {
+    "ChatParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_output_tokens": { "type": "integer" },
+        "temperature": { "type": "number" },
+        "top_p": { "type": "number" },
+        "top_k": { "type": "integer" },
+        "stop": { "type": "array", "items": { "type": "string" } },
+        "seed": { "type": "integer" },
+        "frequency_penalty": { "type": "number" },
+        "presence_penalty": { "type": "number" },
+        "logprobs": { "type": "boolean" },
+        "top_logprobs": { "type": "integer" },
+        "n": { "type": "integer" },
+        "user": { "type": "string" },
+        "metadata": { "type": "object", "additionalProperties": { "type": "string" } },
+        "service_tier": { "enum": ["auto", "default", "flex", "priority"] },
+        "safety": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["category", "threshold"],
+            "properties": { "category": { "type": "string" }, "threshold": { "type": "string" } }
+          }
+        },
+        "parallel_tool_calls": { "type": "boolean" },
+        "response_format": { "$ref": "#/$defs/ResponseFormat" },
+        "thinking": { "$ref": "#/$defs/ThinkingConfig" }
+      }
+    },
+    "ResponseFormat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["text", "json_object", "json_schema"] },
+        "json_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "schema"],
+          "properties": {
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "schema": { "$ref": "json-schema.schema.json" },
+            "strict": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "ThinkingConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "budget_tokens": { "type": "integer" },
+        "effort": {
+          "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        },
+        "include_summary": { "type": "boolean" },
+        "preserve_history": { "type": "boolean" }
+      }
+    }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "table_version": "openai-images-2026-11-14",
+  "source_url": "https://developers.openai.com/api/docs/pricing",
+  "fetched_at": "2026-11-14",
+  "currency": "USD",
+  "unit": "USD per 1M tokens",
+  "notes": "gpt-image-2.x 按 token 计费（image 模态 input/output 各自单价），故本表只有 token 槽位。按张计费的上游（旧 dall-e 系 / Stability / BFL）用 per_image slot——两种形态不能出现在同一张表里：usage 同时带 tokens 与 images 两个单位，两张表都配就会出现双算（见 metering/pricing.ts 的 nonTokenCost）。per_image 形态的定价用例见 tests/openai-images-pricing.test.ts（合成表，不冒充官方价）。本仓库未接真实上游，数值为官方价格页检索快照，接上游时须复核。",
+  "models": {
+    "gpt-image-2.6": {
+      "entries": [
+        {
+          "effective_from": "2025-01-01",
+          "tier": "default",
+          "rates": {
+            "input_cache_miss": 4.0,
+            "input_cache_hit": 1.0,
+            "output": 15.0
+          }
+        }
+      ]
+    },
+    "gpt-image-2.6-sunburst": {
+      "entries": [
+        {
+          "effective_from": "2025-01-01",
+          "tier": "default",
+          "rates": {
+            "input_cache_miss": 4.0,
+            "input_cache_hit": 1.0,
+            "output": 15.0
+          }
+        }
+      ]
+    },
+    "gpt-image-2.6-flare": {
+      "entries": [
+        {
+          "effective_from": "2025-01-01",
+          "tier": "default",
+          "rates": {
+            "input_cache_miss": 4.0,
+            "input_cache_hit": 1.0,
+            "output": 15.0
+          }
+        }
+      ]
+    },
+    "chatgpt-image-latest": {
+      "entries": [
+        {
+          "effective_from": "2025-01-01",
+          "tier": "default",
+          "rates": {
+            "input_cache_miss": 5.0,
+            "input_cache_hit": 1.25,
+            "output": 10.0
+          }
+        }
+      ]
+    },
+    "dall-e-3": {
+      "entries": [
+        {
+          "effective_from": "2025-01-01",
+          "tier": "default",
+          "rates": {
+            "per_image": 0.04
+          }
+        }
+      ]
+    },
+    "grok-imagine-image": {
+      "entries": [
+        {
+          "effective_from": "2025-01-01",
+          "tier": "default",
+          "rates": {
+            "per_image": 0.06
+          }
+        }
+      ]
+    },
+    "grok-imagine-image-2.0": {
+      "entries": [
+        {
+          "effective_from": "2025-01-01",
+          "tier": "default",
+          "rates": {
+            "per_image": 0.06
+          }
+        }
+      ]
+    },
+    "grok-imagine-image-pro": {
+      "entries": [
+        {
+          "effective_from": "2025-01-01",
+          "tier": "default",
+          "rates": {
+            "per_image": 0.07
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "model": "gpt-test-1",
+  "instructions": "You are a helpful assistant.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [{ "type": "input_text", "text": "Look up the weather." }]
+    },
+    {
+      "type": "function_call",
+      "id": "fc_test_bad",
+      "call_id": "call_test_bad",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Paris\",\"unit\":",
+      "status": "completed"
+    }
+  ]
+}

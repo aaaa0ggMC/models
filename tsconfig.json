@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": false,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "."
+  },
+  "//": "typecheck 覆盖全部 .ts（含测试）。构建产物用 tsconfig.build.json（排除测试）。",
+  "include": [
+    "ir/**/*.ts",
+    "di/**/*.ts",
+    "gateway-core/**/*.ts",
+    "adaptors/**/*.ts",
+    "metering/**/*.ts",
+    "plugins/**/*.ts",
+    "credentials/**/*.ts",
+    "providers/**/*.ts",
+    "storage/**/*.ts",
+    "admin/**/*.ts",
+    "auth/**/*.ts",
+    "config/**/*.ts",
+    "capability/**/*.ts",
+    "http/**/*.ts",
+    "composition-root.ts",
+    "vitest.config.ts",
+    "vitest.setup.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

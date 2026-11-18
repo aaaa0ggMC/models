@@ -1,0 +1,82 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/embedding.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "EmbeddingPayload / EmbeddingResponsePayload",
+  "description": "docs/design/15-modalities.md §5 embedding 模态。input 三形态（string / string[] / MediaRef[]）对应 OpenAI /v1/embeddings 与 Gemini embedContent 的超集；Gemini 的 taskType 进 native.gemini.task_type（不进结构化字段）。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "input": {
+      "description": "文本或多模态 embedding 输入。string | string[] | MediaRef[]（三态媒体引用，决策 M2）",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "media.schema.json"
+          }
+        }
+      ]
+    },
+    "dimensions": {
+      "type": "integer",
+      "description": "截断维度（OpenAI dimensions）"
+    },
+    "encoding_format": {
+      "enum": ["float", "base64"]
+    },
+    "user": {
+      "type": "string"
+    },
+    "native": {
+      "type": "object"
+    },
+    "raw": {
+      "$ref": "envelope.schema.json#/$defs/RawEnvelope"
+    },
+    "embeddings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/EmbeddingVector"
+      }
+    },
+    "model": {
+      "type": "string",
+      "description": "响应侧：上游实际使用的模型 id"
+    }
+  },
+  "$defs": {
+    "EmbeddingVector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "vector"],
+      "properties": {
+        "index": {
+          "type": "integer"
+        },
+        "vector": {
+          "description": "float 数组或 base64 串（按 encoding_format）",
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

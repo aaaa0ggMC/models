@@ -1,0 +1,22 @@
+{
+  "model": "gpt-test-1",
+  "instructions": "You are a helpful assistant that can read images.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        { "type": "input_text", "text": "What is in this picture?" },
+        { "type": "input_image", "image_url": "https://example.com/paris.png", "detail": "high" },
+        { "type": "input_image", "file_id": "file_test_1" },
+        {
+          "type": "input_file",
+          "file_id": "file_test_2",
+          "media_type": "application/pdf",
+          "title": "notes"
+        }
+      ]
+    }
+  ],
+  "max_output_tokens": 256
+}

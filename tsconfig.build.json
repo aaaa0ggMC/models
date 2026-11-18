@@ -1,0 +1,27 @@
+{
+  "//": "构建配置：只编译产物，排除测试（测试由 vitest 直接跑）。typecheck 用 tsconfig.json，它包含测试。",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "."
+  },
+  "include": [
+    "ir/**/*.ts",
+    "di/**/*.ts",
+    "gateway-core/**/*.ts",
+    "adaptors/**/*.ts",
+    "metering/**/*.ts",
+    "plugins/**/*.ts",
+    "credentials/**/*.ts",
+    "providers/**/*.ts",
+    "storage/**/*.ts",
+    "admin/**/*.ts",
+    "auth/**/*.ts",
+    "config/**/*.ts",
+    "catalog/**/*.ts",
+    "capability/**/*.ts",
+    "http/**/*.ts",
+    "composition-root.ts"
+  ],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

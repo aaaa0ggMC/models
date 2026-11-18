@@ -1,0 +1,11 @@
+{
+  "id": "resp_test_failed",
+  "object": "response",
+  "created_at": 1763000500,
+  "status": "failed",
+  "error": { "code": "server_error", "message": "Upstream failed while streaming." },
+  "model": "gpt-test-1",
+  "output": [],
+  "usage": null,
+  "store": false
+}

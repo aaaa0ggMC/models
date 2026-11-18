@@ -1,0 +1,10 @@
+{
+  "model": "gpt-test-1",
+  "instructions": "You are a helpful assistant.",
+  "input": "Continue where we left off.",
+  "previous_response_id": "resp_test_prev",
+  "conversation": "conv_test_1",
+  "background": true,
+  "include": ["message.output_text.logprobs"],
+  "store": true
+}

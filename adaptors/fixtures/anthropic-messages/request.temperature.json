@@ -1,0 +1,13 @@
+{
+  "model": "claude-test-1",
+  "max_tokens": 1024,
+  "temperature": 0.7,
+  "top_p": 0.9,
+  "top_k": 40,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Give me one creative project name."
+    }
+  ]
+}

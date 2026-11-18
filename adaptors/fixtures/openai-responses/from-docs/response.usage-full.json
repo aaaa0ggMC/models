@@ -1,0 +1,39 @@
+{
+  "id": "resp_test_usage_full",
+  "object": "response",
+  "created_at": 1763000500,
+  "status": "completed",
+  "model": "gpt-test-1",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_test_usage",
+      "role": "assistant",
+      "status": "completed",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Paris is 18C with light rain.",
+          "annotations": [
+            {
+              "type": "url_citation",
+              "url": "https://example.com/weather/paris",
+              "title": "Paris weather",
+              "start_index": 0,
+              "end_index": 28
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 2048,
+    "input_tokens_details": { "cached_tokens": 1536 },
+    "output_tokens": 96,
+    "output_tokens_details": { "reasoning_tokens": 64, "safety_tokens": 8 },
+    "total_tokens": 2144,
+    "server_tool_use": { "tool_search": 1, "tool_fetch": 2, "tool_image_search": 0 }
+  },
+  "store": false
+}

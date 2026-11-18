@@ -1,0 +1,27 @@
+{
+  "ir_version": "ag-ir/1",
+  "kind": "image",
+  "model": "gpt-image-2.6",
+  "source_format": "openai.images.generations",
+  "stream": { "enabled": false, "mode": "none", "on_mismatch": "reject" },
+  "payload": {
+    "prompt": "一只戴贝雷帽的水獺宝宝，柔和的粉色背景，扁平插画风",
+    "negative_prompt": "照片级真实, 暴力",
+    "size": { "width": 1024, "height": 1024 },
+    "n": 2,
+    "quality": "high",
+    "style": "vivid",
+    "sampling": { "steps": 30, "guidance": 7.5, "seed": 42 },
+    "allow_prompt_rewrite": true,
+    "background": "auto",
+    "output": {
+      "format": "png",
+      "response_type": "b64_json",
+      "output_compression": 90
+    },
+    "moderation": "auto",
+    "user": "end-user-123",
+    "native": {}
+  },
+  "raw": { "source_provider": "openai-images" }
+}

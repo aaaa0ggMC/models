@@ -1,0 +1,7 @@
+{
+  "model": "gpt-test-1",
+  "instructions": "You are the AgentGateway contract-test assistant.",
+  "input": "List the rules you must follow.",
+  "max_output_tokens": 256,
+  "temperature": 0.3
+}

@@ -1,0 +1,27 @@
+{
+ "id": "74934d9d-a200-4923-8bd9-0ed0a2aea332",
+ "choices": [
+  {
+   "finish_reason": "stop",
+   "index": 0,
+   "message": {
+    "content": "1 + 1 = **2**",
+    "role": "assistant",
+    "tool_calls": null,
+    "reasoning_content": "1+1=2"
+   }
+  }
+ ],
+ "created": 1794822098,
+ "model": "mimo-v2.6-flash",
+ "object": "chat.completion",
+ "usage": {
+  "completion_tokens": 16,
+  "prompt_tokens": 17,
+  "total_tokens": 33,
+  "completion_tokens_details": {
+   "reasoning_tokens": 6
+  },
+  "prompt_tokens_details": null
+ }
+}

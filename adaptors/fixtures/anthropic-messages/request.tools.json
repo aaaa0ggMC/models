@@ -1,0 +1,69 @@
+{
+  "model": "claude-test-1",
+  "max_tokens": 2048,
+  "system": [
+    {
+      "type": "text",
+      "text": "You may call the weather tool when the user asks about weather."
+    }
+  ],
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Look up the current weather for a city.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "city": { "type": "string", "description": "City name, e.g. Paris" },
+          "unit": { "type": "string", "enum": ["celsius", "fahrenheit"] }
+        },
+        "required": ["city"]
+      }
+    },
+    {
+      "name": "get_time",
+      "description": "Look up the local time for a timezone.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "timezone": { "type": "string" }
+        },
+        "required": ["timezone"]
+      },
+      "cache_control": { "type": "ephemeral" }
+    }
+  ],
+  "tool_choice": { "type": "any" },
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather in Paris right now?"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Let me check that for you."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_test123",
+          "name": "get_weather",
+          "input": { "city": "Paris", "unit": "celsius" }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_test123",
+          "content": "18C and partly cloudy.",
+          "is_error": false
+        }
+      ]
+    }
+  ]
+}

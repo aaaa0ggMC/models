@@ -1,0 +1,17 @@
+{
+ "model": "mimo-v2.5-tts-voicedesign",
+ "messages": [
+  {
+   "role": "user",
+   "content": "一个温柔的年轻女性声音，语速偏慢"
+  },
+  {
+   "role": "assistant",
+   "content": "你好，这是音色设计测试。"
+  }
+ ],
+ "audio": {
+  "format": "wav"
+ },
+ "max_tokens": 2048
+}

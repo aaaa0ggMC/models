@@ -1,0 +1,15 @@
+{
+  "model": "claude-test-1",
+  "max_tokens": 512,
+  "container": "container_test123",
+  "mcp_servers": [
+    { "type": "url", "url": "https://mcp.example.invalid/sse", "name": "fixture-mcp" }
+  ],
+  "future_top_level_flag": { "nested": [1, 2, 3], "enabled": true },
+  "messages": [
+    {
+      "role": "user",
+      "content": "This request carries top-level fields the canonical schema does not model."
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "query": "site:example.com agentgateway canonical 格式",
+  "count": 5,
+  "ori_question": "网关怎么把各家 provider 的格式统一起来？",
+  "localization": "203.0.113.7",
+  "need_content": true
+}

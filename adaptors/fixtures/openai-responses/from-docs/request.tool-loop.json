@@ -1,0 +1,41 @@
+{
+  "model": "gpt-test-1",
+  "instructions": "You are a helpful assistant.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        { "type": "input_text", "text": "What is the weather and the local time in Paris?" }
+      ]
+    },
+    {
+      "type": "function_call",
+      "id": "fc_test_a",
+      "call_id": "call_test_a",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Paris\"}",
+      "status": "completed"
+    },
+    {
+      "type": "function_call",
+      "id": "fc_test_b",
+      "call_id": "call_test_b",
+      "name": "get_time",
+      "arguments": "{\"tz\":\"CET\"}",
+      "status": "completed"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_test_a",
+      "output": "18C, light rain",
+      "status": "completed"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_test_b",
+      "output": "14:05 CET",
+      "status": "completed"
+    }
+  ]
+}

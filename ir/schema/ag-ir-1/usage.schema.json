@@ -1,0 +1,96 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/usage.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CanonicalUsage / UsageUnits / TokenUsage",
+  "description": "docs/design/10-canonical-schema.md §6 多单位 usage。additionalProperties:false 是硬约束（§8）：逼着未建模字段显式进 raw.unmapped，不靠放宽校验。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["units", "source"],
+  "properties": {
+    "units": { "$ref": "#/$defs/UsageUnits" },
+    "cost_hint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["amount", "currency", "source"],
+      "properties": {
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "source": { "type": "string" }
+      }
+    },
+    "raw": { "type": "object" },
+    "source": { "enum": ["provider", "provider_floor", "estimated"] },
+    "precision": { "enum": ["exact", "approx", "low"] }
+  },
+  "$defs": {
+    "UsageUnits": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "各计量单位，未用到的单位省略（不是 0）——10 §6.1 规则 2。",
+      "properties": {
+        "tokens": { "$ref": "#/$defs/TokenUsage" },
+        "questions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["asked", "answered"],
+          "properties": { "asked": { "type": "integer" }, "answered": { "type": "integer" } }
+        },
+        "characters": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "billed"],
+          "properties": { "input": { "type": "number" }, "billed": { "type": "number" } }
+        },
+        "audio_seconds": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["input", "billed"],
+          "properties": { "input": { "type": "number" }, "billed": { "type": "number" } }
+        },
+        "audio_bytes": { "type": "number" },
+        "images": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["generated", "edited"],
+          "properties": { "generated": { "type": "integer" }, "edited": { "type": "integer" } }
+        },
+        "requests": { "type": "integer" },
+        "compaction_tokens": { "$ref": "#/$defs/TokenUsage" }
+      }
+    },
+    "TokenUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens"
+      ],
+      "properties": {
+        "input_tokens": { "type": "integer" },
+        "output_tokens": { "type": "integer" },
+        "total_tokens": { "type": "integer" },
+        "cache_read_tokens": { "type": "integer" },
+        "cache_write_tokens": { "type": "integer" },
+        "reasoning_tokens": { "type": "integer" },
+        "details": { "type": "object", "additionalProperties": { "type": "number" } },
+        "pricing_state": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "缺省视为 billed；'未定价'必须显式写 unpriced（10 §6.1 规则 5）。",
+          "properties": {
+            "input": { "$ref": "#/$defs/PricingState" },
+            "output": { "$ref": "#/$defs/PricingState" },
+            "cache_read": { "$ref": "#/$defs/PricingState" },
+            "cache_write": { "$ref": "#/$defs/PricingState" },
+            "reasoning": { "$ref": "#/$defs/PricingState" }
+          }
+        }
+      }
+    },
+    "PricingState": { "enum": ["billed", "free", "included", "unpriced"] }
+  }
+}

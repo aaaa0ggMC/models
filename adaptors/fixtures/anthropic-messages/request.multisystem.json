@@ -1,0 +1,26 @@
+{
+  "model": "claude-test-1",
+  "max_tokens": 4096,
+  "system": [
+    {
+      "type": "text",
+      "text": "You are the AgentGateway contract-test assistant."
+    },
+    {
+      "type": "text",
+      "text": "Second system block: keep answers under 40 words.",
+      "cache_control": { "type": "ephemeral", "ttl": "1h" }
+    },
+    {
+      "type": "text",
+      "text": "Third system block with the 5m breakpoint.",
+      "cache_control": { "type": "ephemeral", "ttl": "5m" }
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Summarise the three system rules."
+    }
+  ]
+}

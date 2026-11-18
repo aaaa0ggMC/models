@@ -1,0 +1,6 @@
+{
+  "content_type": "audio/pcm",
+  "audio_base64": "AABkADIAGQAKAAUAAAAAAA==",
+  "audio_bytes": 16,
+  "note": "全正样本：每个字节 < 0x80，便于经 ScriptedTransport 的 string body 往返"
+}

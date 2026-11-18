@@ -1,0 +1,18 @@
+{
+  "model": "gpt-test-1",
+  "instructions": "You are a helpful assistant.",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [{ "type": "input_text", "text": "Patch the file." }]
+    },
+    {
+      "type": "custom_tool_call",
+      "id": "ctc_test_1",
+      "call_id": "call_ctc_test_1",
+      "name": "apply_patch",
+      "input": "*** Begin Patch\n*** End Patch"
+    }
+  ]
+}

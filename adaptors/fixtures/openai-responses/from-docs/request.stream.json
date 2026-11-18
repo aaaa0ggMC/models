@@ -1,0 +1,7 @@
+{
+  "model": "gpt-test-1",
+  "instructions": "You are a helpful assistant.",
+  "input": "Say hello in one short sentence.",
+  "stream": true,
+  "max_output_tokens": 128
+}

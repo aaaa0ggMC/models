@@ -1,0 +1,31 @@
+{
+ "id": "74812a5c490d48cabf9dc873524122aa",
+ "choices": [
+  {
+   "finish_reason": "stop",
+   "index": 0,
+   "message": {
+    "content": "你好，我是小米 MiMo 语音合成。",
+    "role": "assistant",
+    "audio": null,
+    "tool_calls": null,
+    "audio_tokens": []
+   }
+  }
+ ],
+ "created": 1794821916,
+ "model": "mimo-v2.5-asr",
+ "object": "chat.completion",
+ "usage": {
+  "completion_tokens": 10,
+  "prompt_tokens": 47,
+  "total_tokens": 57,
+  "completion_tokens_details": {
+   "reasoning_tokens": 0
+  },
+  "prompt_tokens_details": {
+   "audio_tokens": 19,
+   "cached_tokens": 4
+  }
+ }
+}

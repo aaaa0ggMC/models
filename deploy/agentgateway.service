@@ -1,0 +1,71 @@
+# AgentGateway systemd 服务（部署用，仓库内唯一事实来源）
+#
+# 安装（在仓库根执行）：
+#   sudo cp deploy/agentgateway.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now agentgateway
+#
+# 常用：
+#   systemctl status agentgateway        # 看状态
+#   systemctl restart agentgateway       # 重新构建 + 重启（ExecStartPre 会跑 npm run build）
+#   journalctl -u agentgateway -f        # 跟日志
+#
+# 为什么把 unit 放仓库里：历史上装配脚本与部署方式都在仓库外（~/ai-workspace），
+# 「漏接一个注入端口」不会编译报错、只在运行时静默少能力。unit 入库后，
+# 装配入口（scripts/serve.mjs）与运行方式（本文件）同一次 review。
+
+[Unit]
+Description=AgentGateway（LLM API 网关 + 管理面）
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentgateway
+Group=agentgateway
+WorkingDirectory=/opt/agentgateway
+
+# ---- 环境变量 ----
+# .env 里是 AG_ADMIN_TOKEN / AG_PORT / AG_HOST / AG_VIRTUAL_KEYS / 各 provider key。
+# 0600、gitignore；systemd 以 User 身份读，权限够。
+EnvironmentFile=/opt/agentgateway/.env
+# 若本机走本地代理访问上游，可按需配置 HTTP_PROXY / HTTPS_PROXY 与 NO_PROXY。
+Environment=NO_PROXY=localhost,127.0.0.1,::1,[::1]
+Environment=NODE_USE_ENV_PROXY=1
+
+# ---- 启动前先构建 ----
+# **不加 `-` 前缀**：构建失败 = 服务不启动。容忍失败会让服务带着上一份 dist 爬起来，
+# 那就是"静默跑旧代码"——本次部署实测过一次：ProtectSystem=full 让 Vite 的临时文件
+# 写不进去，npm run build 失败，而服务照样起来了，跑的还是旧 bundle。
+ExecStartPre=/usr/local/bin/npm run build --silent
+ExecStart=/usr/local/bin/node scripts/serve.mjs
+
+# ---- 重启策略 ----
+Restart=on-failure
+RestartSec=5
+# 优雅退出时间（serve.mjs 接了 SIGTERM：关 server + gateway.shutdown）
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# ---- 日志 ----
+# journalctl -u agentgateway -f；不写文件，交给 journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agentgateway
+
+# ---- 加固（不碰能力边界集：sudo 需要 SETUID/SETGID/SETPCAP，
+#      收窄 bounding set 会把 sudo 废掉——AI-DESKTOP.md 踩过）----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+# 数据目录与仓库的 dist/ 要可写：keystore / records / 构建产物都落在这儿
+ReadWritePaths=/var/lib/agentgateway
+ReadWritePaths=/opt/agentgateway/dist
+ReadWritePaths=/opt/agentgateway/webui/admin/dist
+# Vite 构建时在 node_modules/.vite-temp 落临时文件（ ProtectSystem=full 下只读，
+# 不放行它 npm run build 会 EROFS 失败）
+ReadWritePaths=/opt/agentgateway/node_modules/.vite-temp
+
+[Install]
+WantedBy=multi-user.target

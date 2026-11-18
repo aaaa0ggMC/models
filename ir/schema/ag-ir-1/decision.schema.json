@@ -1,0 +1,127 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/decision.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DecisionPayload / DecisionResponsePayload",
+  "description": "docs/design/10-canonical-schema.md §4.6 decision 模态（判断模型）。三个映射陷阱（40 §6.2.5）：answers 的 map-vs-array、probabilities 的 map-vs-array、confidence/probability 的有无不一致——所以这三个字段在 canonical 里都是可选的，缺省省略而非填 0。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "content": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "text": { "type": "string" },
+          "media": { "$ref": "media.schema.json" },
+          "role": { "type": "string" }
+        }
+      }
+    },
+    "questions": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/DecisionQuestion" }
+    },
+    "include_option_probabilities": { "type": "boolean" },
+    "include_rationale": { "type": "boolean" },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "native": { "type": "object" } }
+    },
+    "native": { "type": "object" },
+    "raw": { "$ref": "envelope.schema.json#/$defs/RawEnvelope" },
+    "answers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/DecisionAnswer" }
+    }
+  },
+  "$defs": {
+    "DecisionQuestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "prompt"],
+      "properties": {
+        "id": { "type": "string", "description": "问题稳定 id，响应按它回填" },
+        "type": {
+          "enum": ["binary", "choice", "scale", "rubric", "box"],
+          "description": "canonical 五种稳定类型；上游专有名字（noul/predicate/score）在 adaptor 层做别名映射"
+        },
+        "prompt": { "type": "string" },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/DecisionOption" } },
+        "scale": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "type": "number" },
+            "max": { "type": "number" },
+            "step": { "type": "number" },
+            "labels": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "rubric": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["criteria"],
+          "properties": {
+            "criteria": { "type": "string" },
+            "pass_threshold": { "type": "number" },
+            "reference": { "type": "array", "items": { "$ref": "media.schema.json" } }
+          }
+        },
+        "multiple": { "type": "boolean" },
+        "content_refs": { "type": "array", "items": { "type": "integer" } },
+        "native": { "type": "object" }
+      }
+    },
+    "DecisionOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "properties": {
+        "value": {
+          "type": "string",
+          "description": "必须是语义化稳定值，不能用位置性 key——Gemini 按 UTF-8 字节序排序 option key（40 §6.2.5 陷阱 1）"
+        },
+        "label": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "DecisionAnswer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["question_id", "label"],
+      "properties": {
+        "question_id": { "type": "string" },
+        "label": { "type": "string" },
+        "probability": {
+          "type": "number",
+          "description": "可选：OpenAI predicate 把它作为顶层字段，choice/score 放 probabilities 里；极端情况下上游可能不给。缺省省略，不填 0"
+        },
+        "confidence": {
+          "type": "number",
+          "description": "可选且三家不一致：Gemini noul 有、Jev noul 没有、OpenAI predicate 没有"
+        },
+        "option_probabilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "probability"],
+            "properties": { "value": { "type": "string" }, "probability": { "type": "number" } }
+          }
+        },
+        "refusal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": { "reason": { "type": "string" } },
+          "description": "逐题拒答，同请求其他题仍作答"
+        },
+        "rationale": { "type": "string", "description": "三家均不支持，字段仅作前向兼容" },
+        "raw": { "description": "上游原始 answer 对象" }
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "model": "gpt-test-1",
+  "instructions": "You are a helpful assistant.",
+  "input": "Hello.",
+  "truncation": "auto",
+  "max_tool_calls": 3,
+  "prompt_cache_key": "cache-key-test",
+  "context_management": [{ "type": "compaction", "compact_threshold": 12000 }],
+  "safety_check": { "level": "strict" },
+  "title": { "enabled": true }
+}

@@ -1,0 +1,21 @@
+{
+ "model": "mimo-v2.5-asr",
+ "messages": [
+  {
+   "role": "user",
+   "content": [
+    {
+     "type": "input_audio",
+     "input_audio": {
+      "data": "data:audio/wav;base64,UklGRl9fX19XQVZFZm10IGZha2UtYXVkaW8tYnl0ZXM=",
+      "format": "wav"
+     }
+    }
+   ]
+  }
+ ],
+ "asr_options": {
+  "language": "zh"
+ },
+ "max_tokens": 64
+}

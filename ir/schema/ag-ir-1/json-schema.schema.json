@@ -1,0 +1,57 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/json-schema.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JSONSchema",
+  "description": "tool parameters / response_format 的 JSON Schema 子集表示（40 §4 的归一化输入）。带索引签名：canonical 允许未建模字段经 raw 透传，schema 节点同样可能带上游扩展关键字。",
+  "type": "object",
+  "properties": {
+    "$id": { "type": "string" },
+    "$schema": { "type": "string" },
+    "$ref": { "type": "string" },
+    "$defs": { "type": "object" },
+    "$comment": { "type": "string" },
+    "type": {
+      "anyOf": [
+        { "enum": ["string", "number", "integer", "boolean", "object", "array", "null"] },
+        {
+          "type": "array",
+          "items": { "enum": ["string", "number", "integer", "boolean", "object", "array", "null"] }
+        }
+      ]
+    },
+    "properties": { "type": "object" },
+    "patternProperties": { "type": "object" },
+    "additionalProperties": { "anyOf": [{ "type": "boolean" }, { "$ref": "#" }] },
+    "items": { "anyOf": [{ "$ref": "#" }, { "type": "array", "items": { "$ref": "#" } }] },
+    "prefixItems": { "type": "array", "items": { "$ref": "#" } },
+    "required": { "type": "array", "items": { "type": "string" } },
+    "enum": { "type": "array" },
+    "const": {},
+    "allOf": { "type": "array", "items": { "$ref": "#" } },
+    "anyOf": { "type": "array", "items": { "$ref": "#" } },
+    "oneOf": { "type": "array", "items": { "$ref": "#" } },
+    "not": { "$ref": "#" },
+    "if": { "$ref": "#" },
+    "then": { "$ref": "#" },
+    "else": { "$ref": "#" },
+    "format": { "type": "string" },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "default": {},
+    "examples": { "type": "array" },
+    "minimum": { "type": "number" },
+    "maximum": { "type": "number" },
+    "exclusiveMinimum": { "type": "number" },
+    "exclusiveMaximum": { "type": "number" },
+    "multipleOf": { "type": "number" },
+    "minLength": { "type": "integer" },
+    "maxLength": { "type": "integer" },
+    "pattern": { "type": "string" },
+    "minItems": { "type": "integer" },
+    "maxItems": { "type": "integer" },
+    "uniqueItems": { "type": "boolean" },
+    "minProperties": { "type": "integer" },
+    "maxProperties": { "type": "integer" },
+    "nullable": { "type": "boolean", "description": "非标准扩展，见 40 §4 nullable 策略三档" }
+  }
+}

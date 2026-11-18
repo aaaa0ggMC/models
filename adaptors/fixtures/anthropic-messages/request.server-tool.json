@@ -1,0 +1,23 @@
+{
+  "model": "claude-test-1",
+  "max_tokens": 1024,
+  "system": [
+    {
+      "type": "text",
+      "text": "You may use the built-in web search tool."
+    }
+  ],
+  "tools": [
+    {
+      "type": "web_search_20250305",
+      "name": "web_search",
+      "max_uses": 3
+    }
+  ],
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search the web for the AgentGateway project homepage."
+    }
+  ]
+}

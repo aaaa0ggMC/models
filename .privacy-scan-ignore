@@ -1,0 +1,10 @@
+# privacy-scan 忽略清单（一行一个 glob）。仅收录已确认的假数据。
+# DeepSeek Search API 的 localization 字段是 IP 语义，夹具用 RFC 5737 文档段地址。
+providers/deepseek/fixtures/search.request.json
+# 同上：网关侧 `/v1/tools/search` 契约测试要断言 localization 透传，
+# 用 RFC 5737 文档段地址（TEST-NET-3 段）而非任何真实地址。
+tests/deepseek-tool-endpoints.test.ts
+# OpenAI SDK 的 `new OpenAI({apiKey})` 属性名命中「secret-assignment」启发式，
+# 而值是字符串字面量 'sdk-audio-test-access-token-not-real' / 'test-not-a-real-key'
+# （与 deepseek-tool-endpoints.test.ts 同款假数据口径，无真实凭据）。
+tests/models-openai-sdk-audio.test.ts

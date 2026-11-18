@@ -1,0 +1,26 @@
+{
+  "model": "gpt-test-1",
+  "instructions": "You are a helpful assistant with tools.",
+  "input": "What is the weather in Paris?",
+  "tools": [
+    {
+      "type": "function",
+      "name": "get_weather",
+      "description": "Get the current weather for a city.",
+      "parameters": {
+        "type": "object",
+        "properties": { "city": { "type": "string" } },
+        "required": ["city"],
+        "additionalProperties": false
+      },
+      "strict": true
+    },
+    {
+      "type": "web_search",
+      "search_context_size": "medium"
+    }
+  ],
+  "tool_choice": "auto",
+  "parallel_tool_calls": false,
+  "max_output_tokens": 512
+}

@@ -1,0 +1,18 @@
+{
+ "model": "mimo-v2.5-tts-voiceclone",
+ "messages": [
+  {
+   "role": "user",
+   "content": "克隆这个声音"
+  },
+  {
+   "role": "assistant",
+   "content": "这是克隆声音的测试。"
+  }
+ ],
+ "audio": {
+  "format": "wav",
+  "voice": "data:audio/wav;base64,UklGRl9fX19XQVZFZm10IGZha2UtYXVkaW8tYnl0ZXM="
+ },
+ "max_tokens": 2048
+}

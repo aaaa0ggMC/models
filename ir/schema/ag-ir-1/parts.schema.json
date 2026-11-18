@@ -1,0 +1,123 @@
+{
+  "$id": "https://agentgateway.local/schema/ag-ir-1/parts.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Part 联合",
+  "description": "docs/design/10-canonical-schema.md §4.2 Part 定义。UnknownPart 是前向兼容兜底：provider 新增 block 类型时不报错（20 §S1）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type"],
+  "properties": {
+    "type": {
+      "enum": [
+        "text",
+        "image",
+        "audio",
+        "document",
+        "video",
+        "tool_use",
+        "tool_result",
+        "thinking",
+        "redacted_thinking",
+        "search_result",
+        "refusal",
+        "unknown"
+      ]
+    },
+    "_raw": {},
+    "text": { "type": "string" },
+    "cache_control": { "$ref": "tools.schema.json#/$defs/CacheControl" },
+    "source": {
+      "description": "image/audio/document/video 用 MediaRef；search_result 用来源名字符串。",
+      "anyOf": [{ "$ref": "media.schema.json" }, { "type": "string" }]
+    },
+    "role": { "enum": ["input", "mask", "reference"] },
+    "format": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mime": { "type": "string" },
+        "sample_rate": { "type": "integer" },
+        "bit_depth": { "type": "integer" },
+        "channels": { "type": "integer" }
+      }
+    },
+    "media_type": { "type": "string" },
+    "title": { "type": "string" },
+    "id": { "type": "string", "description": "tool_use：canonical 权威 id，必须是干净 id（D7b）" },
+    "name": { "type": "string" },
+    "input": { "type": "object", "description": "tool_use：已解析的参数对象（D7）" },
+    "raw_arguments": {
+      "type": "string",
+      "description": "tool_use：上游原始参数串，回写时优先用它（§7.3）"
+    },
+    "tool_use_id": { "type": "string" },
+    "content": {
+      "description": "tool_result：结构化 parts 或纯文本",
+      "anyOf": [{ "type": "string" }, { "type": "array", "items": { "$ref": "#" } }]
+    },
+    "is_error": { "type": "boolean" },
+    "search_results": { "type": "array", "items": { "$ref": "#" } },
+    "thinking": { "type": "string" },
+    "signature": { "type": "string", "description": "多轮回传必需（Anthropic semantics）" },
+    "summary": { "type": "boolean" },
+    "data": { "type": "string" },
+    "url": { "type": "string" },
+    "snippet": { "type": "string" },
+    "published_at": { "type": "string" },
+    "citation_index": { "type": "integer" },
+    "score": { "type": "number" },
+    "reason": { "type": "string" },
+    "raw_type": { "type": "string" },
+    "raw": { "description": "unknown part 的上游原始 block" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "type": { "const": "text" } }, "required": ["type"] },
+      "then": { "required": ["text"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "image" } }, "required": ["type"] },
+      "then": { "required": ["source"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "audio" } }, "required": ["type"] },
+      "then": { "required": ["source"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "document" } }, "required": ["type"] },
+      "then": { "required": ["source"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "video" } }, "required": ["type"] },
+      "then": { "required": ["source"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "tool_use" } }, "required": ["type"] },
+      "then": { "required": ["id", "name", "input"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "tool_result" } }, "required": ["type"] },
+      "then": { "required": ["tool_use_id", "content"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "thinking" } }, "required": ["type"] },
+      "then": { "required": ["thinking"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "redacted_thinking" } }, "required": ["type"] },
+      "then": { "required": ["data"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "search_result" } }, "required": ["type"] },
+      "then": { "required": ["source", "title", "url", "snippet"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "refusal" } }, "required": ["type"] },
+      "then": { "required": ["reason"] }
+    },
+    {
+      "if": { "properties": { "type": { "const": "unknown" } }, "required": ["type"] },
+      "then": { "required": ["raw"] }
+    }
+  ]
+}
