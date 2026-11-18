@@ -1,173 +1,100 @@
 # AgentGateway
 
-> **私有仓库 · WIP（work in progress）** —— 当前只有设计文档与协作约定，尚无可用代码。
->
-> 架构与详细设计见 [`docs/design/`](docs/design/)（全套 v1.0-draft，**待 review**）。
-> 在定稿前，本文件描述的是设计意图，不是已实现的行为。
-
-## 项目定位
-
-**AgentGateway** 是一个 **LLM API 网关**：客户端可以用任意主流格式发请求，
-由网关负责在不同格式与不同上游 provider 之间互转，并在链路上提供插件、
-内置工具、用量统计与计费等横切能力。
+**AgentGateway** 是一个开源的 **LLM API 网关**：客户端可以使用主流协议格式（OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Gemini `generateContent` 等）发起请求，由网关统一经过自研 **AG-IR canonical** 中间格式完成协议互转、路由调度、多密钥故障转移、插件拦截、异步计量计费，并配套完整的可视化管理面板。
 
 > 仓库名沿用 `models`（历史原因），项目名是 **AgentGateway**。
 
-要解决的核心问题：
+## 核心能力
 
-- 客户端与上游 provider 的格式互相绑定，换模型就要改代码；
-- 各家 usage / finish_reason / tool_call 表示不一致，难以统一计量；
-- 长会话、搜索、压缩等能力每个应用各写一遍；
-- 用量数据散落各处，无法统一查询与分析。
+- **全链路 Canonical 互转（Always-Canonical）**：所有请求与响应均通过 `ir/` 定义的自研超集 Schema（AG-IR）进行无损编解码与 raw passthrough 保留，支持 OpenAI Chat / Responses、Anthropic Messages、Gemini `generateContent` 以及图像/音频/Embedding 等多模态端点。
+- **显式 Pipeline（S0–S10）**：11 阶段请求生命周期，统一处理流式 SSE、多轮 Tool Call 循环与错误映射，不将厂商私有结构跨模块泄露。
+- **多厂商 Provider 与模型目录**：内置 DeepSeek、小米 MiMo、OpenRouter、OpenCode Go、xAI Grok 等预设与官方定价表（`providers/`），支持自动同步 `models.dev` 元数据与能力矩阵（`catalog/`）。
+- **多密钥故障转移与额度监控**：支持单 Provider 多凭据轮询/故障转移、冷却恢复、余额与订阅窗口查询（`credentials/`）。
+- **插件系统与内置工具**：提供 5 个操作 canonical 数据的通用 hook（`onRequest` / `onResponse` / `onStreamChunk` / `onError` / `onToolCall`），支持内置工具与外部能力接入（`plugins/`）。
+- **异步计量与加密存储**：旁路异步汇总 Token、音频时长、图像次数与费用并落入 SQLite（`metering/`、`storage/`），支持主密钥/数据密钥（KEK/DEK）信封加密与轮换。
+- **安全与网关伪装（Stealth Mode）**：控制面与数据面认证完全隔离；支持在管理面开启「网关伪装」，未携带伪装请求头或 `?gate_key=` 密钥的数据面请求统一返回 `404 Not Found`，支持在线一键生成、复制与轮换伪装密钥。
+- **管理面 WebUI**：内置基于 React + Vite 的管理后台（`webui/admin/`），涵盖总览、模型目录、路由引擎、渠道与凭据管理、客户端虚拟密钥、用量统计、安全与密钥、对话调试等页面。
 
-## 核心设计
-
-### 1. 格式互转
-
-客户端请求可以是任意主流格式，例如：
-
-- OpenAI Chat Completions
-- OpenAI Responses
-- Anthropic Messages
-- Gemini `generateContent`
-
-网关把请求转成上游 provider 的格式，再把上游响应转回客户端请求的格式。
-**新增一种客户端格式或一家上游 provider，不应影响其他格式与其他链路环节。**
-
-### 2. 自研 canonical 中间格式
-
-网关内部使用**自研的 canonical 中间格式**——它是一个**超集 schema**，
-不直接拿某个厂商的格式当超集（厂商格式各有私有字段与语义，做超集会漏水）。
-
-- 保留 raw passthrough 字段，保证**无损可逆**：转过去再转回来，语义不丢。
-- **一律走 canonical（always-canonical）**：v1 每个请求都完整 decode → canonical →
-  encode，再完整转回来，**不做字节级 fast path**；usage / finish_reason / tool_call id
-  的归一是每次请求的必经步骤。字节级 fast path 为未来可选优化，须实测数据支撑才加回。
-- canonical 是插件、内置工具、统计计费唯一看到的数据形态。
-
-### 3. 插件系统
-
-- **generic hook（5 个）**：`onRequest` / `onResponse` / `onStreamChunk` / `onError` / `onToolCall`，
-  只操作 canonical，不接触具体厂商格式——插件作者不需要懂所有 provider。
-- **adaptor 模式**：外部能力通过 adaptor 接入，而不是把逻辑硬编码进网关。
-- 首个计划接入：[billion-context](https://github.com/ranxianglei/billion-context)
-  （长会话上下文压缩插件），作为**请求侧压缩**的验证场景。
-
-### 4. 内置搜索
-
-在 canonical 里，搜索被建模为一个 **built-in tool**（`web_search`）：
-
-- 上游 provider **原生支持** → **语义透传 + 方言映射**（如 `web_search` ↔
-  `deepseek_web_search`），由 provider 执行；
-- 上游**不支持** → 网关自己实现搜索结果，并以 tool 结果的形式注入对话。
-
-对客户端而言，两种路径的可见行为一致。
-
-### 5. 统计与计费
-
-- **独立异步管道**：不阻塞请求主链路；请求完成后旁路归一化 usage 并落库。
-- 规范化 usage：统一 token 口径、缓存命中、计费档位，兼容各 provider 的差异。
-- **dog-fooding**：提供 **agent 接口**，让 AI 自己查询/分析用量数据
-  （例如"上个月哪个模型花了最多钱""哪些请求触发了压缩"）。
-- **WebUI**：fork [LibreChat](https://github.com/LibreChat-AI/LibreChat)（纯 MIT）改造，
-  自建 gateway 管理模块补上它没有的 virtual key / provider / routing 管理；**不从零画**。
-
-### 6. 显式 Pipeline 请求生命周期
-
-请求生命周期由显式的 Pipeline 阶段驱动，而不是散落在路由里的隐式逻辑。
-阶段之间传递 canonical 数据，插件与观测点可以查看任意阶段的中间数据。
-需要正确处理的两类复杂情况：
-
-- **流式 SSE**：chunk 级的互转、hook 与背压；
-- **工具调用多轮循环**：模型发起 tool_call → 执行 → 回填 → 再次请求。
-
-## 目录结构规划（草案）
-
-> 草案，随设计文档演进；实现动工前以 `docs/design/` 为准。
+## 目录结构
 
 ```text
 models/
-├── README.md              # 本文件
-├── AGENTS.md              # 项目级协作约定
-├── CONTRIBUTING.md        # 面向人类协作者的提交/隐私约定
-├── CHANGELOG.md           # 变更记录
-├── LICENSE                # MIT
-├── .gitignore
+├── README.md                  # 本文件
+├── AGENTS.md                  # 项目级协作与编码约束
+├── CONTRIBUTING.md            # 提交与隐私扫描约定
+├── CHANGELOG.md               # 变更记录
+├── LICENSE                    # MIT 许可证
+├── .env.example               # 环境变量样例
+├── composition-root.ts        # 依赖注入与运行时组合根
+├── ir/                        # AG-IR canonical 类型定义与 Schema
+├── gateway-core/              # PipelineRunner、S0–S10 阶段与路由引擎
+├── adaptors/                  # 客户端格式 <-> 上游 Provider 格式互转
+├── providers/                 # 厂商预设、定价表与探测适配
+├── catalog/                   # 模型目录与能力元数据同步
+├── credentials/               # 上游凭据解析、多密钥故障转移与额度查询
+├── auth/                      # 数据面 Virtual Key 与控制面认证
+├── admin/                     # 管理面 HTTP API 路由与认证
+├── http/                      # HTTP/SSE ingress、多模态/音频/模型端点与伪装门禁
+├── metering/                  # 异步用量归一化与计费引擎
+├── plugins/                   # 插件宿主与通用 hook 执行
+├── storage/                   # SQLite 持久化、加密存储与审计日志
+├── config/                    # 运行时设置定义与多层合并
+├── di/                        # 轻量级 DI 容器与环境变量读取
+├── webui/admin/               # 管理面前端（React + Vite + TypeScript）
+├── deploy/                    # systemd 服务模板等部署配置
+├── scripts/                   # 构建、文档校验、UI 文案检查与服务端入口
 ├── docs/
-│   ├── design/            # 详细设计文档（00–70，v1.0-draft 待 review）
-│   └── sources.md         # 全部调研来源与结论
-├── .github/
-│   └── workflows/
-│       └── docs.yml       # 文档 CI：markdownlint / 外链 / 围栏与引用 / 术语
-├── scripts/
-│   └── check-docs.mjs     #  docs.yml 里跑的围栏奇偶 + §N 引用 + 节号校验脚本
-├── ir/                    # AG-IR canonical：类型定义 + JSON Schema + round-trip 校验
-│                            （= 00 §4.2 的 `ir` 模块；原 README 写的 src/canonical/、70 写的 schema/ 已统一）
-├── gateway-core/          # PipelineRunner、11 个阶段（S0–S10）、RequestContext、错误模型
-├── adaptors/              # 客户端格式 ↔ 上游 provider 格式互转（一律过 canonical）
-├── pipeline/              # 阶段编排（并入 gateway-core；保留目录仅为可读性）
-├── plugins/               # 插件系统：5 个 generic hook + adaptor 接入外部能力
-├── streaming/             # 统一流式帧信封、三种上游形态桥接、WS 双路径
-├── modalities/            # TTS/ASR/Image/Embedding 的 payload 与 mapper
-├── decision/              # control-plane 判断：decision 模态 adaptor + 降级路径 + 攒批
-├── search/                # built-in tool 建模、两种执行模式、后端抽象
-├── builtin/               # 内置能力：web_search 等 built-in tool 的执行面
-├── credentials/           # 上游侧凭据、access path、Plan 感知路由
-├── auth/                  # 数据面 virtual key + 控制面本地认证/passkey + 权限模型
-├── metering/              # usage 归一、多单位、定价、dog-fooding 工具
-├── storage/               # 分层、加密、前缀压缩、保留策略、脱敏
-├── upstream/              # 上游 provider 客户端、连接管理、重试
-├── agentapi/              # dog-fooding：供 AI 查询/分析用量的接口
-├── server/                # HTTP/SSE 入口、路由、限流
-├── webui/                 # 前端：fork LibreChat，不从零画
-├── config/                # 配置样例（仅 .example；凭据走环境变量）
-└── tests/
-    ├── unit/
-    ├── contract/          # 各格式互转的往返（round-trip）测试
-    └── e2e/
+│   ├── design/                # 架构与详细设计文档
+│   └── sources.md             # 外部调研来源与结论
+├── reports/                   # 阶段性实现报告、审计记录与联调文档
+└── tests/                     # 单元测试、契约测试与端到端测试
 ```
 
-> **目录命名以 [`docs/design/00-overview.md`](docs/design/00-overview.md) §4.2 的模块表为唯一事实来源。**
-> 此前仓库里有三套命名（本文件的 `src/canonical/…`、00 的 `gateway-core`/`ir`/`metering`、70 验收标准里的 `schema/`），已统一。
+## 快速开始
 
-## 状态与路线
+### 1. 安装与构建
 
-- [x] 仓库与协作约定就绪
-- [x] `docs/design/` 详细设计成稿（v1.0-draft，**待 review**）
-- [ ] review 意见逐条处置（GitHub Issues #1–#8）
-- [ ] canonical schema 与往返互转（一律过 canonical，无字节级 fast path）
-- [ ] Pipeline 骨架与 SSE / 工具调用循环
-- [ ] 插件系统 + billion-context 请求侧压缩
-- [ ] 内置 `web_search`（语义透传 + 方言映射 / 网关自实现两条路径）
-- [ ] 异步用量统计/计费管道 + agent 查询接口
-- [ ] WebUI 接入
+```bash
+npm install
+npm run build
+```
 
-## 开发与运行
+### 2. 配置环境变量
 
-> 🚧 待设计定稿后补充：依赖安装、本地启动、配置说明、测试与部署。
->
-> 需要 provider 凭据的部分一律走环境变量，仓库内只保留 `.example` 样例。
+```bash
+cp .env.example .env
+# 按需填写上游 Provider API Key、AG_ADMIN_TOKEN 等环境变量
+```
+
+> 仓库内不保存任何真实密钥或线上配置，所有敏感信息均通过 `.env` 或系统环境变量注入。
+
+### 3. 启动服务与测试
+
+```bash
+# 本地启动（构建后运行）
+node dist/scripts/serve.mjs
+
+# 端到端往返演示（HTTP ingress + mock 上游）
+npm run demo
+
+# 运行测试与校验
+npm test                 # Vitest 全量测试
+npm run typecheck        # TypeScript 严格类型检查
+npm run lint             # ESLint 检查
+npm run check:ui-copy    # 管理面 UI 文案规范检查
+node scripts/check-docs.mjs  # docs/ 设计文档一致性检查
+```
+
+### 4. systemd 部署参考
+
+参考 [deploy/agentgateway.service](deploy/agentgateway.service) 配置系统服务（注意按实际部署路径调整 `WorkingDirectory`、`EnvironmentFile` 与 `User`）。
+
+## 相关文档
+
+- 架构与详细设计：[`docs/design/`](docs/design/)
+- 实现说明与模块职责：[`reports/IMPLEMENTATION.md`](reports/IMPLEMENTATION.md)
+- 历史阶段报告与审计记录：[`reports/`](reports/)
 
 ## 许可
 
 MIT，见 [LICENSE](LICENSE)。
-
----
-
-## 实现运行说明
-
-仓库已进入实现阶段（Phase 1 骨架与最小闭环）。运行方式、目录职责、DI 装配方式、
-测试覆盖见 **[`IMPLEMENTATION.md`](IMPLEMENTATION.md)**。
-
-```bash
-npm install
-npm test            # vitest
-npm run typecheck   # tsc --noEmit --strict
-npm run demo        # 起 HTTP ingress + mock 上游，端到端往返演示
-```
-
-**当前状态**：`ir/` canonical 类型、DI 容器 + 组合根、`gateway-core/pipeline/`（S0–S10）、
-`openai.chat` 与 `anthropic.messages` 两个双向 codec、`metering/` 异步计量管道、
-最小 HTTP ingress 已落地。尚未实现：`storage/` 加密存储（Phase 4）、`webui/`、
-decision/image/tts/asr 的 **adaptor**（canonical 类型已建）、真实 credential OAuth 流程、
-内置搜索实现、商业化功能。
