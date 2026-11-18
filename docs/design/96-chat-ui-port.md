@@ -443,7 +443,7 @@ DSH 侧对照（§1.1 的调研结论）：会话列表 UI 在 `ui-workspace/row
 
 ### 5.2 会话模型与前端状态
 
-```
+```text
 AgentSession（前端持有，不进存储）
   id: string            // 前端生成的稳定 id，随请求带上
   title: string         // 首条 user 消息截断（前 20 字），不调模型
