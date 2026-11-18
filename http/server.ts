@@ -200,12 +200,19 @@ export interface HttpServerOptions {
   startup?(): Promise<void>;
   /** 网关伪装门禁（开启后，未携带合法伪装密钥的数据面请求统一返回 404）。 */
   stealthGate?: () => StealthGateConfig;
+  /** 客户端断联处置策略（immediate / grace / ignore）。 */
+  disconnectPolicy?: () => DisconnectPolicyConfig;
 }
 
 export interface StealthGateConfig {
   enabled: boolean;
   key: string;
   headerName?: string;
+}
+
+export interface DisconnectPolicyConfig {
+  mode: 'immediate' | 'grace' | 'ignore';
+  graceMs?: number;
 }
 
 /** Node http 的 ServerResponse → ClientSink 适配。 */
@@ -315,6 +322,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
   const modalities = options.modalities;
   const audio = options.audio;
   const stealthGate = options.stealthGate;
+  const disconnectPolicy = options.disconnectPolicy;
 
   return createServer((req, res) => {
     void handleRequest(
@@ -329,6 +337,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
       audio,
       authenticator,
       stealthGate,
+      disconnectPolicy,
     );
   });
 }
@@ -368,6 +377,7 @@ async function handleRequest(
   audio: AudioEndpoints | undefined,
   authenticator: Authenticator | undefined,
   stealthGate: (() => StealthGateConfig) | undefined,
+  disconnectPolicy: (() => DisconnectPolicyConfig) | undefined,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
@@ -486,6 +496,32 @@ async function handleRequest(
   const rawBody = Buffer.concat(chunks);
 
   const sink = new NodeResponseSink(res);
+  const policy = disconnectPolicy?.() ?? { mode: 'immediate', graceMs: 5_000 };
+  const clientAbort = new AbortController();
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const triggerDisconnect = () => {
+    if (policy.mode === 'ignore') return;
+    if (policy.mode === 'grace') {
+      const graceMs = Math.max(0, policy.graceMs ?? 5_000);
+      if (graceMs > 0) {
+        if (graceTimer === undefined && !clientAbort.signal.aborted) {
+          graceTimer = setTimeout(() => {
+            graceTimer = undefined;
+            clientAbort.abort();
+          }, graceMs);
+        }
+        return;
+      }
+    }
+    clientAbort.abort();
+  };
+  const onReqAborted = () => triggerDisconnect();
+  const onResClose = () => {
+    if (!res.writableEnded) triggerDisconnect();
+  };
+  req.on('aborted', onReqAborted);
+  res.on('close', onResClose);
+
   try {
     // 注意：这里**不设置** `auth_exemption`。数据面路径永远不声明第一方豁免——
     // 豁免表只有 S0 一份（`DATA_PLANE_AUTH_EXEMPTIONS`，唯一登记项是管理面
@@ -498,6 +534,7 @@ async function handleRequest(
         headers: sanitizeHeaders(req.headers),
         path,
         query: Object.fromEntries(url.searchParams.entries()),
+        abort_signal: clientAbort.signal,
         ...(() => {
           const material = buildAuthMaterial(req.headers, url.searchParams);
           return material === undefined ? {} : { auth_material: material };
@@ -519,6 +556,9 @@ async function handleRequest(
       );
     }
   } finally {
+    if (graceTimer !== undefined) clearTimeout(graceTimer);
+    req.off('aborted', onReqAborted);
+    res.off('close', onResClose);
     sink.end();
   }
 }

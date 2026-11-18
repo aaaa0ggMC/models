@@ -156,6 +156,8 @@ export interface RequestContext {
 
   /** 客户端请求体字节长度（S0 记录，用于限额与观测）。 */
   request_bytes?: number;
+  /** 客户端断联中止信号（按策略在立即或宽限期后触发）。 */
+  abort_signal?: AbortSignal;
 
   /** 关闭 fast path，之后本请求走完整结构转换（30 §2.1）。 */
   disableFastPath(reason: string): void;

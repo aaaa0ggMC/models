@@ -156,6 +156,10 @@ export interface GatewayConfig {
   stealthHeader?: string;
   /** 伪装密钥值。 */
   stealthKey?: string;
+  /** 客户端断联处置模式：immediate（立即掐断上游）、grace（宽限期后未恢复再掐断）、ignore（不主动掐断）。 */
+  clientDisconnectMode?: 'immediate' | 'grace' | 'ignore';
+  /** 宽限模式下的等待时间（ms，默认 5000）。 */
+  clientDisconnectGraceMs?: number;
 }
 
 export const DEFAULT_CONFIG: GatewayConfig = {
@@ -171,6 +175,8 @@ export const DEFAULT_CONFIG: GatewayConfig = {
   stealthEnabled: false,
   stealthHeader: 'x-gateway-key',
   stealthKey: '',
+  clientDisconnectMode: 'immediate',
+  clientDisconnectGraceMs: 5_000,
   usageSnifferMaxBytes: 256 * 1024,
   lossPolicy: 'allow',
   debug: false,

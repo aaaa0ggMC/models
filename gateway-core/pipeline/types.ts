@@ -174,6 +174,8 @@ export interface PipelineInput {
    * 不在表里的调用方一律**不豁免**，继续走数据面鉴权器。
    */
   auth_exemption?: AuthExemption;
+  /** 客户端断联中止信号（由 HTTP ingress 按断联策略触发）。 */
+  abort_signal?: AbortSignal;
 }
 
 /** 阶段间共享的可变状态。字段按阶段顺序填充。 */

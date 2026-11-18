@@ -86,6 +86,8 @@ export const RUNTIME_SETTING_KEYS = [
   'gateway_stealth_enabled',
   'gateway_stealth_header',
   'gateway_stealth_key',
+  'client_disconnect_mode',
+  'client_disconnect_grace_ms',
   // ---- Agent 组（docs/design/95-agent-chat.md §6.2）----
   'agent_access_path',
   'agent_model',
@@ -298,6 +300,29 @@ export const RUNTIME_SETTINGS: readonly RuntimeSettingSpec[] = [
     type: 'string',
     unit: '',
     description: '伪装模式启用时数据面 API 必须携带的专用密钥，可在系统设置页复制或轮换。',
+  },
+  {
+    key: 'client_disconnect_mode',
+    field: 'clientDisconnectMode',
+    group: 'gateway',
+    default_value: DEFAULT_CONFIG.clientDisconnectMode ?? 'immediate',
+    label: '客户端断联处置',
+    type: 'enum',
+    options: ['immediate', 'grace', 'ignore'],
+    unit: '',
+    description:
+      'immediate：客户端断联立即掐断上游；grace：先继续接收指定宽限时间，未结束再掐断；ignore：不主动中止上游。',
+  },
+  {
+    key: 'client_disconnect_grace_ms',
+    field: 'clientDisconnectGraceMs',
+    group: 'gateway',
+    default_value: DEFAULT_CONFIG.clientDisconnectGraceMs ?? 5_000,
+    label: '断联宽限时间',
+    type: 'int',
+    unit: 'ms',
+    range: { min: 0, max: 300_000 },
+    description: '仅在 client_disconnect_mode=grace 时生效：客户端断联后先继续接收上游的毫秒数。',
   },
 ];
 

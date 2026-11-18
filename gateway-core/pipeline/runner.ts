@@ -94,6 +94,9 @@ export class PipelineRunner {
       traceId,
       onDisableFastPath,
     );
+    if (input.abort_signal !== undefined) {
+      ctx.abort_signal = input.abort_signal;
+    }
 
     const state: PipelineState = {
       ctx,

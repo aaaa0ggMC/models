@@ -120,8 +120,21 @@ export class S5Upstream implements Stage {
             );
           }
 
+          if (ctx.abort_signal?.aborted) {
+            throw createCanonicalError(
+              'upstream_error',
+              '客户端已断开连接，中止上游请求',
+              ctx.request_id,
+              { http_status: 499, retryable: false },
+            );
+          }
+
           const controller = new AbortController();
           const deadlineTimer = setTimeout(() => controller.abort(), remaining);
+          const upstreamSignal =
+            ctx.abort_signal === undefined
+              ? controller.signal
+              : AbortSignal.any([controller.signal, ctx.abort_signal]);
           const ttfbStart = deps.clock.now();
           try {
             const { headers: authHeaders, credential_id } =
@@ -139,7 +152,7 @@ export class S5Upstream implements Stage {
                 ? { body: currentEncoded.raw_bytes }
                 : { body: Buffer.from(JSON.stringify(currentEncoded.body ?? {})) }),
               stream: state.shallow?.stream === true,
-              signal: controller.signal,
+              signal: upstreamSignal,
             });
 
             state.upstream = res;
@@ -217,6 +230,14 @@ export class S5Upstream implements Stage {
             }
             throw lastError;
           } catch (err) {
+            if (ctx.abort_signal?.aborted) {
+              throw createCanonicalError(
+                'upstream_error',
+                '客户端已断开连接，中止上游请求',
+                ctx.request_id,
+                { http_status: 499, retryable: false },
+              );
+            }
             if (err instanceof RedirectNotFollowedError) {
               throw createCanonicalError('upstream_error', err.message, ctx.request_id, {
                 http_status: 502,

@@ -70,6 +70,8 @@ export const RUNTIME_SETTING_ENV_VARS: Record<
   gateway_stealth_enabled: 'AG_GATEWAY_STEALTH_ENABLED',
   gateway_stealth_header: 'AG_GATEWAY_STEALTH_HEADER',
   gateway_stealth_key: 'AG_GATEWAY_STEALTH_KEY',
+  client_disconnect_mode: 'AG_CLIENT_DISCONNECT_MODE',
+  client_disconnect_grace_ms: 'AG_CLIENT_DISCONNECT_GRACE_MS',
   // ---- Agent 组（docs/design/95-agent-chat.md §6.2）----
   agent_access_path: 'AG_AGENT_ACCESS_PATH',
   agent_model: 'AG_AGENT_MODEL',

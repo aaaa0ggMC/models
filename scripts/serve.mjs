@@ -235,6 +235,11 @@ const server = await startHttpServer({
     key: gateway.config.stealthKey ?? '',
     headerName: gateway.config.stealthHeader ?? 'x-gateway-key',
   }),
+  // 客户端断联处置策略（默认 immediate；可切换 grace 并配置宽限毫秒数）
+  disconnectPolicy: () => ({
+    mode: gateway.config.clientDisconnectMode ?? 'immediate',
+    graceMs: gateway.config.clientDisconnectGraceMs ?? 5_000,
+  }),
   // 把加密存储里的运行时设置应用回 config（否则界面改了但请求路径不认）
   startup: async () => { await gateway.loadSettings(); },
 });

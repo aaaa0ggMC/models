@@ -130,6 +130,9 @@ export class FetchTransport implements Transport {
       if (req.signal.aborted) controller.abort();
       else req.signal.addEventListener('abort', onAbort, { once: true });
     }
+    const detachAbort = () => {
+      req.signal?.removeEventListener('abort', onAbort);
+    };
 
     let res: globalThis.Response;
     try {
@@ -140,11 +143,13 @@ export class FetchTransport implements Transport {
         redirect: 'manual',
         signal: controller.signal,
       });
-    } finally {
-      req.signal?.removeEventListener('abort', onAbort);
+    } catch (err) {
+      detachAbort();
+      throw err;
     }
 
     if (res.status >= 300 && res.status < 400) {
+      detachAbort();
       throw new RedirectNotFollowedError(res.status, res.headers.get('location') ?? undefined);
     }
 
@@ -155,17 +160,30 @@ export class FetchTransport implements Transport {
 
     if (req.stream) {
       if (res.body === null) {
-        return { status: res.status, headers, body: Buffer.from(await res.arrayBuffer()) };
+        try {
+          return { status: res.status, headers, body: Buffer.from(await res.arrayBuffer()) };
+        } finally {
+          detachAbort();
+        }
       }
-      return { status: res.status, headers, chunks: fetchChunkIterable(res.body, controller) };
+      return {
+        status: res.status,
+        headers,
+        chunks: fetchChunkIterable(res.body, controller, detachAbort),
+      };
     }
-    return { status: res.status, headers, body: Buffer.from(await res.arrayBuffer()) };
+    try {
+      return { status: res.status, headers, body: Buffer.from(await res.arrayBuffer()) };
+    } finally {
+      detachAbort();
+    }
   }
 }
 
 async function* fetchChunkIterable(
   body: ReadableStream<Uint8Array>,
   controller: AbortController,
+  onDone: () => void,
 ): AsyncIterable<Buffer> {
   const reader = body.getReader();
   try {
@@ -175,6 +193,7 @@ async function* fetchChunkIterable(
       if (value !== undefined) yield Buffer.from(value);
     }
   } finally {
+    onDone();
     reader.releaseLock();
     // 客户端断开时级联关闭上游连接（25 §6 第 3 条：止损）
     try {

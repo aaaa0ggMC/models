@@ -22,6 +22,7 @@ export class MutableRequestContext implements RequestContext {
   state: Record<string, unknown> = {};
   metrics: StageMetric[] = [];
   request_bytes?: number;
+  abort_signal?: AbortSignal;
 
   /** 累积的 warning（最终进响应信封 warnings 与 UsageRecord.warnings）。 */
   readonly warnings: string[] = [];
