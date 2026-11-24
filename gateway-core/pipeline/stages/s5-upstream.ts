@@ -182,6 +182,14 @@ export class S5Upstream implements Stage {
             // 非 2xx：读错误体，映射成 canonical 错误
             const bodyText = res.body?.toString('utf8') ?? '';
             lastError = this.mapUpstreamError(res.status, bodyText, ctx.request_id);
+            deps.logger.warn('S5 upstream non-2xx', {
+              request_id: ctx.request_id,
+              access_path: attempt.access_path,
+              model: attempt.model,
+              status: res.status,
+              error_message: lastError.message,
+              provider_code: lastError.provider_code,
+            });
             // 渠道级失败：**每个非 2xx 响应都记一次**——与加换钥之前逐字一致
             // （重试也算，于是一个 500 重试 3 次记 3 次、达到默认阈值 3 就禁用）。
             // **唯一的例外**：这把的失败是"凭据形状"的（401/403/429）且还有下一把
@@ -231,6 +239,13 @@ export class S5Upstream implements Stage {
             throw lastError;
           } catch (err) {
             if (ctx.abort_signal?.aborted) {
+              deps.logger.warn('S5 upstream aborted by client', {
+                request_id: ctx.request_id,
+                access_path: attempt.access_path,
+                model: attempt.model,
+                path: currentEncoded.path,
+                elapsed_ms: deps.clock.now() - ttfbStart,
+              });
               throw createCanonicalError(
                 'upstream_error',
                 '客户端已断开连接，中止上游请求',
@@ -306,12 +321,19 @@ export class S5Upstream implements Stage {
     let providerCode: string | undefined;
     let message = `上游返回 ${status}`;
     try {
-      const parsed = JSON.parse(body) as Record<string, unknown>;
+      const cleaned = body.trim().replace(/^data:\s*/i, '');
+      const rawParsed: unknown = JSON.parse(cleaned);
+      // Gemini streamGenerateContent 出错时可能返回数组形态 `[{ "error": { ... } }]`
+      const firstItem = Array.isArray(rawParsed) ? rawParsed[0] : rawParsed;
+      const parsed = (
+        typeof firstItem === 'object' && firstItem !== null ? firstItem : {}
+      ) as Record<string, unknown>;
       const err = (
         typeof parsed['error'] === 'object' && parsed['error'] !== null ? parsed['error'] : parsed
       ) as Record<string, unknown>;
       if (typeof err['code'] === 'string') providerCode = err['code'];
-      if (typeof err['message'] === 'string') message = err['message'];
+      else if (typeof err['status'] === 'string') providerCode = err['status'];
+      if (typeof err['message'] === 'string' && err['message'] !== '') message = err['message'];
       else if (typeof err['type'] === 'string') message = `${String(err['type'])}: ${message}`;
     } catch {
       // 错误体不是 JSON：用状态码兜底

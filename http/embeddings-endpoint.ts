@@ -35,6 +35,9 @@ export interface EmbeddingAdaptorOptions {
   /** 动态路由覆盖：目标渠道的上游 base_url 与鉴权头提供器。 */
   baseUrl?: string;
   headersProvider?: () => Promise<Record<string, string>>;
+  /** 目标接入路径与方言（多协议向量分发用）。 */
+  accessPath?: string;
+  dialect?: string;
 }
 
 /** embedding 模态上游 adaptor 的产物。 */
@@ -185,6 +188,8 @@ export function createEmbeddingsEndpointHandler(
   resolveTarget?: (accessPath: string) => {
     baseUrl?: string;
     headersProvider?: () => Promise<Record<string, string>>;
+    accessPath?: string;
+    dialect?: string;
   },
 ): ModalityEndpointHandler {
   return {

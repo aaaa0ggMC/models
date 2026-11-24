@@ -142,7 +142,7 @@ describe('97-admin-product-brief 关键 UI 契约测试', () => {
   it('§5 #10：错误按原因分类并提供下一步跳转动作', () => {
     const err = classifyErrorCode('key_invalid', '上游返回 401');
     expect(err.category).toBe('凭据无效');
-    expect(err.actionRoute).toBe('credentials');
+    expect(err.actionRoute).toBe('channels');
   });
 
   it('§4.3：状态标签具备三编码（颜色 class + SVG 几何图标 + 文本），环比颜色按指标语义区分', () => {

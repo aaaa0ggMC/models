@@ -93,6 +93,12 @@
             "properties": { "category": { "type": "string" }, "threshold": { "type": "string" } }
           }
         },
+        "native": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
         "parallel_tool_calls": { "type": "boolean" },
         "response_format": { "$ref": "#/$defs/ResponseFormat" },
         "thinking": { "$ref": "#/$defs/ThinkingConfig" }

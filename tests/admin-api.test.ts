@@ -341,56 +341,44 @@ describe('完成标准 1：添加一个 provider', () => {
   });
 });
 
-describe('完成标准 2：录入凭据（掩码）', () => {
-  it('创建后只回掩码，绝无完整 key', async () => {
-    const res = await api('POST', '/admin/api/credentials', {
-      provider: 'deepseek',
-      access_path: 'deepseek.openai-chat',
-      secret: FAKE_UPSTREAM_KEY, // privacy-scan: ignore —— FAKE_UPSTREAM_KEY 是本文件顶部的假 key 常量
-      note: 'e2e 测试用假 key',
+describe('完成标准 2：渠道内嵌密钥（掩码，无独立凭据端点）', () => {
+  it('独立 /admin/api/credentials 与 /admin/api/env-credentials 已移除（404）', async () => {
+    const r1 = await api('GET', '/admin/api/credentials');
+    expect(r1.status).toBe(404);
+    const r2 = await api('GET', '/admin/api/env-credentials');
+    expect(r2.status).toBe(404);
+  });
+
+  it('通过渠道 upsert 录入 api_keys 后只回掩码，绝无完整 key', async () => {
+    const res = await api('POST', '/admin/api/providers', {
+      id: 'deepseek-key-test',
+      label: 'DeepSeek Key Test',
+      dialect: 'openai.chat',
+      base_url: 'https://api.deepseek.com',
+      model_source: { kind: 'static', models: ['deepseek-chat'] },
+      api_keys: [FAKE_UPSTREAM_KEY, '$GEMINI_API_KEY'], // privacy-scan: ignore —— 顶部假 key 常量
     });
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    const cred = res.body.credential!;
-    expect(cred.masked).toBe(maskSecret(FAKE_UPSTREAM_KEY));
-    // **完整 key 不出现在响应里**
     expect(JSON.stringify(res.body)).not.toContain(FAKE_UPSTREAM_KEY);
-    expect(cred.storage?.location).toBe('encrypted');
-    expect(cred.length).toBe(FAKE_UPSTREAM_KEY.length);
+    const prov = res.body.provider as {
+      has_key?: boolean;
+      keys?: Array<{ masked: string; source: string; env_var?: string }>;
+    };
+    expect(prov.has_key).toBe(true);
+    expect(prov.keys?.some((k) => k.masked === maskSecret(FAKE_UPSTREAM_KEY) && k.source === 'stored')).toBe(
+      true,
+    );
+    expect(prov.keys?.some((k) => k.source === 'env' && k.env_var === 'GEMINI_API_KEY')).toBe(true);
   });
 
-  it('列表也只回掩码', async () => {
-    const res = await api('GET', '/admin/api/credentials');
-    expect(res.status).toBe(200);
-    const json = JSON.stringify(res.body);
-    expect(json).not.toContain(FAKE_UPSTREAM_KEY);
-    expect(res.body.items!.length).toBeGreaterThan(0);
-    expect(res.body.items![0]!.masked).toBe(maskSecret(FAKE_UPSTREAM_KEY));
-  });
-
-  it('secret 与 env_ref 互斥', async () => {
-    const res = await api('POST', '/admin/api/credentials', {
-      provider: 'deepseek',
-      access_path: 'deepseek.openai-chat',
-      secret: 'x',
-      env_ref: 'DEEPSEEK_API_KEY',
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it('都没有 → 400', async () => {
-    const res = await api('POST', '/admin/api/credentials', {
-      provider: 'deepseek',
-      access_path: 'deepseek.openai-chat',
-    });
-    expect(res.status).toBe(400);
-  });
-
-  it('DELETE 删掉', async () => {
-    const list = await api('GET', '/admin/api/credentials');
-    const id = String(list.body.items![0]!['id'] ?? '');
-    const del = await api('DELETE', `/admin/api/credentials/${id}`);
+  it('渠道列表也只回掩码，删除渠道同时清理密钥', async () => {
+    const list = await api('GET', '/admin/api/providers');
+    expect(list.status).toBe(200);
+    expect(JSON.stringify(list.body)).not.toContain(FAKE_UPSTREAM_KEY);
+    const del = await api('DELETE', '/admin/api/providers/deepseek-key-test');
     expect(del.body.deleted).toBe(true);
+    expect((del.body.deleted_credentials as string[] | undefined)?.length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -1024,19 +1012,26 @@ describe('access-paths（UI 下拉数据源）', () => {
   });
 });
 
-describe('env-credentials（哪些接入路径上有 env key；只回布尔事实）', () => {
-  it('env 里配了 key 的路径出现，且只有 access_path + count 两个字段', async () => {
-    // 这个测试网关注入了 DEEPSEEK_API_KEY（见 beforeAll 的 credentialResolver）
-    const res = await api('GET', '/admin/api/env-credentials');
+describe('渠道环境变量密钥汇总（直接挂在 provider.has_key / keys 上）', () => {
+  it('env 里配了 DEEPSEEK_API_KEY 时，deepseek 渠道自动体现 has_key=true 且不泄露值', async () => {
+    await api('POST', '/admin/api/providers', {
+      id: 'deepseek',
+      label: 'DeepSeek',
+      dialect: 'openai.chat',
+      base_url: 'https://api.deepseek.com',
+      model_source: { kind: 'static', models: ['deepseek-chat'] },
+    });
+    const res = await api('GET', '/admin/api/providers');
     expect(res.status).toBe(200);
-    const items = (res.body.items ?? []) as Array<Record<string, unknown>>;
-    const chat = items.find((p) => p['access_path'] === 'deepseek.openai-chat');
-    expect(chat).toBeDefined();
-    expect(chat!['count']).toBeGreaterThan(0);
-    // 不回变量名、更不回值（那分别是部署环境的事实与密钥材料）
-    for (const item of items) {
-      expect(Object.keys(item).sort()).toEqual(['access_path', 'count']);
-    }
+    const items = (res.body.items ?? []) as Array<{
+      id: string;
+      has_key?: boolean;
+      keys?: Array<{ source: string }>;
+    }>;
+    const ds = items.find((p) => p.id === 'deepseek');
+    expect(ds?.has_key).toBe(true);
+    expect(ds?.keys?.some((k) => k.source === 'env')).toBe(true);
+    await api('DELETE', '/admin/api/providers/deepseek');
   });
 });
 

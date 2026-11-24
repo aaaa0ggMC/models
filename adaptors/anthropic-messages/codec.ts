@@ -76,6 +76,11 @@ import type { Adaptor, AdaptorMeta, EncodedRequest, RequestEnvelopeShallow } fro
 import type { Logger } from '../../di/ports.js';
 import type { ProviderProfile, ProviderProfileRegistry } from '../../di/ports.js';
 import type { CapabilityEntry, ModelConstraints } from '../../ir/index.js';
+import {
+  applyClientProviderOptions,
+  applyNativeVendorOptions,
+  filterUnmappedForPassthrough,
+} from '../provider-options.js';
 
 // ---------------------------------------------------------------------------
 // 常量：协议版本、端点、映射表
@@ -402,7 +407,12 @@ function extraKeys(
 }
 
 /** 把节点级 `_raw` 合并回 wire block（`_raw` 在前、建模字段在后，建模字段永远赢）。 */
-function applyRaw(wire: Record<string, unknown>, raw: unknown): Record<string, unknown> {
+function applyRaw(
+  wire: Record<string, unknown>,
+  raw: unknown,
+  sameFormat = true,
+): Record<string, unknown> {
+  if (!sameFormat) return wire;
   const r = asRecord(raw);
   return r === undefined ? wire : { ...r, ...wire };
 }
@@ -907,6 +917,8 @@ export class AnthropicMessagesCodec implements Adaptor {
     const thinking = this.decodeThinking(body['thinking']);
     if (thinking !== undefined) params.thinking = thinking;
 
+    applyClientProviderOptions(body, params);
+
     return Object.keys(params).length > 0 ? params : undefined;
   }
 
@@ -966,12 +978,14 @@ export class AnthropicMessagesCodec implements Adaptor {
       model: req.resolved_model ?? req.model,
     };
 
+    const sameFormat = req.source_format === undefined || req.source_format === this.format;
+
     const params = payload.params;
     if (params?.max_output_tokens !== undefined) {
       body['max_tokens'] = params.max_output_tokens;
     }
 
-    const system = this.encodeSystem(payload.system);
+    const system = this.encodeSystem(payload.system, sameFormat);
     if (system !== undefined) body['system'] = system;
 
     const diagnostics: ConversionDiagnostic[] = [];
@@ -994,9 +1008,9 @@ export class AnthropicMessagesCodec implements Adaptor {
 
     body['messages'] = payload.messages
       .filter((m) => !(systemHandling.merged && m.role === 'system'))
-      .map((m) => this.encodeMessage(m, systemHandling.allowSystemRole));
+      .map((m) => this.encodeMessage(m, systemHandling.allowSystemRole, sameFormat));
 
-    const tools = this.encodeTools(payload.tools, this.profileFor(ctx));
+    const tools = this.encodeTools(payload.tools, this.profileFor(ctx), sameFormat);
     if (tools !== undefined) body['tools'] = tools;
 
     this.enforceToolUpdateConstraint(
@@ -1031,7 +1045,26 @@ export class AnthropicMessagesCodec implements Adaptor {
       );
     }
 
+    // 跨格式（如 OpenAI Chat/Responses → Anthropic Messages）未传 max_output_tokens 时，
+    // 为 Anthropic 必填的 max_tokens 补齐安全默认值，避免上游 422 Field required。
+    if (!sameFormat && body['max_tokens'] === undefined) {
+      body['max_tokens'] = 8192;
+    }
+
     if (req.stream?.enabled === true) body['stream'] = true;
+
+    applyNativeVendorOptions({
+      native: params?.native,
+      acceptedVendors: ['anthropic'],
+      body,
+      protectedKeys: new Set(['model', 'messages', 'system']),
+      mergeObjectKeys: new Set(['thinking', 'metadata', 'output_config']),
+      sourceFormat: req.source_format,
+      targetFormat: this.format,
+      dropped,
+      warnings,
+      diagnostics,
+    });
 
     // 反向 passthrough（10 §7.2 回写规则第 3 条）：raw.unmapped 里来自 anthropic 的键原样写回。
     const unmapped = this.encodeUnmapped(req.raw);
@@ -1061,13 +1094,14 @@ export class AnthropicMessagesCodec implements Adaptor {
 
   private encodeSystem(
     system: SystemBlock[] | undefined,
+    sameFormat = true,
   ): Array<Record<string, unknown>> | undefined {
     if (system === undefined || system.length === 0) return undefined;
     return system.map((block) => {
       const wire: Record<string, unknown> = { type: 'text', text: block.text };
       const cc = this.encodeCacheControl(block.cache_control);
       if (cc !== undefined) wire['cache_control'] = cc;
-      return applyRaw(wire, block._raw);
+      return applyRaw(wire, block._raw, sameFormat);
     });
   }
 
@@ -1212,10 +1246,11 @@ export class AnthropicMessagesCodec implements Adaptor {
   private encodeMessage(
     message: CanonicalMessage,
     allowSystemRole = false,
+    sameFormat = true,
   ): Record<string, unknown> {
     const parts: Array<Record<string, unknown>> = [];
     for (const part of moveToolUseBlocksToEnd(message.parts)) {
-      const wire = this.encodePart(part);
+      const wire = this.encodePart(part, sameFormat);
       if (wire === undefined) {
         // 10 §9.1：audio / video / asset 媒体在 Anthropic 无对应 → drop + 告警，不静默。
         this.logger?.warn('anthropic.messages encode: part 无法映射到 Anthropic block，已丢弃', {
@@ -1231,7 +1266,7 @@ export class AnthropicMessagesCodec implements Adaptor {
     };
     const id = message.id;
     if (id !== undefined) wire['id'] = id;
-    return applyRaw(wire, message._raw);
+    return applyRaw(wire, message._raw, sameFormat);
   }
 
   /**
@@ -1258,25 +1293,25 @@ export class AnthropicMessagesCodec implements Adaptor {
    * 返回 `undefined` 表示"这个 part 在 Anthropic 上没有对应形态"——由调用方丢弃并告警，
    * **不**偷偷换成一个空 text block（那会让上游以为模型说了空话）。
    */
-  private encodePart(part: Part): Record<string, unknown> | undefined {
+  private encodePart(part: Part, sameFormat = true): Record<string, unknown> | undefined {
     switch (part.type) {
       case 'text': {
         const wire: Record<string, unknown> = { type: 'text', text: part.text };
         const cc = this.encodeCacheControl(part.cache_control);
         if (cc !== undefined) wire['cache_control'] = cc;
-        return applyRaw(wire, part._raw);
+        return applyRaw(wire, part._raw, sameFormat);
       }
       case 'image': {
         const source = this.encodeMedia(part.source);
         if (source === undefined) return undefined;
-        return applyRaw({ type: 'image', source }, part._raw);
+        return applyRaw({ type: 'image', source }, part._raw, sameFormat);
       }
       case 'document': {
         const source = this.encodeMedia(part.source);
         if (source === undefined) return undefined;
         const wire: Record<string, unknown> = { type: 'document', source };
         if (part.title !== undefined) wire['title'] = part.title;
-        return applyRaw(wire, part._raw);
+        return applyRaw(wire, part._raw, sameFormat);
       }
       case 'tool_use': {
         // 10 §7.3：回写时**优先用 raw_arguments**，不要 JSON.stringify(input)——
@@ -1285,7 +1320,7 @@ export class AnthropicMessagesCodec implements Adaptor {
           part.raw_arguments !== undefined
             ? (tryParseJson(part.raw_arguments) ?? part.raw_arguments)
             : part.input;
-        return applyRaw({ type: 'tool_use', id: part.id, name: part.name, input }, part._raw);
+        return applyRaw({ type: 'tool_use', id: part.id, name: part.name, input }, part._raw, sameFormat);
       }
       case 'tool_result': {
         const wire: Record<string, unknown> = {
@@ -1295,19 +1330,19 @@ export class AnthropicMessagesCodec implements Adaptor {
             typeof part.content === 'string'
               ? part.content
               : part.content
-                  .map((inner) => this.encodePart(inner))
+                  .map((inner) => this.encodePart(inner, sameFormat))
                   .filter((block): block is Record<string, unknown> => block !== undefined),
         };
         if (part.is_error !== undefined) wire['is_error'] = part.is_error;
-        return applyRaw(wire, part._raw);
+        return applyRaw(wire, part._raw, sameFormat);
       }
       case 'thinking': {
         const wire: Record<string, unknown> = { type: 'thinking', thinking: part.thinking };
         if (part.signature !== undefined) wire['signature'] = part.signature;
-        return applyRaw(wire, part._raw);
+        return applyRaw(wire, part._raw, sameFormat);
       }
       case 'redacted_thinking':
-        return applyRaw({ type: 'redacted_thinking', data: part.data }, part._raw);
+        return applyRaw({ type: 'redacted_thinking', data: part.data }, part._raw, sameFormat);
       case 'search_result': {
         const wire: Record<string, unknown> = {
           type: 'search_result',
@@ -1320,7 +1355,7 @@ export class AnthropicMessagesCodec implements Adaptor {
         if (part.citation_index !== undefined) wire['citation_index'] = part.citation_index;
         if (part.score !== undefined) wire['score'] = part.score;
         if (part.published_at !== undefined) wire['published_at'] = part.published_at;
-        return applyRaw(wire, part._raw);
+        return applyRaw(wire, part._raw, sameFormat);
       }
       case 'refusal':
         // Anthropic 没有 refusal block；拒答在响应侧是 stop_reason:"refusal"。
@@ -1366,12 +1401,13 @@ export class AnthropicMessagesCodec implements Adaptor {
   private encodeTools(
     tools: CanonicalTool[] | undefined,
     profile: ProviderProfile | undefined,
+    sameFormat = true,
   ): Array<Record<string, unknown>> | undefined {
     if (tools === undefined || tools.length === 0) return undefined;
     const out: Array<Record<string, unknown>> = [];
     for (const tool of tools) {
       if (tool.type === 'builtin') {
-        out.push(this.encodeBuiltinTool(tool, profile));
+        out.push(this.encodeBuiltinTool(tool, profile, sameFormat));
         continue;
       }
       const wire: Record<string, unknown> = {
@@ -1383,7 +1419,7 @@ export class AnthropicMessagesCodec implements Adaptor {
       const cc = this.encodeCacheControl(tool.cache_control);
       if (cc !== undefined) wire['cache_control'] = cc;
       // FunctionTool.strict 是 OpenAI 专有（10 §9.1 "无对应"），丢弃。
-      out.push(applyRaw(wire, tool._raw));
+      out.push(applyRaw(wire, tool._raw, sameFormat));
     }
     return out;
   }
@@ -1407,6 +1443,7 @@ export class AnthropicMessagesCodec implements Adaptor {
   private encodeBuiltinTool(
     tool: BuiltinTool,
     profile: ProviderProfile | undefined,
+    sameFormat = true,
   ): Record<string, unknown> {
     const wire = profile?.builtinToolWire?.(tool.name, this.format);
     const providerToolType =
@@ -1428,7 +1465,7 @@ export class AnthropicMessagesCodec implements Adaptor {
       name: wire?.name ?? tool.name,
       ...(acceptsConfig ? tool.config : {}),
     };
-    return applyRaw(out, tool._raw);
+    return applyRaw(out, tool._raw, sameFormat);
   }
 
   private encodeToolChoice(choice: ToolChoice | undefined): Record<string, unknown> | undefined {
@@ -1633,8 +1670,7 @@ export class AnthropicMessagesCodec implements Adaptor {
   private encodeUnmapped(raw: CanonicalRequestEnvelope['raw']): Record<string, unknown> {
     const sourceProvider = raw.source_provider;
     if (sourceProvider !== undefined && sourceProvider !== 'anthropic') return {};
-    const unmapped = asRecord(raw.unmapped);
-    if (unmapped === undefined) return {};
+    const unmapped = filterUnmappedForPassthrough(asRecord(raw.unmapped));
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(unmapped)) {
       out[k] = v;

@@ -82,6 +82,14 @@ export interface ChannelPricingConfig {
   models?: Record<string, ChannelModelRateOverride>;
 }
 
+export interface MaskedProviderKey {
+  id: string;
+  masked: string;
+  source: 'stored' | 'env' | 'oauth';
+  env_var?: string;
+  enabled: boolean;
+}
+
 export interface ProviderConfig {
   id: string;
   label: string;
@@ -111,6 +119,8 @@ export interface ProviderConfig {
   };
   credential_health?: 'unknown' | 'ok' | 'error';
   credential_last_checked?: number;
+  keys?: MaskedProviderKey[];
+  has_key?: boolean;
   created_at: number;
   updated_at: number;
   note?: string;
@@ -128,6 +138,7 @@ export interface ProviderUpsertRequest {
   capability_overrides?: ProviderConfig['capability_overrides'];
   enabled?: boolean;
   note?: string;
+  api_keys?: string[];
 }
 
 export type ProviderModelsErrorCode =
@@ -306,6 +317,11 @@ export interface CapabilityMatrixEntry {
   internal?: boolean;
   availability?: 'unconfigured';
   exposed?: boolean;
+  pricing?: {
+    currency: string;
+    tier?: string;
+    rates: Record<string, number>;
+  };
 }
 
 export interface AccessPathDto {

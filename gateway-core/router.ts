@@ -385,7 +385,32 @@ export class StaticRouter implements Router {
       };
     }
 
-    const chosen = attempts[0]!;
+    // 若选中的 access_path 没有可用凭据，优先切到同模型、同 provider 下确实有凭据的接入端点
+    // （例如删掉 deepseek.anthropic-messages 凭据后，自动回落到已绑定的 deepseek.openai-chat）。
+    let chosen =
+      attempts.find((a) => this.credentialResolver.credentialsFor(a.access_path).length > 0) ??
+      attempts[0]!;
+    if (this.credentialResolver.credentialsFor(chosen.access_path).length === 0) {
+      const modality = chosen.target_modality ?? req.modality;
+      const alt = this.capabilityRegistry
+        .list()
+        .find(
+          (e) =>
+            e.modality === modality &&
+            e.model === chosen.model &&
+            e.access_path !== chosen.access_path &&
+            (e.access_path === chosen.provider ||
+              e.access_path.startsWith(`${chosen.provider}.`)) &&
+            this.credentialResolver.credentialsFor(e.access_path).length > 0,
+        );
+      if (alt !== undefined) {
+        chosen = {
+          ...chosen,
+          access_path: alt.access_path,
+          provider_format: this.credentialResolver.formatFor(alt.access_path),
+        };
+      }
+    }
     const capability = this.capabilityRegistry.find(
       chosen.access_path,
       chosen.model,
@@ -438,6 +463,25 @@ export class StaticRouter implements Router {
       capability.streaming?.mode !== 'none' &&
       this.credentialResolver.formatFor(chosen.access_path) === ctx.client_format;
 
+    let orderedAttempts: Attempt[] = attempts;
+    if (
+      chosen.access_path !== attempts[0]!.access_path ||
+      chosen.model !== attempts[0]!.model ||
+      chosen.provider !== attempts[0]!.provider
+    ) {
+      orderedAttempts = [
+        chosen,
+        ...attempts.filter(
+          (a) =>
+            !(
+              a.provider === chosen.provider &&
+              a.access_path === chosen.access_path &&
+              a.model === chosen.model
+            ),
+        ),
+      ];
+    }
+
     const route: ResolvedRoute = {
       access_path: chosen.access_path,
       provider: chosen.provider,
@@ -446,7 +490,7 @@ export class StaticRouter implements Router {
       model: chosen.model,
       full_model_id: `${chosen.access_path}/${chosen.model}`,
       ...(chosen.target_modality === undefined ? {} : { target_modality: chosen.target_modality }),
-      attempt_plan: attempts.map((a) => ({
+      attempt_plan: orderedAttempts.map((a) => ({
         ...a,
         fast_path_eligible: a.fast_path_eligible || fastPathEligible,
       })),

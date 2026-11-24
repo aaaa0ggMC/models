@@ -20,7 +20,7 @@ import type {
   PipelineState,
   Stage,
 } from '../types.js';
-import { createCanonicalError } from '../../../ir/index.js';
+import { createCanonicalError, CTX_STATE_KEYS } from '../../../ir/index.js';
 import { MutableRequestContext } from '../../context.js';
 
 /** 显式格式头。 */
@@ -30,8 +30,11 @@ const PATH_SIGNATURES: Array<{ pattern: RegExp; format: FormatId }> = [
   { pattern: /^\/v1\/chat\/completions$/, format: 'openai.chat' },
   { pattern: /^\/v1\/responses$/, format: 'openai.responses' },
   { pattern: /^\/v1\/messages$/, format: 'anthropic.messages' },
-  { pattern: /^\/v1beta\/models\/[^:]+:generateContent$/, format: 'gemini.generateContent' },
-  { pattern: /^\/v1beta\/models\/[^:]+:streamGenerateContent$/, format: 'gemini.generateContent' },
+  { pattern: /^\/v1(?:beta)?\/models\/[^:]+:generateContent$/, format: 'gemini.generateContent' },
+  {
+    pattern: /^\/v1(?:beta)?\/models\/[^:]+:streamGenerateContent$/,
+    format: 'gemini.generateContent',
+  },
 ];
 
 /**
@@ -264,6 +267,7 @@ export class S0Ingress implements Stage {
     ctx.client_format = format;
     ctx.provider_format = format;
     ctx.request_bytes = input.raw_body.byteLength;
+    ctx.state[CTX_STATE_KEYS.REQUEST_PATH] = input.path;
     state.modality = 'chat'; // Phase 1 只做 chat；多模态端点识别随 adaptor 增加
 
     // 2) 鉴权（失败直接返回，不进 S1）
@@ -375,7 +379,7 @@ export function extractRequestModel(
   rawBody: Buffer,
 ): string | undefined {
   if (format === 'gemini.generateContent') {
-    const match = /^\/v1beta\/models\/([^:]+):/.exec(path);
+    const match = /^\/v1(?:beta)?\/models\/([^:]+):/.exec(path);
     return match?.[1];
   }
   if (rawBody.byteLength === 0) return undefined;

@@ -1381,6 +1381,51 @@ describe('Anthropic 专项：fast path 与完整性', () => {
     const out = codec.encode(c, ctx).body as Record<string, unknown>;
     expect(out['tool_choice']).toEqual({ type: 'any' });
   });
+
+  it('跨格式（openai.responses → anthropic.messages）不回写来源 _raw（strict/parameters/type:function）且补齐 max_tokens', () => {
+    const ctx = ctxWithRoute(makeCtx());
+    const envelope: CanonicalRequestEnvelope = {
+      ir_version: 'ag-ir/1',
+      kind: 'chat',
+      model: 'deepseek-flash',
+      source_format: 'openai.responses',
+      raw: { unmapped: {}, nodes: {}, source_provider: 'openai' },
+      payload: {
+        messages: [
+          {
+            role: 'user',
+            parts: [{ type: 'text', text: 'hi' }],
+            _raw: { role: 'user', content: 'hi' },
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            name: 'get_time_info',
+            parameters: { type: 'object', properties: {} },
+            strict: false,
+            _raw: {
+              type: 'function',
+              name: 'get_time_info',
+              parameters: { type: 'object', properties: {} },
+              strict: false,
+            },
+          },
+        ],
+      },
+    };
+    const out = codec.encode(envelope, ctx).body as Record<string, unknown>;
+    expect(out['max_tokens']).toBe(8192);
+    const tools = out['tools'] as Array<Record<string, unknown>>;
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toEqual({
+      name: 'get_time_info',
+      input_schema: { type: 'object', properties: {} },
+    });
+    expect(tools[0]).not.toHaveProperty('type');
+    expect(tools[0]).not.toHaveProperty('parameters');
+    expect(tools[0]).not.toHaveProperty('strict');
+  });
 });
 
 /** 把数组包成 AsyncIterable（codec 的流式入参就是 AsyncIterable<unknown>）。 */

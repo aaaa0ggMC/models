@@ -34,8 +34,6 @@ export function SettingsPage(): React.JSX.Element {
   const [items, setItems] = useState<SettingDto[]>([]);
   const [configFilePath, setConfigFilePath] = useState<string | undefined>(undefined);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
-  const [credentials, setCredentials] = useState<MaskedCredential[]>([]);
-  const [envCredentials, setEnvCredentials] = useState<EnvCredentialPathDto[]>([]);
   const [accessPaths, setAccessPaths] = useState<AccessPathDto[]>([]);
   const [capabilities, setCapabilities] = useState<CapabilityMatrixEntry[]>([]);
 
@@ -49,19 +47,15 @@ export function SettingsPage(): React.JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      const [sRes, pRes, cRes, eRes, apRes, capRes] = await Promise.all([
+      const [sRes, pRes, apRes, capRes] = await Promise.all([
         adminApi.listSettings(),
         adminApi.listProviders(),
-        adminApi.listCredentials(),
-        adminApi.listEnvCredentials().catch(() => ({ items: [] as EnvCredentialPathDto[] })),
         adminApi.listAccessPaths().catch(() => ({ items: [] as AccessPathDto[] })),
         adminApi.listCapabilities(),
       ]);
       setItems(sRes.items);
       setConfigFilePath(sRes.config_file_path);
       setProviders(pRes.items);
-      setCredentials(cRes.items);
-      setEnvCredentials(eRes.items);
       setAccessPaths(apRes.items);
       setCapabilities(capRes.items);
       setDrafts({});
@@ -84,13 +78,11 @@ export function SettingsPage(): React.JSX.Element {
     () =>
       computeModelAvailability({
         providers,
-        credentials,
-        envCredentials,
         accessPaths,
         capabilities,
         modalityFilter: 'chat',
       }),
-    [providers, credentials, envCredentials, accessPaths, capabilities],
+    [providers, accessPaths, capabilities],
   );
 
   async function handleSave(id: string, value: SettingValue) {
@@ -198,7 +190,7 @@ export function SettingsPage(): React.JSX.Element {
                 <button
                   type="button"
                   className="ag-btn ag-btn-sm ag-btn-primary"
-                  onClick={() => navigate('credentials')}
+                  onClick={() => navigate('channels')}
                 >
                   去录凭据
                 </button>

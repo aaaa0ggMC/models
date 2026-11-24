@@ -1297,7 +1297,12 @@ function inferFormatFromAccessPath(accessPath: string): FormatId {
   if (accessPath.endsWith('.openai-responses') || accessPath === 'openai.responses') {
     return 'openai.responses';
   }
-  if (accessPath.endsWith('.gemini-generateContent') || accessPath === 'gemini') {
+  if (
+    accessPath === 'gemini.generateContent' ||
+    accessPath.endsWith('.gemini-generateContent') ||
+    accessPath.endsWith('.gemini.generateContent') ||
+    accessPath === 'gemini'
+  ) {
     return 'gemini.generateContent';
   }
   return 'openai.chat';

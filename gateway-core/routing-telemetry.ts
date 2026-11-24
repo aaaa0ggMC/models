@@ -452,9 +452,45 @@ export class DefaultRoutingTelemetryHub implements RoutingTelemetryHub {
     overrides?: Partial<ProviderTelemetrySnapshot>,
   ): ProviderTelemetrySnapshot {
     const now = this.deps.clock.now();
-    const windowAgg = this.computeWindow(provider, now, FIVE_HOURS_MS);
-    const weeklyAgg = this.computeWindow(provider, now, SEVEN_DAYS_MS);
-    const monthlyAgg = this.computeWindow(provider, now, THIRTY_DAYS_MS);
+    const windows = this.computeWindowsForProviders([provider], now).get(provider) ?? {
+      h5: { requests: 0, tokens: 0, cash_usd: 0 },
+      weekly: { requests: 0, tokens: 0, cash_usd: 0 },
+      monthly: { requests: 0, tokens: 0, cash_usd: 0 },
+    };
+    return this.buildSnapshot(provider, now, windows, overrides);
+  }
+
+  allSnapshots(
+    providers: readonly string[],
+    overrides?: Record<string, Partial<ProviderTelemetrySnapshot>>,
+  ): Record<string, ProviderTelemetrySnapshot> {
+    const now = this.deps.clock.now();
+    const windowsByProvider = this.computeWindowsForProviders(providers, now);
+    const out: Record<string, ProviderTelemetrySnapshot> = {};
+    for (const p of providers) {
+      const windows = windowsByProvider.get(p) ?? {
+        h5: { requests: 0, tokens: 0, cash_usd: 0 },
+        weekly: { requests: 0, tokens: 0, cash_usd: 0 },
+        monthly: { requests: 0, tokens: 0, cash_usd: 0 },
+      };
+      out[p] = this.buildSnapshot(p, now, windows, overrides?.[p]);
+    }
+    return out;
+  }
+
+  private buildSnapshot(
+    provider: string,
+    now: number,
+    windows: {
+      h5: { requests: number; tokens: number; cash_usd: number };
+      weekly: { requests: number; tokens: number; cash_usd: number };
+      monthly: { requests: number; tokens: number; cash_usd: number };
+    },
+    overrides?: Partial<ProviderTelemetrySnapshot>,
+  ): ProviderTelemetrySnapshot {
+    const windowAgg = windows.h5;
+    const weeklyAgg = windows.weekly;
+    const monthlyAgg = windows.monthly;
     const bal = this.balances.get(provider);
     const cred = this.credits.get(provider);
     const quota = this.quotas.get(provider);
@@ -555,56 +591,91 @@ export class DefaultRoutingTelemetryHub implements RoutingTelemetryHub {
     };
   }
 
-  allSnapshots(
+  private computeWindowsForProviders(
     providers: readonly string[],
-    overrides?: Record<string, Partial<ProviderTelemetrySnapshot>>,
-  ): Record<string, ProviderTelemetrySnapshot> {
-    const out: Record<string, ProviderTelemetrySnapshot> = {};
-    for (const p of providers) {
-      out[p] = this.snapshotFor(p, overrides?.[p]);
-    }
-    return out;
-  }
-
-  private computeWindow(
-    provider: string,
     now: number,
-    windowMs: number,
-  ): { requests: number; tokens: number; cash_usd: number } {
-    const from = now - windowMs;
-    const seenIds = new Set<string>();
-    let requests = 0;
-    let tokens = 0;
-    let cash_usd = 0;
+  ): Map<
+    string,
+    {
+      h5: { requests: number; tokens: number; cash_usd: number };
+      weekly: { requests: number; tokens: number; cash_usd: number };
+      monthly: { requests: number; tokens: number; cash_usd: number };
+    }
+  > {
+    const providerSet = new Set(providers);
+    const out = new Map<
+      string,
+      {
+        h5: { requests: number; tokens: number; cash_usd: number };
+        weekly: { requests: number; tokens: number; cash_usd: number };
+        monthly: { requests: number; tokens: number; cash_usd: number };
+      }
+    >();
+    const seenByProvider = new Map<string, Set<string>>();
+    for (const p of providers) {
+      out.set(p, {
+        h5: { requests: 0, tokens: 0, cash_usd: 0 },
+        weekly: { requests: 0, tokens: 0, cash_usd: 0 },
+        monthly: { requests: 0, tokens: 0, cash_usd: 0 },
+      });
+      seenByProvider.set(p, new Set<string>());
+    }
+
+    const from5h = now - FIVE_HOURS_MS;
+    const from7d = now - SEVEN_DAYS_MS;
+    const from30d = now - THIRTY_DAYS_MS;
+
+    const addSample = (provider: string, ts: number, tokens: number, cashUsd: number) => {
+      const entry = out.get(provider);
+      if (entry === undefined) return;
+      if (ts >= from30d && ts <= now) {
+        entry.monthly.requests += 1;
+        entry.monthly.tokens += tokens;
+        entry.monthly.cash_usd += cashUsd;
+      }
+      if (ts >= from7d && ts <= now) {
+        entry.weekly.requests += 1;
+        entry.weekly.tokens += tokens;
+        entry.weekly.cash_usd += cashUsd;
+      }
+      if (ts >= from5h && ts <= now) {
+        entry.h5.requests += 1;
+        entry.h5.tokens += tokens;
+        entry.h5.cash_usd += cashUsd;
+      }
+    };
 
     if (this.deps.usageReader !== undefined) {
-      const records = this.deps.usageReader.list(from, now + 1);
+      const records = this.deps.usageReader.list(from30d, now + 1);
       for (const r of records) {
-        if (r.provider !== provider) continue;
-        if (r.request_id) seenIds.add(r.request_id);
-        requests += 1;
-        tokens +=
+        if (!providerSet.has(r.provider)) continue;
+        if (r.request_id) seenByProvider.get(r.provider)?.add(r.request_id);
+        const tokens =
           (r.usage.units.tokens?.input_tokens ?? 0) +
           (r.usage.units.tokens?.output_tokens ?? 0);
-        cash_usd += toUsdAmount(r.cost.cash.total, r.cost.currency ?? 'USD');
+        const cashUsd = toUsdAmount(r.cost.cash.total, r.cost.currency ?? 'USD');
+        addSample(r.provider, r.ts, tokens, cashUsd);
       }
     }
 
     for (const ev of this.liveEvents) {
-      if (ev.ts < from || ev.ts > now) continue;
-      if (ev.provider !== provider) continue;
-      if (seenIds.has(ev.request_id)) continue;
-      seenIds.add(ev.request_id);
-      requests += 1;
-      tokens += ev.tokens;
-      cash_usd += ev.cash_usd;
+      if (ev.ts < from30d || ev.ts > now) continue;
+      if (!providerSet.has(ev.provider)) continue;
+      const seen = seenByProvider.get(ev.provider);
+      if (seen !== undefined) {
+        if (seen.has(ev.request_id)) continue;
+        seen.add(ev.request_id);
+      }
+      addSample(ev.provider, ev.ts, ev.tokens, ev.cash_usd);
     }
 
-    return {
-      requests,
-      tokens,
-      cash_usd: Math.round(cash_usd * 1_000_000) / 1_000_000,
-    };
+    for (const entry of out.values()) {
+      entry.h5.cash_usd = Math.round(entry.h5.cash_usd * 1_000_000) / 1_000_000;
+      entry.weekly.cash_usd = Math.round(entry.weekly.cash_usd * 1_000_000) / 1_000_000;
+      entry.monthly.cash_usd = Math.round(entry.monthly.cash_usd * 1_000_000) / 1_000_000;
+    }
+
+    return out;
   }
 }
 

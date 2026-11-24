@@ -18,6 +18,7 @@
  */
 
 import type { EncryptedRecordStore, MaskedSecret } from '../storage/record-store.js';
+import type { PricingService } from '../metering/pricing.js';
 import { describeSecret } from '../storage/record-store.js';
 import type { CapabilityRegistry } from '../credentials/capability-registry.js';
 import type { CapabilityEntry, CanonicalRequestEnvelope, ChatPayload } from '../ir/index.js';
@@ -53,6 +54,7 @@ import type {
   AuditLogEntry,
   AuthModeResponse,
   MaskedCredential,
+  MaskedProviderKey,
   PluginInfoDto,
   PluginsListResponse,
   PluginUpdateRequest,
@@ -124,6 +126,11 @@ export type CapabilityMatrixItem = Omit<
   exposed?: boolean;
   namespace?: string;
   namespaced_id?: string;
+  pricing?: {
+    currency: string;
+    tier?: string;
+    rates: Record<string, number>;
+  };
 };
 
 /** 余额探测端口。 */
@@ -291,9 +298,11 @@ export interface AdminServiceDeps {
   /** 路由遥测聚合中心（5h 限额 / 余额 / 积分 / 闲时状态）。 */
   routingTelemetry?: RoutingTelemetryHub;
   /** 触发一次各上游余额/积分的实时拉取并刷新遥测缓存。 */
-  telemetryRefresher?: () => Promise<void>;
+  telemetryRefresher?: (provider?: string) => Promise<void>;
   /** 插件宿主（供控制面插件中心 Dogfooding：查看状态、启停、配置、日志）。 */
   pluginHost?: PluginHost;
+  /** 定价服务（供模型目录展示参考单价）。 */
+  pricingService?: PricingService;
 }
 
 // ---------------------------------------------------------------------------
@@ -473,14 +482,69 @@ export class AdminService {
 
   async listProviders(): Promise<ProviderConfig[]> {
     const all = await this.deps.store.listDecrypted<ProviderConfig>(PROVIDER_KIND);
+    const allCreds = await this.listCredentials();
+    const envPaths = this.listEnvCredentialPaths();
     return all
-      .map((r) => hydrateProviderModelMetadata(r.value))
+      .map((r) => this.attachProviderKeys(hydrateProviderModelMetadata(r.value), allCreds, envPaths))
       .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   async getProvider(id: string): Promise<ProviderConfig | undefined> {
     const p = await this.deps.store.get<ProviderConfig>(PROVIDER_KIND, id);
-    return p === undefined ? undefined : hydrateProviderModelMetadata(p);
+    if (p === undefined) return undefined;
+    const allCreds = await this.listCredentials();
+    const envPaths = this.listEnvCredentialPaths();
+    return this.attachProviderKeys(hydrateProviderModelMetadata(p), allCreds, envPaths);
+  }
+
+  private attachProviderKeys(
+    provider: ProviderConfig,
+    allCreds: readonly MaskedCredential[],
+    envPaths: readonly { access_path: string; count: number }[],
+  ): ProviderConfig {
+    const derived = accessPathIdForDialect(provider.id, provider.dialect);
+    const keys: MaskedProviderKey[] = [];
+    for (const c of allCreds) {
+      if (c.provider !== provider.id && c.access_path !== derived) continue;
+      const isOauth = c.note?.toLowerCase().includes('oauth') === true || c.id.includes('oauth');
+      if (c.storage.location === 'env') {
+        const envVar = c.storage.ref.replace(/^env:/, '');
+        keys.push({
+          id: c.id,
+          masked: `$${envVar}`,
+          source: 'env',
+          env_var: envVar,
+          enabled: c.enabled,
+        });
+      } else {
+        keys.push({
+          id: c.id,
+          masked: isOauth ? 'OAuth' : c.masked,
+          source: isOauth ? 'oauth' : 'stored',
+          enabled: c.enabled,
+        });
+      }
+    }
+    const envHit = envPaths.find(
+      (e) =>
+        e.count > 0 &&
+        (e.access_path === derived ||
+          e.access_path === provider.id ||
+          e.access_path.startsWith(`${provider.id}.`)),
+    );
+    if (envHit !== undefined && !keys.some((k) => k.source === 'env')) {
+      keys.push({
+        id: `env:${envHit.access_path}`,
+        masked: `环境变量 (${envHit.count})`,
+        source: 'env',
+        enabled: true,
+      });
+    }
+    return {
+      ...provider,
+      keys,
+      has_key: keys.some((k) => k.enabled),
+    };
   }
 
   /**
@@ -500,9 +564,10 @@ export class AdminService {
    */
   async upsertProvider(
     actor: string,
-    input: Omit<ProviderConfig, 'created_at' | 'updated_at' | 'enabled'> & {
+    input: Omit<ProviderConfig, 'created_at' | 'updated_at' | 'enabled' | 'keys' | 'has_key'> & {
       id: string;
       enabled?: boolean;
+      api_keys?: string[];
     },
   ): Promise<{ ok: true; provider: ProviderConfig } | { ok: false; error: string }> {
     if (input.id.length === 0) return { ok: false, error: 'provider id 不能为空' };
@@ -547,8 +612,9 @@ export class AdminService {
     }
 
     const now = this.deps.clock.now();
+    const { api_keys: apiKeys, ...restInput } = input;
     const provider: ProviderConfig = {
-      ...input,
+      ...restInput,
       namespace,
       builtin_tools: normalizeBuiltinToolDefaults(input.builtin_tools),
       // 未显式给 enabled 时：新建默认开，改建沿用旧值（不能被一次 PATCH 静默关掉）
@@ -558,6 +624,51 @@ export class AdminService {
     };
     await this.deps.store.put(PROVIDER_KIND, input.id, provider);
 
+    // 若调用方传入了 api_keys，则替换该渠道名下的 API Key / 环境变量凭据（保留 OAuth 订阅凭据）
+    if (apiKeys !== undefined) {
+      const accessPath = accessPathIdForDialect(input.id, input.dialect);
+      const parsedEntries: Array<
+        { kind: 'env'; env_ref: string } | { kind: 'raw'; value: string }
+      > = [];
+      for (const rawEntry of apiKeys) {
+        const trimmed = rawEntry.trim();
+        if (trimmed === '') continue;
+        if (trimmed.startsWith('$') && trimmed.length > 1) {
+          parsedEntries.push({ kind: 'env', env_ref: `env:${trimmed.slice(1)}` });
+        } else if (trimmed.startsWith('env:') && trimmed.length > 4) {
+          parsedEntries.push({ kind: 'env', env_ref: trimmed });
+        } else {
+          parsedEntries.push({
+            kind: 'raw',
+            value: trimmed,
+          });
+        }
+      }
+
+      const existing = await this.listCredentials(input.id);
+      const nonOauthExisting = existing.filter(
+        (c) => !(c.note?.toLowerCase().includes('oauth') === true || c.id.includes('oauth')),
+      );
+      for (const old of nonOauthExisting) {
+        await this.deleteCredential(actor, old.id);
+      }
+      for (const entry of parsedEntries) {
+        const created = await this.createCredential(
+          actor,
+          entry.kind === 'env'
+            ? { provider: input.id, access_path: accessPath, env_ref: entry.env_ref }
+            : {
+                provider: input.id,
+                access_path: accessPath,
+                secret: entry.value, // privacy-scan: ignore —— 内存变量传递给加密库，非硬编码密钥
+              },
+        );
+        if (!created.ok) {
+          return { ok: false, error: created.error };
+        }
+      }
+    }
+
     await this.refreshProviderRuntime();
     await this.audit(
       actor,
@@ -566,7 +677,8 @@ export class AdminService {
       'ok',
       `namespace=${namespace === '' ? '(未启用)' : namespace}`,
     );
-    return { ok: true, provider };
+    const hydrated = (await this.getProvider(input.id)) ?? provider;
+    return { ok: true, provider: hydrated };
   }
 
   /**
@@ -709,7 +821,10 @@ export class AdminService {
                 access_path: imgAccessPath,
                 model,
                 modality: 'image',
-                format: 'openai.images.generations',
+                format:
+                  provider.dialect === 'gemini.generateContent'
+                    ? 'gemini.generateContent'
+                    : 'openai.images.generations',
                 usage_source: 'provider',
                 usage_units: ['images', 'tokens'],
                 quirks: [
@@ -725,6 +840,36 @@ export class AdminService {
                 access_path: imgAccessPath,
                 model,
                 modality: 'image',
+              });
+            }
+            continue;
+          }
+          if (isEmbeddingOnlyModel(model, provider.model_metadata?.[model])) {
+            const embAccessPath = provider.id === 'openai' ? 'openai.embeddings' : accessPath;
+            if (this.deps.capabilityRegistry.find(embAccessPath, model, 'embedding') === undefined) {
+              this.deps.capabilityRegistry.register({
+                access_path: embAccessPath,
+                model,
+                modality: 'embedding',
+                format:
+                  provider.dialect === 'gemini.generateContent'
+                    ? 'gemini.generateContent'
+                    : 'openai.embeddings',
+                usage_source: 'provider',
+                usage_units: ['tokens'],
+                quirks: [
+                  `由管理面渠道 ${provider.id} 的静态模型清单登记`,
+                  ...(provider.namespace === undefined || provider.namespace === ''
+                    ? []
+                    : [`可用 <${provider.namespace}>/<模型名> 访问`]),
+                ],
+                contract_tested: false,
+                status: 'implemented',
+              });
+              this.managedChannelCapabilities.push({
+                access_path: embAccessPath,
+                model,
+                modality: 'embedding',
               });
             }
             continue;
@@ -1680,9 +1825,26 @@ export class AdminService {
     return { snapshots, provider_options, provider_extensions };
   }
 
-  async refreshRoutingTelemetry(): Promise<RoutingTelemetryResponse> {
+  async refreshRoutingTelemetry(provider?: string): Promise<RoutingTelemetryResponse> {
     if (this.deps.telemetryRefresher !== undefined) {
-      await this.deps.telemetryRefresher();
+      await this.deps.telemetryRefresher(provider);
+    }
+    if (provider !== undefined && this.deps.routingTelemetry !== undefined) {
+      const snap = this.deps.routingTelemetry.snapshotFor(provider);
+      const providers = await this.listProviders();
+      const configured = providers.find((item) => item.id === provider);
+      const ap = configured
+        ? accessPathIdForDialect(configured.id, configured.dialect)
+        : undefined;
+      return {
+        snapshots: { [provider]: snap },
+        provider_options: {
+          [provider]: this.deps.routingTelemetry.optionsForProvider(provider, ap) ?? [],
+        },
+        provider_extensions: {
+          [provider]: this.deps.routingTelemetry.extensionsForProvider?.(provider, ap) ?? [],
+        },
+      };
     }
     return this.getRoutingTelemetry();
   }
@@ -1770,13 +1932,31 @@ export class AdminService {
           : {}),
         ...(offline?.reasoning !== undefined ? { reasoning: offline.reasoning } : {}),
       };
+      const pricingFields: Partial<CapabilityMatrixItem> = {};
+      if (this.deps.pricingService !== undefined) {
+        const priced = this.deps.pricingService.price({
+          ts: this.deps.clock.now(),
+          model: entry.model,
+          provider: visibility.providerOf(entry.access_path),
+          access_path: entry.access_path,
+          usage: { units: {}, source: 'provider' },
+        });
+        if (priced.price_snapshot !== null) {
+          pricingFields.pricing = {
+            currency: priced.price_snapshot.currency ?? 'USD',
+            ...(priced.price_snapshot.tier ? { tier: priced.price_snapshot.tier } : {}),
+            rates: priced.price_snapshot.rates,
+          };
+        }
+      }
       // 全量模式下的未配置条目：显式标注，状态诚实（未配置 ≠ 可用）
       out.push(
         isConfiguredEntry(entry, visibility)
-          ? { ...entry, ...metaFields, exposed, ...nsFields }
+          ? { ...entry, ...metaFields, ...pricingFields, exposed, ...nsFields }
           : ({
               ...entry,
               ...metaFields,
+              ...pricingFields,
               availability: 'unconfigured',
               exposed,
               ...nsFields,
@@ -3070,10 +3250,18 @@ function hydrateProviderModelMetadata(provider: ProviderConfig): ProviderConfig 
 }
 
 function isImageOnlyModel(id: string, meta?: UpstreamModelDto): boolean {
+  if (meta?.category === 'image') return true;
   if (meta?.output_modalities?.includes('image') && !meta.output_modalities.includes('text')) {
     return true;
   }
-  return /(dall-e|gpt-image|chatgpt-image|imagen|wanx|imagine-image|-image\b)/i.test(id);
+  return /(dall-e|gpt-image|chatgpt-image|imagen|wanx|imagine-image|image-generation|image-preview|\bflux\b|\bsdxl\b|-image\b)/i.test(
+    id,
+  );
+}
+
+function isEmbeddingOnlyModel(id: string, meta?: UpstreamModelDto): boolean {
+  if (meta?.category === 'embedding') return true;
+  return /(^|[-_/.])(embed|embedding|embeddings|bge)([-_/.]|$)/i.test(id);
 }
 
 function isVideoOnlyModel(id: string, meta?: UpstreamModelDto): boolean {

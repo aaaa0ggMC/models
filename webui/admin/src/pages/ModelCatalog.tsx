@@ -48,6 +48,60 @@ function formatUsageUnit(unit: string): string {
   }
 }
 
+function formatPriceNum(n: number): string {
+  if (n === 0) return '0';
+  if (n >= 1) return Number(n.toFixed(2)).toString();
+  if (n >= 0.01) return Number(n.toFixed(4)).toString();
+  return Number(n.toFixed(6)).toString();
+}
+
+function formatCatalogPricing(pricing: CapabilityMatrixEntry['pricing']): React.ReactNode {
+  if (!pricing) {
+    return <span className="ag-secondary">暂无定价</span>;
+  }
+  const sym = pricing.currency === 'CNY' ? '¥' : '$';
+  const r = pricing.rates;
+  const inputRate = r['input_cache_miss'] ?? r['input'];
+  const outputRate = r['output'];
+  if (inputRate !== undefined || outputRate !== undefined) {
+    const inStr = inputRate !== undefined ? `${sym}${formatPriceNum(inputRate)}` : '-';
+    const outStr = outputRate !== undefined ? `${sym}${formatPriceNum(outputRate)}` : '-';
+    const hitRate = r['input_cache_hit'];
+    return (
+      <span
+        className="ag-mono ag-tabular"
+        title={
+          hitRate !== undefined
+            ? `输入 ${inStr}/M · 缓存 ${sym}${formatPriceNum(hitRate)}/M · 输出 ${outStr}/M`
+            : `输入 ${inStr}/M · 输出 ${outStr}/M`
+        }
+      >
+        {inStr} / {outStr}
+        <span className="ag-secondary" style={{ fontSize: 11, marginLeft: 4 }}>
+          /M
+        </span>
+      </span>
+    );
+  }
+  if (r['per_image'] !== undefined) {
+    return <span className="ag-mono ag-tabular">{sym}{formatPriceNum(r['per_image'])}/张</span>;
+  }
+  if (r['per_request'] !== undefined) {
+    return <span className="ag-mono ag-tabular">{sym}{formatPriceNum(r['per_request'])}/次</span>;
+  }
+  if (r['per_10000_characters'] !== undefined) {
+    return (
+      <span className="ag-mono ag-tabular">
+        {sym}{formatPriceNum(r['per_10000_characters'])}/万字
+      </span>
+    );
+  }
+  if (r['per_hour'] !== undefined) {
+    return <span className="ag-mono ag-tabular">{sym}{formatPriceNum(r['per_hour'])}/时</span>;
+  }
+  return <span className="ag-secondary">暂无定价</span>;
+}
+
 function capabilityToModelDto(item: CapabilityMatrixEntry): UpstreamModelDto {
   const category = categoryFromModality(item.modality);
   const lower = item.model.toLowerCase();
@@ -298,7 +352,7 @@ export function ModelCatalogPage({
             style={{ width: 260 }}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索模型名或端点…"
+            placeholder="搜索模型名或模态…"
           />
           <select
             className="ag-select"
@@ -340,8 +394,8 @@ export function ModelCatalogPage({
               emptyText="当前没有可用的已配置模型"
               extraColumns={[
                 {
-                  header: '接入端点',
-                  render: (item) => <span className="ag-mono">{item.access_path}</span>,
+                  header: '参考单价',
+                  render: (item) => formatCatalogPricing(item.pricing),
                 },
                 {
                   header: '当前状态',

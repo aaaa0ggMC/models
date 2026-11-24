@@ -453,6 +453,7 @@ interface ChatParams {
   metadata?: Record<string, string>;  // OpenAI metadata；Anthropic metadata 同名但限 16 kv
   service_tier?: "auto" | "default" | "flex" | "priority";
   safety?: SafetySetting[];      // Gemini safetySettings
+  native?: Record<string, Record<string, unknown>>; // 按厂商隔离的专有参数（native.<vendor>.*）
 }
 
 /** 思考 / 推理配置。三种 provider 词汇不同，canonical 统一。 */
@@ -893,7 +894,8 @@ schema/ag-ir-1/
 | `params.top_k` | 部分兼容 | 无 | 无 | `generationConfig.topK` |
 | `params.stop` | `stop` | 无 | `stop_sequences` | `generationConfig.stopSequences` |
 | `params.frequency_penalty`/`presence_penalty` | 同 | 无 | 无 | 无 |
-| `params.safety` | 无 | 无 | 无 | `safetySettings` |
+| `params.safety` | 顶层/extra_body `safety_settings`/`safetySettings` 透传 | 同 OpenAI Chat | 同 OpenAI Chat | `safetySettings` |
+| `params.native.<vendor>` | `ag_provider_options.<vendor>` | `ag_provider_options.<vendor>` | `ag_provider_options.<vendor>` | `ag_provider_options.<vendor>` |
 | `response_format` | 同 | `text.format` | 无对应（靠 prompt） | `generationConfig.responseMimeType` + `responseSchema` |
 | `thinking.budget_tokens` | 无 | 无 | `thinking.budget_tokens` | `generationConfig.thinkingConfig.thinkingBudget` |
 | `thinking.effort` | `reasoning_effort` | `reasoning.effort` | 无 → 阈值表换算 | 无 → 阈值表换算 |

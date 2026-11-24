@@ -114,6 +114,19 @@ v1 一律完整走 canonical，**系统内不存在"原样转发字节"的路径
 codec/mapping，也都有 round-trip 测试；差别只在**执行者**（上游 vs 网关），不在"是否转换"。
 内置搜索不会让网关退化成"什么请求都要特殊处理"，也不会退化成"原样转发字节"。
 
+#### 3.1.1 DeepSeek 混用工具实测 quirk（`provider === "deepseek"` 专用桥接）
+
+实测 DeepSeek 官方端点（`/chat/completions` 与 `/anthropic/v1/messages`）存在如下上游行为限制：
+
+- `tools[]` **仅包含** `deepseek_web_search`（或 `deepseek_read_url`）时，服务端可正常触发联网搜索；
+- 一旦 `tools[]` **同时混入任意自定义 `function` 工具**（例如客户端自带的 MCP 工具），DeepSeek 服务端会静默屏蔽 `deepseek_web_search`，模型思考中会认为「没有任何搜索工具可用」。
+
+为此，[`gateway-core/pipeline/deepseek-web-search.ts`](../../gateway-core/pipeline/deepseek-web-search.ts) 仅针对 `ctx.route?.provider === "deepseek"` 且请求同时存在 `BuiltinTool("web_search")` 与 `FunctionTool` 时启用专用桥接（不影响 OpenAI / Anthropic / Gemini 等其他支持原生混用的 provider）：
+
+1. 将 `BuiltinTool("web_search")` 改写为普通 `FunctionTool`（`web_search(query)`，重名时退避为 `ag_web_search`），确保模型可见；
+2. 仅拦截模型对该搜索工具的调用，使用同渠道凭据向 `/chat/completions` 发起只含 `[{"type": "deepseek_web_search"}]` 的纯搜索子请求并将结果回填给模型；
+3. 其余客户端 `function` 工具按客户端循环原样交回调用方执行。
+
 ### 3.2 模式 B：网关自执行（无原生支持时）
 
 触发条件：上游不支持原生搜索，**且**客户端声明了搜索意图。

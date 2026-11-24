@@ -104,6 +104,8 @@ export interface Adaptor {
    * 原契约（此时 S1 只能走完整解码，fast path 相应关闭）。
    */
   decodeEnvelope?(raw: unknown, ctx: RequestContext): RequestEnvelopeShallow;
+  /** 可选：fast path 透传时按路由目标生成动态上游路径（如 Gemini model-in-path）。 */
+  resolveFastPath?(ctx: RequestContext, shallow: RequestEnvelopeShallow | undefined): string | undefined;
 }
 
 /** adaptor 元数据（40 §1.3）。 */

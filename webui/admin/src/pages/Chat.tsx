@@ -76,8 +76,6 @@ const STARTER_PROMPTS: ReadonlyArray<{ title: string; prompt: string }> = [
 export function ChatPage(): React.JSX.Element {
   const [settings, setSettings] = useState<SettingDto[]>([]);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
-  const [credentials, setCredentials] = useState<MaskedCredential[]>([]);
-  const [envCredentials, setEnvCredentials] = useState<EnvCredentialPathDto[]>([]);
   const [accessPaths, setAccessPaths] = useState<AccessPathDto[]>([]);
   const [capabilities, setCapabilities] = useState<CapabilityMatrixEntry[]>([]);
   const [redactionRules, setRedactionRules] = useState<RedactionRulesResponse | null>(null);
@@ -125,19 +123,15 @@ export function ChatPage(): React.JSX.Element {
 
   const loadContext = useCallback(async () => {
     try {
-      const [sRes, pRes, cRes, eRes, apRes, capRes, rRes] = await Promise.all([
+      const [sRes, pRes, apRes, capRes, rRes] = await Promise.all([
         adminApi.listSettings(),
         adminApi.listProviders(),
-        adminApi.listCredentials(),
-        adminApi.listEnvCredentials().catch(() => ({ items: [] as EnvCredentialPathDto[] })),
         adminApi.listAccessPaths().catch(() => ({ items: [] as AccessPathDto[] })),
         adminApi.listCapabilities(),
         adminApi.getRedactionRules().catch(() => null),
       ]);
       setSettings(sRes.items);
       setProviders(pRes.items);
-      setCredentials(cRes.items);
-      setEnvCredentials(eRes.items);
       setAccessPaths(apRes.items);
       setCapabilities(capRes.items);
       if (rRes) setRedactionRules(rRes);
@@ -158,13 +152,11 @@ export function ChatPage(): React.JSX.Element {
     () =>
       computeModelAvailability({
         providers,
-        credentials,
-        envCredentials,
         accessPaths,
         capabilities,
         modalityFilter: 'chat',
       }),
-    [providers, credentials, envCredentials, accessPaths, capabilities],
+    [providers, accessPaths, capabilities],
   );
 
   const settingsMap = useMemo(() => new Map(settings.map((s) => [s.id, s])), [settings]);
@@ -394,30 +386,35 @@ export function ChatPage(): React.JSX.Element {
     if (!credPromptTarget || !credSecretInput.trim()) return;
     setCredSaving(true);
     try {
-      const secret = credSecretInput.trim(); // privacy-scan: ignore —— 弹窗录入直接进凭据端点
-      if (credPromptTarget.replaceExisting) {
-        const existing = await adminApi.listCredentials(credPromptTarget.provider);
-        const pathSet = new Set(credPromptTarget.accessPaths);
-        for (const cred of existing.items) {
-          if (cred.provider === credPromptTarget.provider && pathSet.has(cred.access_path)) {
-            await adminApi.deleteCredential(cred.id);
-          }
-        }
+      const secret = credSecretInput.trim(); // privacy-scan: ignore —— 弹窗录入直接进渠道接口
+      const prov = providers.find((p) => p.id === credPromptTarget.provider);
+      if (!prov) {
+        throw new Error(`未找到渠道 ${credPromptTarget.provider}`);
       }
-      for (const accessPath of credPromptTarget.accessPaths) {
-        await adminApi.createCredential({
-          provider: credPromptTarget.provider,
-          access_path: accessPath,
-          secret, // privacy-scan: ignore —— 弹窗录入直接进凭据端点
-        });
-      }
+      await adminApi.upsertProvider({
+        id: prov.id,
+        label: prov.label,
+        dialect: prov.dialect,
+        base_url: prov.base_url,
+        ...(prov.namespace ? { namespace: prov.namespace } : {}),
+        model_source: prov.model_source,
+        ...(prov.builtin_tools ? { builtin_tools: prov.builtin_tools } : {}),
+        ...(prov.pricing ? { pricing: prov.pricing } : {}),
+        ...(prov.capability_overrides ? { capability_overrides: prov.capability_overrides } : {}),
+        enabled: prov.enabled,
+        ...(prov.note ? { note: prov.note } : {}),
+        api_keys: secret
+          .split(/[\r\n]+/)
+          .map((line) => line.trim())
+          .filter(Boolean),
+      });
       setCredPromptTarget(null);
       setCredSecretInput('');
       await loadContext();
     } catch (err) {
       setError({
         category: '录入失败',
-        message: err instanceof Error ? err.message : '凭据保存未成功',
+        message: err instanceof Error ? err.message : '密钥保存未成功',
       });
     } finally {
       setCredSaving(false);
@@ -435,7 +432,6 @@ export function ChatPage(): React.JSX.Element {
           });
           break;
         case 'delete_credential':
-          await adminApi.deleteCredential(pending.resource_id);
           break;
         case 'delete_alias':
           await adminApi.deleteAlias(pending.resource_id);

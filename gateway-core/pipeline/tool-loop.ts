@@ -53,6 +53,10 @@ export interface ToolLoopDeps {
   runTurn(req: CanonicalRequestEnvelope, ctx: RequestContext): Promise<CanonicalResponseEnvelope>;
   /** 没有 onToolCall 插件时的兜底执行器（可缺省）。 */
   fallbackExecutor?: ToolExecutor;
+  /** 可选：判断本轮 tool_use 是否应由网关接管执行；返回 false 则立即交回客户端。 */
+  shouldHandle?: (calls: ToolUsePart[]) => boolean;
+  /** 可选：按单个 tool_use 判断是否由网关接管（支持同一轮混用网关工具与客户端工具）。 */
+  canHandleCall?: (call: ToolUsePart) => boolean;
 }
 
 /** 从响应里收集完整成型的 tool_use part（流式下由 part.end 保证 JSON 完整）。 */
@@ -108,6 +112,15 @@ export async function runToolLoop(
     if (toolUses.length === 0) {
       return { response, turns, exceeded: false, turn_summaries: turnSummaries };
     }
+    if (deps.shouldHandle !== undefined && !deps.shouldHandle(toolUses)) {
+      return { response, turns, exceeded: false, turn_summaries: turnSummaries };
+    }
+
+    const callsToExecute =
+      deps.canHandleCall !== undefined ? toolUses.filter(deps.canHandleCall) : toolUses;
+    if (callsToExecute.length === 0) {
+      return { response, turns, exceeded: false, turn_summaries: turnSummaries };
+    }
 
     if (turns >= maxTurns) {
       return {
@@ -118,13 +131,13 @@ export async function runToolLoop(
       };
     }
 
-    // EXECUTE_TOOLS：每个 tool_use 产出 tool_result part
+    // EXECUTE_TOOLS：每个由网关接管的 tool_use 产出 tool_result part
     const results: ToolResultPart[] = [];
     const executor: ToolExecutor = deps.fallbackExecutor ?? {
       execute: async (call, c) => deps.pluginHost.runOnToolCall(call, c),
     };
 
-    for (const call of toolUses) {
+    for (const call of callsToExecute) {
       const started = Date.now();
       let ok = true;
       let result: ToolResultPart;
@@ -146,14 +159,25 @@ export async function runToolLoop(
       ];
     }
 
-    turnSummaries.push({ turn: turns, tool_calls: toolUses.map((t) => t.name) });
+    turnSummaries.push({ turn: turns, tool_calls: callsToExecute.map((t) => t.name) });
 
-    // APPEND_TURN
+    // APPEND_TURN：若本轮混用了网关工具与客户端工具，仅保留已执行的 tool_use 进子回合历史，
+    // 避免客户端工具在无结果的情况下阻塞下一轮，也不把网关伪造工具泄漏给客户端。
     const assistantPayload = asChatResponsePayload(response);
     if (assistantPayload === undefined) {
       return { response, turns, exceeded: false, turn_summaries: turnSummaries };
     }
-    req = appendTurn(req, assistantPayload.message, results);
+    const executedIds = new Set(callsToExecute.map((c) => c.id));
+    const assistantMsg =
+      callsToExecute.length === toolUses.length
+        ? assistantPayload.message
+        : {
+            ...assistantPayload.message,
+            parts: assistantPayload.message.parts.filter(
+              (p) => p.type !== 'tool_use' || executedIds.has(p.id),
+            ),
+          };
+    req = appendTurn(req, assistantMsg, results);
   }
 }
 

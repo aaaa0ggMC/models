@@ -89,7 +89,7 @@ export function buildAuthMaterial(
   searchParams: URLSearchParams,
 ): PipelineInput['auth_material'] {
   const authorization = headerValue(headers['authorization']);
-  const apiKey = headerValue(headers['x-api-key']);
+  const apiKey = headerValue(headers['x-api-key']) ?? headerValue(headers['x-goog-api-key']);
   const queryKey = searchParams.get('key') ?? undefined;
   if (
     (authorization === undefined || authorization === '') &&
@@ -110,8 +110,11 @@ const ROUTES: Array<{ pattern: RegExp; format: FormatId }> = [
   { pattern: /^\/v1\/chat\/completions$/, format: 'openai.chat' },
   { pattern: /^\/v1\/responses$/, format: 'openai.responses' },
   { pattern: /^\/v1\/messages$/, format: 'anthropic.messages' },
-  { pattern: /^\/v1beta\/models\/[^:]+:generateContent$/, format: 'gemini.generateContent' },
-  { pattern: /^\/v1beta\/models\/[^:]+:streamGenerateContent$/, format: 'gemini.generateContent' },
+  { pattern: /^\/v1(?:beta)?\/models\/[^:]+:generateContent$/, format: 'gemini.generateContent' },
+  {
+    pattern: /^\/v1(?:beta)?\/models\/[^:]+:streamGenerateContent$/,
+    format: 'gemini.generateContent',
+  },
 ];
 
 /**
@@ -239,7 +242,11 @@ class NodeResponseSink implements ClientSink {
     const isSse = (headers['content-type'] ?? '').toLowerCase().includes('text/event-stream');
     if (isSse) {
       this.res.socket?.setNoDelay(true);
-      this.res.writeHead(status, { 'x-accel-buffering': 'no', ...headers });
+      this.res.writeHead(status, {
+        'x-accel-buffering': 'no',
+        ...headers,
+        'cache-control': 'no-cache, no-transform',
+      });
       this.res.flushHeaders?.();
     } else {
       this.res.writeHead(status, headers);
@@ -325,7 +332,7 @@ export function createHttpServer(options: HttpServerOptions): Server {
   const disconnectPolicy = options.disconnectPolicy;
 
   return createServer((req, res) => {
-    void handleRequest(
+    handleRequest(
       req,
       res,
       runner,
@@ -338,8 +345,38 @@ export function createHttpServer(options: HttpServerOptions): Server {
       authenticator,
       stealthGate,
       disconnectPolicy,
-    );
+    ).catch((err) => {
+      if (isClientDisconnectError(err)) {
+        if (!res.writableEnded) res.destroy();
+        return;
+      }
+      if (!res.headersSent && !res.writableEnded) {
+        res.writeHead(500, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            error: {
+              message: err instanceof Error ? err.message : 'internal error',
+              type: 'internal_error',
+            },
+          }),
+        );
+      } else if (!res.writableEnded) {
+        res.destroy();
+      }
+    });
   });
+}
+
+function isClientDisconnectError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const code = (err as { code?: unknown }).code;
+  const msg = (err as { message?: unknown }).message;
+  return (
+    code === 'ECONNRESET' ||
+    code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+    code === 'ECONNABORTED' ||
+    msg === 'aborted'
+  );
 }
 
 /**
@@ -490,8 +527,15 @@ async function handleRequest(
   }
 
   const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(chunk as Buffer);
+  try {
+    for await (const chunk of req) {
+      chunks.push(chunk as Buffer);
+    }
+  } catch (err) {
+    if (isClientDisconnectError(err)) {
+      return;
+    }
+    throw err;
   }
   const rawBody = Buffer.concat(chunks);
 

@@ -12,7 +12,7 @@
  * adaptor 仍然不注册），只是 `openai.responses` 不再是「没实现」。同一 FormatId 的
  * **provider 脸**（B，期二）不在本文件体现：B 复用这个 codec，provider 差异进
  * `ProviderProfile`（42 §1.3 第 0 条），不需要第二个 codec。
- * `gemini.generateContent` 仍然是「没实现」，继续不注册。
+ * `gemini.generateContent`（客户端脸 + provider 脸）已落地并显式注册。
  */
 
 import type { Adaptor, AdaptorMeta, AdaptorRegistry } from './types.js';
@@ -23,6 +23,10 @@ import {
   createAnthropicMessagesAdaptorMeta,
 } from './anthropic-messages/index.js';
 import { OpenAIResponsesCodec, openAIResponsesAdaptorMeta } from './openai-responses/index.js';
+import {
+  GeminiGenerateContentCodec,
+  geminiGenerateContentAdaptorMeta,
+} from './gemini-generate-content/index.js';
 import type { Clock, Logger, ProviderProfileRegistry } from '../di/ports.js';
 import type { CapabilityEntry } from '../ir/index.js';
 
@@ -86,6 +90,14 @@ export function createAdaptorRegistry(deps: {
       ...(deps.providerProfiles === undefined ? {} : { providerProfiles: deps.providerProfiles }),
     }),
     openAIResponsesAdaptorMeta(),
+  );
+  register(
+    new GeminiGenerateContentCodec({
+      clock: deps.clock,
+      ...(deps.logger === undefined ? {} : { logger: deps.logger }),
+      ...(deps.providerProfiles === undefined ? {} : { providerProfiles: deps.providerProfiles }),
+    }),
+    geminiGenerateContentAdaptorMeta(),
   );
 
   return { registry, metas };

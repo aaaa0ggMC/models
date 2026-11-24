@@ -208,7 +208,7 @@ export function AgentRunPanel({
               <button
                 type="button"
                 className="ag-btn ag-btn-sm ag-btn-primary"
-                onClick={() => navigate('credentials')}
+                onClick={() => navigate('channels')}
               >
                 去录凭据
               </button>

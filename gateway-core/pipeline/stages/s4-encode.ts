@@ -46,16 +46,17 @@ export class S4Encode implements Stage {
     if (ctx.fast_path) {
       // fast path：透传原始字节，**不物化 canonical**（D-fastpath-1）
       const rawBytes = lazy.raw;
+      const adaptorFastPath = providerAdaptor.resolveFastPath?.(ctx, state.shallow);
       const encoded: EncodedRequest = {
         body: undefined,
         raw_bytes: rawBytes,
         fast_path: true,
         // 路径仍然要按 provider 解析：dialect 默认路径（/v1/chat/completions）对
-        // DeepSeek 是错的（官方是 /chat/completions）。profile 查不到才退回
-        // S1 浅解析给的 dialect 默认值。
+        // DeepSeek 是错的（官方是 /chat/completions）；动态路径（如 Gemini）由 adaptor 自身给出。
         path:
-          hintEndpointPath ??
+          resolveHintEndpointPath(hintEndpointPath, ctx.route.model) ??
           endpointPathFor(deps.providerProfiles, ctx.route.access_path) ??
+          adaptorFastPath ??
           state.shallow?.default_path ??
           '/v1/chat/completions',
       };
@@ -82,8 +83,9 @@ export class S4Encode implements Stage {
     state.materialized = true;
 
     const encoded = providerAdaptor.encode(req, ctx);
-    if (hintEndpointPath !== undefined) {
-      encoded.path = hintEndpointPath;
+    const resolvedHint = resolveHintEndpointPath(hintEndpointPath, req.resolved_model ?? req.model);
+    if (resolvedHint !== undefined) {
+      encoded.path = resolvedHint;
     }
     state.encoded = encoded;
     if (encoded.diagnostics !== undefined) {
@@ -101,4 +103,10 @@ export class S4Encode implements Stage {
     );
     deps.metrics.increment('pipeline.stage', 1, { stage: this.id, mode: 'slow' });
   }
+}
+
+function resolveHintEndpointPath(hint: string | undefined, model: string): string | undefined {
+  if (hint === undefined) return undefined;
+  const cleanModel = model.replace(/^models\//, '');
+  return hint.includes('{model}') ? hint.replace(/\{model\}/g, encodeURIComponent(cleanModel)) : hint;
 }

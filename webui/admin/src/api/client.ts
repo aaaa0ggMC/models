@@ -101,7 +101,7 @@ export function classifyErrorCode(
         category: '凭据无效',
         message: message || '上游拒绝了该密钥',
         actionLabel: '去管凭据',
-        actionRoute: 'credentials',
+        actionRoute: 'channels',
         detail,
       };
     case 'credential_missing':
@@ -109,7 +109,7 @@ export function classifyErrorCode(
         category: '缺少凭据',
         message: message || '该渠道未录入可用凭据',
         actionLabel: '去录凭据',
-        actionRoute: 'credentials',
+        actionRoute: 'channels',
         detail,
       };
     case 'endpoint_unsupported':
@@ -350,38 +350,8 @@ export const adminApi = {
     });
   },
 
-  // ---- 凭据 ----
-  listCredentials(provider?: string): Promise<Page<MaskedCredential>> {
-    const qs = provider ? `?provider=${encodeURIComponent(provider)}` : '';
-    return requestJson(`credentials${qs}`);
-  },
-
-  createCredential(
-    body: CredentialCreateRequest,
-  ): Promise<{ ok: boolean; credential?: MaskedCredential }> {
-    return requestJson('credentials', { method: 'POST', body: JSON.stringify(body) });
-  },
-
-  deleteCredential(id: string): Promise<{ ok: boolean; deleted: boolean }> {
-    return requestJson(`credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  },
-
-  async probeCredential(id: string): Promise<CredentialProbeResponse> {
-    const headers: Record<string, string> = { accept: 'application/json' };
-    if (sessionToken) headers['authorization'] = `Bearer ${sessionToken}`;
-    const res = await fetch(`/admin/api/credentials/${encodeURIComponent(id)}/probe`, {
-      method: 'POST',
-      headers,
-    });
-    return (await res.json()) as CredentialProbeResponse;
-  },
-
   listAccessPaths(): Promise<{ items: AccessPathDto[] }> {
     return requestJson('access-paths');
-  },
-
-  listEnvCredentials(): Promise<{ items: EnvCredentialPathDto[] }> {
-    return requestJson('env-credentials');
   },
 
   // ---- 别名 ----
@@ -802,8 +772,11 @@ export const adminApi = {
     return requestJson('routing-telemetry');
   },
 
-  refreshRoutingTelemetry(): Promise<RoutingTelemetryResponse> {
-    return requestJson('routing-telemetry/refresh', { method: 'POST', body: '{}' });
+  refreshRoutingTelemetry(provider?: string): Promise<RoutingTelemetryResponse> {
+    return requestJson('routing-telemetry/refresh', {
+      method: 'POST',
+      body: JSON.stringify(provider ? { provider } : {}),
+    });
   },
 
   // ---- 插件中心（Dogfooding）----

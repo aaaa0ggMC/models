@@ -76,6 +76,11 @@ import type {
 import { CTX_STATE_KEYS, IR_VERSION, createCanonicalError } from '../../ir/index.js';
 import type { Adaptor, AdaptorMeta, EncodedRequest, RequestEnvelopeShallow } from '../types.js';
 import type { ProviderProfile, ProviderProfileRegistry } from '../../di/ports.js';
+import {
+  applyClientProviderOptions,
+  applyNativeVendorOptions,
+  filterUnmappedForPassthrough,
+} from '../provider-options.js';
 
 /** 本 codec 的格式 id、模态与默认端点（20 §S0 路径签名表）。 */
 const FORMAT: FormatId = 'openai.responses';
@@ -943,6 +948,8 @@ export class OpenAIResponsesCodec implements Adaptor {
       if (extras !== undefined) nodes['text.extras'] = extras;
     }
 
+    applyClientProviderOptions(obj, params);
+
     return Object.keys(params).length > 0 ? params : undefined;
   }
 
@@ -1073,12 +1080,25 @@ export class OpenAIResponsesCodec implements Adaptor {
 
     if (req.stream !== undefined && req.stream.enabled) body['stream'] = true;
 
+    applyNativeVendorOptions({
+      native: params?.native,
+      acceptedVendors: ['openai', 'deepseek'],
+      body,
+      protectedKeys: new Set(['model', 'input']),
+      mergeObjectKeys: new Set(['reasoning', 'text']),
+      sourceFormat: req.source_format,
+      targetFormat: FORMAT,
+      dropped,
+      warnings,
+      diagnostics,
+    });
+
     // 10 §7.2 第 3 条：顶层 unmapped 回写。**只在同格式时成立**（第 1 条「整体还原」的前提
     // 是 source_provider === 目标格式）——跨格式时那些键是别家方言的顶层字段，照抄进
     // Responses 请求体就是静默注入（anthropic adaptor 的 encodeUnmapped 同款判据；
     // s4-encode.ts 文件头「反向 passthrough …同一格式互转时的无损保证」）。
     if (req.raw.source_provider === PROVIDER_NAME) {
-      for (const [key, value] of Object.entries(req.raw.unmapped ?? {})) {
+      for (const [key, value] of Object.entries(filterUnmappedForPassthrough(req.raw.unmapped))) {
         body[key] = value;
       }
       // 10 §7.2 第 2 条：未建模的 tool / tool_choice 节点级还原。

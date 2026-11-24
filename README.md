@@ -91,6 +91,7 @@ node scripts/check-docs.mjs  # docs/ 设计文档一致性检查
 
 ## 相关文档
 
+- 跨格式厂商专有设置透传（如 OpenAI 格式传 Gemini `safetySettings`）：[`docs/provider-options.md`](docs/provider-options.md)
 - 架构与详细设计：[`docs/design/`](docs/design/)
 - 实现说明与模块职责：[`reports/IMPLEMENTATION.md`](reports/IMPLEMENTATION.md)
 - 历史阶段报告与审计记录：[`reports/`](reports/)

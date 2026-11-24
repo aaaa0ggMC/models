@@ -1,18 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { adminApi, ApiRequestError, type ActionableError } from '../api/client.js';
-import {
-  deriveAccessPath,
-  isProviderAutoDisabled,
-} from '../api/model-availability.js';
-import type {
-  EnvCredentialPathDto,
-  MaskedCredential,
-  PresetDialect,
-  ProviderConfig,
-  ProviderPreset,
-} from '../api/types.js';
+import { isProviderAutoDisabled } from '../api/model-availability.js';
+import type { PresetDialect, ProviderConfig, ProviderPreset } from '../api/types.js';
 import { ProviderPanelModal } from '../components/ProviderPanelModal.js';
-import { navigate } from '../router.js';
 import {
   ConfirmModal,
   EmptyState,
@@ -32,8 +22,6 @@ const PROTOCOL_NAMES: Record<PresetDialect, string> = {
 export function ChannelsPage(): React.JSX.Element {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
-  const [credentials, setCredentials] = useState<MaskedCredential[]>([]);
-  const [envCredentials, setEnvCredentials] = useState<EnvCredentialPathDto[]>([]);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<ActionableError | null>(null);
@@ -46,22 +34,17 @@ export function ChannelsPage(): React.JSX.Element {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ProviderConfig | null>(null);
   const [batchDeleteOpen, setBatchDeleteOpen] = useState<boolean>(false);
-  const [cascadeDeleteCreds, setCascadeDeleteCreds] = useState<boolean>(true);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [pRes, presetRes, cRes, eRes] = await Promise.all([
+      const [pRes, presetRes] = await Promise.all([
         adminApi.listProviders(),
         adminApi.listProviderPresets().catch(() => ({ items: [] as ProviderPreset[], total: 0 })),
-        adminApi.listCredentials(),
-        adminApi.listEnvCredentials().catch(() => ({ items: [] as EnvCredentialPathDto[] })),
       ]);
       setProviders(pRes.items);
       setPresets(presetRes.items);
-      setCredentials(cRes.items);
-      setEnvCredentials(eRes.items);
     } catch (err) {
       setError(
         err instanceof ApiRequestError
@@ -79,14 +62,7 @@ export function ChannelsPage(): React.JSX.Element {
 
   function hasCredentialForProvider(providerId: string): boolean {
     const prov = providers.find((p) => p.id === providerId);
-    const derived = prov ? deriveAccessPath(prov.id, prov.dialect) : providerId;
-    const inStore = credentials.some(
-      (c) => c.enabled && (c.provider === providerId || c.access_path === derived),
-    );
-    const inEnv = envCredentials.some(
-      (e) => e.count > 0 && (e.access_path === derived || e.access_path.startsWith(`${providerId}.`)),
-    );
-    return inStore || inEnv;
+    return prov?.has_key === true;
   }
 
   async function handleToggleEnable(prov: ProviderConfig, nextEnabled: boolean) {
@@ -126,8 +102,6 @@ export function ChannelsPage(): React.JSX.Element {
         setError({
           category: '连通检测未通过',
           message: res.message ?? `渠道 ${prov.label} 检测失败`,
-          actionLabel: '检查凭据',
-          actionRoute: 'credentials',
         });
       }
       await loadAll();
@@ -158,36 +132,10 @@ export function ChannelsPage(): React.JSX.Element {
     }
   }
 
-  function countCascadeCredentials(targetIds: Set<string>): {
-    exclusive: number;
-    shared: number;
-  } {
-    const targets = providers.filter((p) => targetIds.has(p.id));
-    const targetPaths = new Set(targets.map((p) => `${p.id}.${p.dialect.replace('.', '-')}`));
-    const remaining = providers.filter((p) => !targetIds.has(p.id));
-    const remainingIds = new Set(remaining.map((p) => p.id));
-    const remainingPaths = new Set(
-      remaining.map((p) => `${p.id}.${p.dialect.replace('.', '-')}`),
-    );
-    let exclusive = 0;
-    let shared = 0;
-    for (const c of credentials) {
-      if (!targetIds.has(c.provider) && !targetPaths.has(c.access_path)) continue;
-      if (remainingIds.has(c.provider) || remainingPaths.has(c.access_path)) {
-        shared += 1;
-      } else {
-        exclusive += 1;
-      }
-    }
-    return { exclusive, shared };
-  }
-
   async function handleConfirmDelete() {
     if (!deleteTarget) return;
     try {
-      await adminApi.deleteProvider(deleteTarget.id, {
-        cascade_credentials: cascadeDeleteCreds,
-      });
+      await adminApi.deleteProvider(deleteTarget.id, { cascade_credentials: true });
       setDeleteTarget(null);
       await loadAll();
     } catch (err) {
@@ -205,7 +153,7 @@ export function ChannelsPage(): React.JSX.Element {
       await adminApi.batchProviders(
         ids,
         action,
-        action === 'delete' ? { cascade_credentials: cascadeDeleteCreds } : undefined,
+        action === 'delete' ? { cascade_credentials: true } : undefined,
       );
       setSelectedIds(new Set());
       setBatchDeleteOpen(false);
@@ -245,7 +193,6 @@ export function ChannelsPage(): React.JSX.Element {
                   type="button"
                   className="ag-btn ag-btn-sm ag-btn-danger"
                   onClick={() => {
-                    setCascadeDeleteCreds(true);
                     setBatchDeleteOpen(true);
                   }}
                 >
@@ -389,18 +336,19 @@ export function ChannelsPage(): React.JSX.Element {
                         ) : prov.credential_health === 'error' ? (
                           <StatusBadge tone="danger">探测异常</StatusBadge>
                         ) : hasCred ? (
-                          <StatusBadge tone="info">已配凭据</StatusBadge>
+                          <StatusBadge tone="info">已配密钥</StatusBadge>
                         ) : (
                           <button
                             type="button"
                             className="ag-btn ag-btn-sm"
-                            onClick={() =>
-                              navigate('credentials', { provider: prov.id, create: '1' })
-                            }
-                            title="前往配置凭据"
+                            onClick={() => {
+                              setEditingProvider(prov);
+                              setModalOpen(true);
+                            }}
+                            title="编辑渠道并配置密钥"
                           >
-                            <StatusBadge tone="warning">缺少凭据</StatusBadge>
-                            <span>+ 配凭据</span>
+                            <StatusBadge tone="warning">缺少密钥</StatusBadge>
+                            <span>+ 配密钥</span>
                           </button>
                         )}
                       </td>
@@ -458,7 +406,6 @@ export function ChannelsPage(): React.JSX.Element {
                             type="button"
                             className="ag-btn ag-btn-sm ag-btn-danger"
                             onClick={() => {
-                              setCascadeDeleteCreds(true);
                               setDeleteTarget(prov);
                             }}
                           >
@@ -493,31 +440,7 @@ export function ChannelsPage(): React.JSX.Element {
         confirmLabel="确认删除"
         onConfirm={() => void handleConfirmDelete()}
         onCancel={() => setDeleteTarget(null)}
-      >
-        {deleteTarget !== null && (() => {
-          const impact = countCascadeCredentials(new Set([deleteTarget.id]));
-          if (impact.exclusive === 0 && impact.shared === 0) return null;
-          return (
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {impact.exclusive > 0 && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={cascadeDeleteCreds}
-                    onChange={(e) => setCascadeDeleteCreds(e.target.checked)}
-                  />
-                  <span>同时删除关联凭据（{impact.exclusive} 条）</span>
-                </label>
-              )}
-              {impact.shared > 0 && (
-                <span style={{ fontSize: 12, color: 'var(--ag-text-muted)' }}>
-                  共享凭据将保留（{impact.shared} 条）
-                </span>
-              )}
-            </div>
-          );
-        })()}
-      </ConfirmModal>
+      />
 
       <ConfirmModal
         open={batchDeleteOpen}
@@ -527,31 +450,7 @@ export function ChannelsPage(): React.JSX.Element {
         confirmLabel="确认批量删除"
         onConfirm={() => void handleBatchAction('delete')}
         onCancel={() => setBatchDeleteOpen(false)}
-      >
-        {batchDeleteOpen && (() => {
-          const impact = countCascadeCredentials(selectedIds);
-          if (impact.exclusive === 0 && impact.shared === 0) return null;
-          return (
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {impact.exclusive > 0 && (
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={cascadeDeleteCreds}
-                    onChange={(e) => setCascadeDeleteCreds(e.target.checked)}
-                  />
-                  <span>同时删除关联凭据（{impact.exclusive} 条）</span>
-                </label>
-              )}
-              {impact.shared > 0 && (
-                <span style={{ fontSize: 12, color: 'var(--ag-text-muted)' }}>
-                  共享凭据将保留（{impact.shared} 条）
-                </span>
-              )}
-            </div>
-          );
-        })()}
-      </ConfirmModal>
+      />
     </div>
   );
 }

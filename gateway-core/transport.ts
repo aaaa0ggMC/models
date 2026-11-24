@@ -136,9 +136,13 @@ export class FetchTransport implements Transport {
 
     let res: globalThis.Response;
     try {
+      const requestHeaders: Record<string, string> = {
+        ...(req.stream ? { accept: 'text/event-stream', 'accept-encoding': 'identity' } : {}),
+        ...req.headers,
+      };
       res = await fetch(url, {
         method: req.method,
-        headers: req.headers,
+        headers: requestHeaders,
         body: req.body,
         redirect: 'manual',
         signal: controller.signal,
@@ -158,7 +162,7 @@ export class FetchTransport implements Transport {
       headers[k] = v;
     });
 
-    if (req.stream) {
+    if (req.stream && res.status >= 200 && res.status < 300) {
       if (res.body === null) {
         try {
           return { status: res.status, headers, body: Buffer.from(await res.arrayBuffer()) };

@@ -136,6 +136,7 @@ import {
   createOpenAIImagesPricingService,
 } from './providers/openai-images/index.js';
 import { OpenAIEmbeddingsAdaptor } from './providers/openai-embeddings/index.js';
+import { GeminiImagesAdaptor, GeminiEmbeddingsAdaptor } from './providers/gemini/index.js';
 import {
   MockDecisionAdaptor,
   TransportChatPort,
@@ -1222,7 +1223,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       },
     });
 
-  const telemetryRefresher = async (): Promise<void> => {
+  const telemetryRefresher = async (targetProvider?: string): Promise<void> => {
     const asRecord = (v: unknown): Record<string, unknown> | undefined =>
       typeof v === 'object' && v !== null && !Array.isArray(v)
         ? (v as Record<string, unknown>)
@@ -1277,6 +1278,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       }
     }
     for (const [providerId, target] of deepseekTargets.entries()) {
+      if (targetProvider !== undefined && targetProvider !== providerId) continue;
       try {
         if (providerId === 'deepseek' && target.accessPath === 'deepseek.openai-chat') {
           const snap = await deepseekBalanceClient.snapshot();
@@ -1344,6 +1346,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       }
     }
     for (const [providerId, target] of mimoTargets.entries()) {
+      if (targetProvider !== undefined && targetProvider !== providerId) continue;
       try {
         if (providerId === 'mimo' && target.accessPath === 'mimo.openai-chat') {
           const mimoCreds = credentialResolver.credentialsFor('mimo.openai-chat');
@@ -1446,6 +1449,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       }
     }
     for (const [providerId, accessPath] of codexTargets.entries()) {
+      if (targetProvider !== undefined && targetProvider !== providerId) continue;
       try {
         const res = await fetchJsonWithAuth(
           accessPath,
@@ -1536,6 +1540,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       }
     }
     for (const [providerId, accessPath] of opencodeTargets.entries()) {
+      if (targetProvider !== undefined && targetProvider !== providerId) continue;
       try {
         const res = await fetchJsonWithAuth(
           accessPath,
@@ -1676,6 +1681,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       }
     }
     for (const [providerId, accessPath] of xaiTargets.entries()) {
+      if (targetProvider !== undefined && targetProvider !== providerId) continue;
       try {
         const res = await fetchJsonWithAuth(
           accessPath,
@@ -1803,6 +1809,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       }
     }
     for (const [providerId, accessPath] of openrouterTargets.entries()) {
+      if (targetProvider !== undefined && targetProvider !== providerId) continue;
       try {
         const res = await fetchJsonWithAuth(
           accessPath,
@@ -1899,6 +1906,22 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     dynamicProviderCaps.set(providerId, registered);
   };
 
+  // ---- 定价服务（S10 + 管理面模型目录 + 工具/音频/模态端点共用同一个分层聚合定价实例）----
+  const channelPricingResolver: ChannelPricingResolver = {
+    pricingFor(accessPathOrProvider: string) {
+      const byId = providerRuntime.get(accessPathOrProvider);
+      if (byId?.pricing !== undefined) return byId.pricing;
+      for (const entry of providerRuntime.entries()) {
+        if (entry.access_path === accessPathOrProvider && entry.pricing !== undefined) {
+          return entry.pricing;
+        }
+      }
+      return undefined;
+    },
+  };
+  const pricingService =
+    options.pricingService ?? createDefaultPricingService(channelPricingResolver);
+
   const admin = assembleAdmin({
     mode,
     options,
@@ -1913,6 +1936,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     routingTelemetry,
     telemetryRefresher,
     pluginHost,
+    pricingService,
     onChannelActivated: (provider, accessPath) => {
       if (provider.id === 'deepseek') {
         const extras: CapabilityEntry[] = [...deepseekAudioCapabilities()];
@@ -2024,21 +2048,6 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     routingTelemetry,
   );
   container.registerValue(TOKENS.Router, router);
-  // ---- 定价服务（S10 + 工具/音频/模态端点共用同一个分层聚合定价实例）----
-  const channelPricingResolver: ChannelPricingResolver = {
-    pricingFor(accessPathOrProvider: string) {
-      const byId = providerRuntime.get(accessPathOrProvider);
-      if (byId?.pricing !== undefined) return byId.pricing;
-      for (const entry of providerRuntime.entries()) {
-        if (entry.access_path === accessPathOrProvider && entry.pricing !== undefined) {
-          return entry.pricing;
-        }
-      }
-      return undefined;
-    },
-  };
-  const pricingService =
-    options.pricingService ?? createDefaultPricingService(channelPricingResolver);
 
   // ---- 独立工具端点（DeepSeek 全家桶 + MiMo 音频两个）----
   // 五个 DeepSeek 端点共用 DeepSeek 的 key 与 base URL（与两条 chat access path
@@ -2148,13 +2157,102 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     const { headers } = await credentialResolver.headersFor('openai.images', systemProbeCtx(clock));
     return headers;
   };
-  const imagesAdaptor = new OpenAIImagesAdaptor({
+  const openaiImagesAdaptor = new OpenAIImagesAdaptor({
     client: new OpenAIImagesClient({ transport, headersProvider: openaiHeadersProvider }),
   });
-  const embeddingsAdaptor = new OpenAIEmbeddingsAdaptor({
+  const geminiHeadersProvider = async (): Promise<Record<string, string>> => {
+    const candidates = ['gemini.gemini-generateContent', 'gemini.generateContent', 'gemini'];
+    for (const ap of candidates) {
+      if (credentialResolver.credentialsFor(ap).length > 0) {
+        const { headers } = await credentialResolver.headersFor(ap, systemProbeCtx(clock));
+        return headers;
+      }
+    }
+    const { headers } = await credentialResolver.headersFor(
+      'gemini.generateContent',
+      systemProbeCtx(clock),
+    );
+    return headers;
+  };
+  const geminiImagesAdaptor = new GeminiImagesAdaptor({
+    transport,
+    headersProvider: geminiHeadersProvider,
+  });
+  const imageAdaptorsByDialect = new Map<
+    string,
+    import('./http/images-endpoint.js').ImageProviderAdaptor
+  >([
+    ['gemini.generateContent', geminiImagesAdaptor],
+    ['openai.chat', openaiImagesAdaptor],
+    ['openai.images.generations', openaiImagesAdaptor],
+  ]);
+  const resolveImageAdaptor = (opts?: {
+    accessPath?: string;
+    dialect?: string;
+    baseUrl?: string;
+  }): import('./http/images-endpoint.js').ImageProviderAdaptor => {
+    if (opts?.dialect !== undefined) {
+      const byDialect = imageAdaptorsByDialect.get(opts.dialect);
+      if (byDialect !== undefined) return byDialect;
+    }
+    if (
+      opts?.accessPath !== undefined &&
+      credentialResolver.formatFor(opts.accessPath) === 'gemini.generateContent'
+    ) {
+      return geminiImagesAdaptor;
+    }
+    return openaiImagesAdaptor;
+  };
+  const imagesAdaptor: import('./http/images-endpoint.js').ImageProviderAdaptor = {
+    provider: openaiImagesAdaptor.provider,
+    access_path: openaiImagesAdaptor.access_path,
+    generate(req, opts) {
+      return resolveImageAdaptor(opts).generate(req, opts);
+    },
+    edit(req, opts) {
+      return resolveImageAdaptor(opts).edit(req, opts);
+    },
+  };
+  const openaiEmbeddingsAdaptor = new OpenAIEmbeddingsAdaptor({
     transport,
     headersProvider: openaiHeadersProvider,
   });
+  const geminiEmbeddingsAdaptor = new GeminiEmbeddingsAdaptor({
+    transport,
+    headersProvider: geminiHeadersProvider,
+  });
+  const embeddingAdaptorsByDialect = new Map<
+    string,
+    import('./http/embeddings-endpoint.js').EmbeddingProviderAdaptor
+  >([
+    ['gemini.generateContent', geminiEmbeddingsAdaptor],
+    ['openai.chat', openaiEmbeddingsAdaptor],
+    ['openai.embeddings', openaiEmbeddingsAdaptor],
+  ]);
+  const resolveEmbeddingAdaptor = (opts?: {
+    accessPath?: string;
+    dialect?: string;
+    baseUrl?: string;
+  }): import('./http/embeddings-endpoint.js').EmbeddingProviderAdaptor => {
+    if (opts?.dialect !== undefined) {
+      const byDialect = embeddingAdaptorsByDialect.get(opts.dialect);
+      if (byDialect !== undefined) return byDialect;
+    }
+    if (
+      opts?.accessPath !== undefined &&
+      credentialResolver.formatFor(opts.accessPath) === 'gemini.generateContent'
+    ) {
+      return geminiEmbeddingsAdaptor;
+    }
+    return openaiEmbeddingsAdaptor;
+  };
+  const embeddingsAdaptor: import('./http/embeddings-endpoint.js').EmbeddingProviderAdaptor = {
+    provider: openaiEmbeddingsAdaptor.provider,
+    access_path: openaiEmbeddingsAdaptor.access_path,
+    embed(req, opts) {
+      return resolveEmbeddingAdaptor(opts).embed(req, opts);
+    },
+  };
   // decision：native 位是 mock（没有真上游 key），降级位是 chat 模拟（复用
   // openai.chat codec）。默认策略 on_missing_upstream + 高风险不降级（15 §6.5）。
   const decisionDegradation: DecisionDegradationPolicy =
@@ -2164,13 +2262,18 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     const providerPrefix = accessPath.split('.')[0] ?? accessPath;
     const candidates = [
       accessPath,
+      `${providerPrefix}.gemini-generateContent`,
+      `${providerPrefix}.generateContent`,
       `${providerPrefix}.openai-responses`,
       `${providerPrefix}.openai-chat`,
       providerPrefix,
     ];
     const effectivePath =
       candidates.find((ap) => credentialResolver.credentialsFor(ap).length > 0) ?? accessPath;
+    const dialect = credentialResolver.formatFor(effectivePath);
     return {
+      accessPath: effectivePath,
+      dialect,
       baseUrl: credentialResolver.baseUrlFor(effectivePath),
       headersProvider: async () => {
         const { headers, credential_id } = await credentialResolver.headersFor(
@@ -2444,6 +2547,7 @@ function assembleAdmin(input: {
   routingTelemetry?: RoutingTelemetryHub;
   telemetryRefresher?: () => Promise<void>;
   pluginHost?: PluginHost;
+  pricingService?: PricingService;
 }): AdminAssembly | undefined {
   const { options, capabilityRegistry, credentialResolver, clock, providerRuntime } = input;
   if (options.recordStore === undefined) return undefined;
@@ -2549,6 +2653,7 @@ function assembleAdmin(input: {
     ...(input.routingTelemetry === undefined ? {} : { routingTelemetry: input.routingTelemetry }),
     ...(input.telemetryRefresher === undefined ? {} : { telemetryRefresher: input.telemetryRefresher }),
     ...(input.pluginHost === undefined ? {} : { pluginHost: input.pluginHost }),
+    ...(input.pricingService === undefined ? {} : { pricingService: input.pricingService }),
   });
 
   // ---- 认证 ----

@@ -42,7 +42,11 @@ import type {
   Stage,
 } from './types.js';
 import type { ClientSink } from './sink.js';
-import { shouldUseGatewayLoop, runToolLoop } from './tool-loop.js';
+import { collectToolUses, shouldUseGatewayLoop, runToolLoop } from './tool-loop.js';
+import {
+  executeDeepSeekWebSearch,
+  prepareDeepSeekWebSearchBridge,
+} from './deepseek-web-search.js';
 
 export interface PipelineRunnerOptions {
   /** S0 的鉴权器（Phase 1 默认 permissive；真实 virtual key 在 auth/ 模块）。 */
@@ -193,10 +197,39 @@ export class PipelineRunner {
       state.materialized = true;
       deps.metrics.increment('pipeline.materialize', 1, { stage: 'tool-loop' });
     }
+    // DeepSeek 专用兼容：混用 function tool 与 web_search 时，DeepSeek 上游会静默屏蔽
+    // deepseek_web_search；此时把 web_search 改写为普通 function tool 并启用网关侧搜索子循环。
+    // 先做廉价字节预检，避免无 web_search 的普通 DeepSeek 请求被强制物化。
+    let dsBridge: ReturnType<typeof prepareDeepSeekWebSearchBridge>;
+    const mayHaveWebSearch =
+      state.canonical !== undefined ||
+      (state.lazy !== undefined && state.lazy.raw.toString('utf8').includes('web_search'));
+    if (
+      state.short_circuit_response === undefined &&
+      ctx.route?.provider === 'deepseek' &&
+      mayHaveWebSearch
+    ) {
+      if (state.canonical === undefined && state.lazy !== undefined) {
+        state.canonical = state.lazy.full();
+        state.materialized = true;
+        deps.metrics.increment('pipeline.materialize', 1, { stage: 'deepseek-web-search-bridge' });
+      }
+      if (state.canonical !== undefined) {
+        dsBridge = prepareDeepSeekWebSearchBridge(state.canonical, ctx);
+        if (dsBridge !== undefined) {
+          state.canonical = dsBridge.req;
+          state.canonical_override = dsBridge.req;
+          if (ctx.fast_path) {
+            ctx.disableFastPath('deepseek_web_search_bridge');
+          }
+        }
+      }
+    }
+
     const useGatewayLoop =
       state.canonical !== undefined &&
       state.short_circuit_response === undefined &&
-      shouldUseGatewayLoop(state.canonical);
+      (dsBridge !== undefined || shouldUseGatewayLoop(state.canonical));
 
     if (useGatewayLoop) {
       // 网关循环需要往 canonical.messages 里追加 tool_use / tool_result 回合（APPEND_TURN），
@@ -215,6 +248,7 @@ export class PipelineRunner {
       const streamingLoop = state.shallow?.stream === true;
       const clientAdaptor = state.clientAdaptor;
       let loopStreamStarted = false;
+      let maxEmittedPartIndex = -1;
       const ensureLoopStreamSink = (): void => {
         if (!deps.sink.started) {
           deps.sink.start(200, {
@@ -232,6 +266,18 @@ export class PipelineRunner {
         ctx,
         {
           pluginHost: deps.pluginHost,
+          ...(dsBridge !== undefined
+            ? {
+                canHandleCall: (c) => c.name === dsBridge!.bridgedToolName,
+                fallbackExecutor: {
+                  execute: async (call, c) => ({
+                    type: 'tool_result',
+                    tool_use_id: call.id,
+                    content: await executeDeepSeekWebSearch(call, c, deps),
+                  }),
+                },
+              }
+            : {}),
           runTurn: async (req) => {
             const turnState: PipelineState = {
               ...state,
@@ -268,6 +314,7 @@ export class PipelineRunner {
                       ev.delta.type === 'thinking' ||
                       ev.delta.type === 'refusal')
                   ) {
+                    if (ev.index > maxEmittedPartIndex) maxEmittedPartIndex = ev.index;
                     ensureLoopStreamSink();
                     for await (const wire of clientAdaptor.encodeStream(
                       singleFrameStream(ev, ctx.request_id),
@@ -321,6 +368,38 @@ export class PipelineRunner {
       }
       if (streamingLoop && clientAdaptor !== undefined) {
         ensureLoopStreamSink();
+        const trailingTools = collectToolUses(loopResult.response);
+        const baseToolIndex = maxEmittedPartIndex + 1;
+        for (let i = 0; i < trailingTools.length; i++) {
+          const t = trailingTools[i]!;
+          const partIndex = baseToolIndex + i;
+          const rawArgs =
+            t.raw_arguments ?? (typeof t.input === 'string' ? t.input : JSON.stringify(t.input));
+          for (const ev of [
+            {
+              type: 'part.begin' as const,
+              index: partIndex,
+              part: { type: 'tool_use' as const, id: t.id, name: t.name, input: {} },
+            },
+            {
+              type: 'part.delta' as const,
+              index: partIndex,
+              delta: { type: 'tool_input_json' as const, partial_json: rawArgs },
+            },
+            {
+              type: 'part.end' as const,
+              index: partIndex,
+              part: t,
+            },
+          ]) {
+            for await (const wire of clientAdaptor.encodeStream(
+              singleFrameStream(ev, ctx.request_id),
+              ctx,
+            )) {
+              deps.sink.write(serializeWireEvent(wire));
+            }
+          }
+        }
         const finalUsage = state.usage ?? loopResult.response.usage;
         const tailEvents: CanonicalStreamEvent[] = [
           ...(Object.keys(finalUsage.units).length > 0

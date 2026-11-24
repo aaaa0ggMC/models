@@ -26,8 +26,6 @@ import {
 export function AliasesPage(): React.JSX.Element {
   const [rules, setRules] = useState<AliasRuleDto[]>([]);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
-  const [credentials, setCredentials] = useState<MaskedCredential[]>([]);
-  const [envCredentials, setEnvCredentials] = useState<EnvCredentialPathDto[]>([]);
   const [accessPaths, setAccessPaths] = useState<AccessPathDto[]>([]);
   const [capabilities, setCapabilities] = useState<CapabilityMatrixEntry[]>([]);
 
@@ -57,18 +55,14 @@ export function AliasesPage(): React.JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      const [aRes, pRes, cRes, eRes, apRes, capRes] = await Promise.all([
+      const [aRes, pRes, apRes, capRes] = await Promise.all([
         adminApi.listAliases(),
         adminApi.listProviders(),
-        adminApi.listCredentials(),
-        adminApi.listEnvCredentials().catch(() => ({ items: [] as EnvCredentialPathDto[] })),
         adminApi.listAccessPaths().catch(() => ({ items: [] as AccessPathDto[] })),
         adminApi.listCapabilities(),
       ]);
       setRules(aRes.items);
       setProviders(pRes.items);
-      setCredentials(cRes.items);
-      setEnvCredentials(eRes.items);
       setAccessPaths(apRes.items);
       setCapabilities(capRes.items);
     } catch (err) {
@@ -90,13 +84,11 @@ export function AliasesPage(): React.JSX.Element {
     () =>
       computeModelAvailability({
         providers,
-        credentials,
-        envCredentials,
         accessPaths,
         capabilities,
         modalityFilter: '',
       }),
-    [providers, credentials, envCredentials, accessPaths, capabilities],
+    [providers, accessPaths, capabilities],
   );
 
   function openModal(rule?: AliasRuleDto) {

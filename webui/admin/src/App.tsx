@@ -5,7 +5,6 @@ import { BrandLogo, SegmentedControl, StatusBadge } from './components/ui.js';
 import { AliasesPage } from './pages/Aliases.js';
 import { ChannelsPage } from './pages/Channels.js';
 import { ChatPage } from './pages/Chat.js';
-import { CredentialsPage } from './pages/Credentials.js';
 import { HelpPage } from './pages/Help.js';
 import { LoginPage } from './pages/Login.js';
 import { ModelCatalogPage } from './pages/ModelCatalog.js';
@@ -279,7 +278,6 @@ export function App(): React.JSX.Element {
           {route === 'overview' && <OverviewPage query={query} bootstrap={bootstrap} />}
           {route === 'chat' && <ChatPage />}
           {route === 'channels' && <ChannelsPage />}
-          {route === 'credentials' && <CredentialsPage />}
           {route === 'balances' && <ProviderBalancesPage />}
           {route === 'keys' && <VirtualKeysPage />}
           {route === 'aliases' && <AliasesPage />}

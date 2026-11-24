@@ -38,8 +38,6 @@ export function VirtualKeysPage(): React.JSX.Element {
   const [keys, setKeys] = useState<VirtualKeyDto[]>([]);
   const [authMode, setAuthMode] = useState<AuthModeResponse | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
-  const [credentials, setCredentials] = useState<MaskedCredential[]>([]);
-  const [envCredentials, setEnvCredentials] = useState<EnvCredentialPathDto[]>([]);
   const [accessPaths, setAccessPaths] = useState<AccessPathDto[]>([]);
   const [capabilities, setCapabilities] = useState<CapabilityMatrixEntry[]>([]);
   const [plugins, setPlugins] = useState<PluginInfoDto[]>([]);
@@ -89,12 +87,10 @@ export function VirtualKeysPage(): React.JSX.Element {
     setLoading(true);
     setError(null);
     try {
-      const [vkRes, modeRes, pRes, cRes, eRes, apRes, capRes, plRes] = await Promise.all([
+      const [vkRes, modeRes, pRes, apRes, capRes, plRes] = await Promise.all([
         adminApi.listVirtualKeys(),
         adminApi.getAuthMode().catch(() => null),
         adminApi.listProviders(),
-        adminApi.listCredentials(),
-        adminApi.listEnvCredentials().catch(() => ({ items: [] as EnvCredentialPathDto[] })),
         adminApi.listAccessPaths().catch(() => ({ items: [] as AccessPathDto[] })),
         adminApi.listCapabilities(),
         adminApi.listPlugins().catch(() => ({ items: [] as PluginInfoDto[], logs: [] })),
@@ -102,8 +98,6 @@ export function VirtualKeysPage(): React.JSX.Element {
       setKeys(vkRes.items);
       setAuthMode(modeRes);
       setProviders(pRes.items);
-      setCredentials(cRes.items);
-      setEnvCredentials(eRes.items);
       setAccessPaths(apRes.items);
       setCapabilities(capRes.items);
       setPlugins(plRes.items);
@@ -126,13 +120,11 @@ export function VirtualKeysPage(): React.JSX.Element {
     () =>
       computeModelAvailability({
         providers,
-        credentials,
-        envCredentials,
         accessPaths,
         capabilities,
         modalityFilter: '',
       }),
-    [providers, credentials, envCredentials, accessPaths, capabilities],
+    [providers, accessPaths, capabilities],
   );
 
   const uniqueAvailableModels = useMemo(() => {

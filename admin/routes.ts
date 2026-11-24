@@ -41,8 +41,6 @@ import type {
   AliasUpsertRequest,
   BalanceProbeResponse,
   BootstrapResponse,
-  CredentialCreateRequest,
-  CredentialProbeResponse,
   PluginUpdateRequest,
   VirtualKeyUpdateRequest,
   KeystoreRotateDekResponse,
@@ -295,48 +293,6 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
         return true;
       }
 
-      // ---- 凭据 ----
-      if (route === 'credentials' && method === 'GET') {
-        const provider = url.searchParams.get('provider') ?? undefined;
-        const items = await service.listCredentials(provider);
-        const page = pageOf(items, url);
-        sendJson(res, 200, { ...page, items: page.items });
-        return true;
-      }
-      if (route === 'credentials' && method === 'POST') {
-        const body = await readJson<CredentialCreateRequest>(req, res);
-        if (body === undefined) return true;
-        const result = await service.createCredential(actor, body);
-        if (!result.ok) {
-          sendJson(res, 400, { error: { code: 'invalid_credential', message: result.error } });
-          return true;
-        }
-        sendJson(res, 200, { ok: true, credential: result.credential });
-        return true;
-      }
-      const credMatch = /^credentials\/([^/]+)$/.exec(route);
-      if (credMatch !== null && method === 'DELETE') {
-        const deleted = await service.deleteCredential(actor, decodeURIComponent(credMatch[1]!));
-        sendJson(res, 200, { ok: true, deleted });
-        return true;
-      }
-      const credProbeMatch = /^credentials\/([^/]+)\/probe$/.exec(route);
-      if (credProbeMatch !== null && method === 'POST') {
-        const result = await service.probeCredential(decodeURIComponent(credProbeMatch[1]!));
-        const body: CredentialProbeResponse = {
-          ok: result.ok,
-          credential_id: decodeURIComponent(credProbeMatch[1]!),
-          status: result.status,
-          ...(result.upstream_status === undefined
-            ? {}
-            : { upstream_status: result.upstream_status }),
-          ...(result.message === undefined ? {} : { message: result.message }),
-          checked_at: result.checked_at,
-        };
-        sendJson(res, result.ok ? 200 : 502, body);
-        return true;
-      }
-
       // ---- OAuth 订阅登录（Device Code: openai-codex / xai；PKCE: openrouter）----
       if (route === 'oauth/device/start' && method === 'POST') {
         const body = await readJson<{ provider?: string }>(req, res);
@@ -416,7 +372,7 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
         const cb =
           typeof body.callback_url === 'string' && body.callback_url !== ''
             ? body.callback_url
-            : 'http://localhost:8790/admin/credentials';
+            : 'http://localhost:8790/admin/channels';
         const started = startOpenRouterPkce(cb);
         sendJson(res, 200, { ok: true, ...started });
         return true;
@@ -562,7 +518,15 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
         return true;
       }
       if (route === 'routing-telemetry/refresh' && method === 'POST') {
-        const resTelemetry = await service.refreshRoutingTelemetry();
+        const body =
+          (await readJson<{ provider?: string }>(req, res).catch(
+            () => ({}) as { provider?: string },
+          )) ?? {};
+        const target =
+          typeof body.provider === 'string' && body.provider.trim() !== ''
+            ? body.provider.trim()
+            : undefined;
+        const resTelemetry = await service.refreshRoutingTelemetry(target);
         sendJson(res, 200, resTelemetry);
         return true;
       }
@@ -596,15 +560,6 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
       // ---- access path 列表（UI 下拉）----
       if (route === 'access-paths' && method === 'GET') {
         sendJson(res, 200, { items: service.listAccessPaths() });
-        return true;
-      }
-
-      // ---- env 档凭据的布尔事实（哪些 access path 上有 key；不暴露变量名与值）----
-      // 消费者：管理面「选模型」的可用性判据。Phase 1 的 key 只走环境变量
-      // （AGENTS.md），而 /credentials 只列加密存储里的记录——缺这个端点，
-      // 「建好渠道 + 设好 env key」的部署会在选择器里显示成没有模型。
-      if (route === 'env-credentials' && method === 'GET') {
-        sendJson(res, 200, { items: service.listEnvCredentialPaths() });
         return true;
       }
 
@@ -772,7 +727,7 @@ export function createAdminRouter(deps: AdminRouterDeps): AdminRouteHandler {
         const cb =
           typeof body.callback_url === 'string' && body.callback_url !== ''
             ? body.callback_url
-            : 'http://localhost:8790/admin/credentials';
+            : 'http://localhost:8790/admin/channels';
         const started = startOpenRouterPkce(cb);
         sendJson(res, 200, { ok: true, ...started });
         return true;

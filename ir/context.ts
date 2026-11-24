@@ -119,6 +119,8 @@ export const CTX_STATE_KEYS = {
   LAZY_ENVELOPE: 'lazy_envelope',
   /** 客户端原始请求体字节引用（fast path 透传用）。 */
   RAW_BODY: 'raw_body',
+  /** 客户端原始请求路径（Gemini model-in-path 等依赖路径的 codec 用）。 */
+  REQUEST_PATH: 'request_path',
   /**
    * 本次实际使用的上游凭据 id（S5 填，S10 读；多 key 换钥时是**最终成功的那一把**）。
    *

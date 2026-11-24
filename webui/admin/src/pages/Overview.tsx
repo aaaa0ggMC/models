@@ -57,7 +57,6 @@ export function OverviewPage({
   const [prevUsage, setPrevUsage] = useState<UsageDashboardResponse | null>(null);
   const [timeseries, setTimeseries] = useState<UsageTimeseriesResponse | null>(null);
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
-  const [credentials, setCredentials] = useState<MaskedCredential[]>([]);
   const [aliases, setAliases] = useState<AliasRuleDto[]>([]);
   const [virtualKeys, setVirtualKeys] = useState<VirtualKeyDto[]>([]);
 
@@ -73,12 +72,11 @@ export function OverviewPage({
       const prevFromTs = fromTs - spec.durationMs;
 
       try {
-        const [u, pu, ts, provs, creds, als, vks] = await Promise.all([
+        const [u, pu, ts, provs, als, vks] = await Promise.all([
           adminApi.getUsageDashboard(fromTs, now),
           adminApi.getUsageDashboard(prevFromTs, fromTs),
           adminApi.getUsageTimeseries(fromTs, now, spec.bucketMs),
           adminApi.listProviders(),
-          adminApi.listCredentials(),
           adminApi.listAliases(),
           adminApi.listVirtualKeys().catch(() => ({ items: [] as VirtualKeyDto[], total: 0, limit: 0, offset: 0 })),
         ]);
@@ -87,7 +85,6 @@ export function OverviewPage({
         setPrevUsage(pu);
         setTimeseries(ts);
         setProviders(provs.items);
-        setCredentials(creds.items);
         setAliases(als.items);
         setVirtualKeys(vks.items);
       } catch (err) {
@@ -130,8 +127,10 @@ export function OverviewPage({
   const autoDisabledChannels = providers.filter((p) =>
     isProviderAutoDisabled(p.auto_disabled),
   ).length;
-  const healthyCreds = credentials.filter((c) => c.enabled && c.health !== 'error').length;
-  const errorCreds = credentials.filter((c) => c.health === 'error').length;
+  const healthyCreds = providers.filter(
+    (p) => p.has_key === true && p.credential_health !== 'error',
+  ).length;
+  const errorCreds = providers.filter((p) => p.credential_health === 'error').length;
   const activeVks = virtualKeys.filter((k) => k.status === 'active').length;
 
   return (
@@ -347,10 +346,10 @@ export function OverviewPage({
                 justifyContent: 'space-between',
               }}
             >
-              <span>凭据健康</span>
+              <span>渠道密钥</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <strong className="ag-tabular">
-                  {healthyCreds} / {credentials.length}
+                  {healthyCreds} / {providers.length}
                 </strong>
                 {errorCreds > 0 ? (
                   <StatusBadge tone="danger">{errorCreds} 异常</StatusBadge>

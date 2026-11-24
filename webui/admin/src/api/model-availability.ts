@@ -75,16 +75,16 @@ export interface ModelAvailabilitySnapshot {
  */
 export function computeModelAvailability(input: {
   providers: readonly ProviderConfig[];
-  credentials: readonly MaskedCredential[];
-  envCredentials: readonly EnvCredentialPathDto[];
+  credentials?: readonly MaskedCredential[];
+  envCredentials?: readonly EnvCredentialPathDto[];
   accessPaths: readonly AccessPathDto[];
   capabilities: readonly CapabilityMatrixEntry[];
   modalityFilter?: string;
 }): ModelAvailabilitySnapshot {
   const {
     providers,
-    credentials,
-    envCredentials,
+    credentials = [],
+    envCredentials = [],
     accessPaths,
     capabilities,
     modalityFilter = 'chat',
@@ -105,11 +105,23 @@ export function computeModelAvailability(input: {
     if (!cred.enabled || cred.health === 'error') continue;
     storedCredCount.set(cred.access_path, (storedCredCount.get(cred.access_path) ?? 0) + 1);
   }
+  const providerHasKey = new Set<string>();
+  for (const p of providers) {
+    if (p.has_key === true && p.credential_health !== 'error') {
+      providerHasKey.add(p.id);
+      providerHasKey.add(deriveAccessPath(p.id, p.dialect));
+    }
+  }
 
   const hasPathCredential = (accessPath: string): boolean => {
     const apMeta = accessPathMap.get(accessPath);
     if (apMeta && !apMeta.requires_credential) return true;
-    return (storedCredCount.get(accessPath) ?? 0) > 0 || (envCredCount.get(accessPath) ?? 0) > 0;
+    return (
+      providerHasKey.has(accessPath) ||
+      providerHasKey.has(providerIdFromAccessPath(accessPath)) ||
+      (storedCredCount.get(accessPath) ?? 0) > 0 ||
+      (envCredCount.get(accessPath) ?? 0) > 0
+    );
   };
 
   // 建立渠道索引（按派生路径及厂商前缀匹配）

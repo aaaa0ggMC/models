@@ -135,7 +135,19 @@ export interface LogoutResponse {
 // Provider CRUD
 // ---------------------------------------------------------------------------
 
-/** 一个上游 provider 的配置（**不含任何凭据**）。 */
+/** 渠道名下的一把已脱敏密钥（前端只读展示，绝不含明文）。 */
+export interface MaskedProviderKey {
+  id: string;
+  /** 脱敏展示串（如 `sk-****1234` / `$GEMINI_API_KEY` / `OAuth`）。 */
+  masked: string;
+  /** 来源：加密库存储 / 环境变量引用 / OAuth 订阅。 */
+  source: 'stored' | 'env' | 'oauth';
+  /** 环境变量名（仅 source === 'env' 时）。 */
+  env_var?: string;
+  enabled: boolean;
+}
+
+/** 一个上游 provider 的配置（密钥仅以脱敏摘要返回）。 */
 export interface ProviderConfig {
   id: string;
   /** 人类可读名。 */
@@ -204,6 +216,10 @@ export interface ProviderConfig {
   credential_health?: 'unknown' | 'ok' | 'error';
   /** 最近一次凭据探测时刻（epoch ms）。 */
   credential_last_checked?: number;
+  /** 渠道名下已配置的脱敏密钥摘要（只读，由服务端填充）。 */
+  keys?: MaskedProviderKey[];
+  /** 是否已有可用密钥（含加密库存储、环境变量与 OAuth）。 */
+  has_key?: boolean;
   created_at: number;
   updated_at: number;
   note?: string;
@@ -239,6 +255,11 @@ export interface ProviderUpsertRequest {
   capability_overrides?: ProviderConfig['capability_overrides'];
   enabled?: boolean;
   note?: string;
+  /**
+   * 上游 API Key 列表（支持多把轮换；以 `$` 开头表示引用环境变量如 `$GEMINI_API_KEY`）。
+   * 省略时保留已有密钥不变；传空数组清空加密库中保存的 API Key。
+   */
+  api_keys?: string[];
 }
 
 export interface ProviderUpsertResponse {
@@ -557,6 +578,12 @@ export interface CapabilityMatrixEntry {
   internal?: boolean;
   /** provider 未配置（渠道表与凭据库都没有它）：默认不列，`?all=1` 才出现并带此标注。 */
   availability?: 'unconfigured';
+  /** 模型参考单价（来自定价服务：渠道自定义 > 厂商官方表 > models.dev 离线目录）。 */
+  pricing?: {
+    currency: string;
+    tier?: string;
+    rates: Record<string, number>;
+  };
 }
 
 export interface CapabilityMatrixResponse {

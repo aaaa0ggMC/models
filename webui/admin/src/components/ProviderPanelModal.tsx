@@ -676,6 +676,20 @@ export function ProviderPanelModal({
           if (found) modelMetadata[id] = found;
         }
       }
+      // 新建模式或编辑模式开启「更换密钥」时，把密钥列表随渠道一并提交，后端原子加密入库并刷新路由
+      let apiKeysToSave: string[] | undefined;
+      if (!isEdit || replaceCredentialMode) {
+        if (useEnvRef && envRef.trim()) {
+          const cleanEnv = envRef.trim().replace(/^env:/, '').replace(/^\$/, '');
+          apiKeysToSave = [`$${cleanEnv}`];
+        } else if (apiKey.trim()) {
+          apiKeysToSave = apiKey
+            .split(/[\r\n]+/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+        }
+      }
+
       await adminApi.upsertProvider({
         id: finalId,
         label: finalLabel,
@@ -697,37 +711,8 @@ export function ProviderPanelModal({
         ...(parsedPricing !== undefined ? { pricing: parsedPricing } : {}),
         enabled,
         ...(note.trim() ? { note: note.trim() } : {}),
+        ...(apiKeysToSave !== undefined ? { api_keys: apiKeysToSave } : {}),
       });
-
-      // 新建模式或编辑模式开启「更换密钥」时，先清理该渠道名下旧凭据（防止同名重建残留旧凭据）再写入新路径
-      if ((!isEdit || replaceCredentialMode) && (apiKey.trim() || (useEnvRef && envRef.trim()))) {
-        const oldCreds = await adminApi.listCredentials(finalId);
-        for (const c of oldCreds.items.filter((x) => x.provider === finalId)) {
-          await adminApi.deleteCredential(c.id);
-        }
-        const derivedPath = `${finalId}.${dialect.replace('.', '-')}`;
-        const pathsToSave = new Set<string>([derivedPath]);
-        if (currentPreset && (currentPreset.id === finalId || currentPreset.id === selectedPresetId)) {
-          for (const ap of currentPreset.access_paths) {
-            const mapped = ap.id.startsWith(`${currentPreset.id}.`)
-              ? `${finalId}${ap.id.slice(currentPreset.id.length)}`
-              : ap.id;
-            pathsToSave.add(mapped);
-          }
-        }
-        if (finalId === 'openai' || selectedPresetId === 'openai') {
-          pathsToSave.add('openai.images');
-        }
-        for (const ap of pathsToSave) {
-          await adminApi.createCredential({
-            provider: finalId,
-            access_path: ap,
-            ...(useEnvRef
-              ? { env_ref: envRef.trim().startsWith('env:') ? envRef.trim() : `env:${envRef.trim()}` }
-              : { secret: apiKey.trim() }), // privacy-scan: ignore —— 内存变量传递给创建接口
-          });
-        }
-      }
 
       onSaved();
       onClose();
@@ -1203,7 +1188,13 @@ export function ProviderPanelModal({
               ) : (
                 <StatusBadge tone="warning">未录入</StatusBadge>
               )}
-              <span className="ag-secondary">已存密钥不回显</span>
+              {editingProvider?.keys && editingProvider.keys.length > 0 ? (
+                <span className="ag-secondary ag-mono" style={{ fontSize: 12 }}>
+                  {editingProvider.keys.map((k) => k.masked).join(' · ')}
+                </span>
+              ) : (
+                <span className="ag-secondary">已存密钥不回显</span>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button
@@ -1212,16 +1203,6 @@ export function ProviderPanelModal({
                 onClick={() => setReplaceCredentialMode(true)}
               >
                 更换密钥
-              </button>
-              <button
-                type="button"
-                className="ag-btn ag-btn-sm"
-                onClick={() => {
-                  onClose();
-                  navigate('credentials');
-                }}
-              >
-                去凭据页管理 →
               </button>
             </div>
           </div>

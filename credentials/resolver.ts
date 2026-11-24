@@ -190,6 +190,14 @@ export const DEFAULT_ACCESS_PATHS: AccessPath[] = [
     requires_credential: true,
   },
   {
+    id: 'gemini.generateContent',
+    label: 'Google Gemini (generateContent)',
+    format: 'gemini.generateContent',
+    usage_source: 'provider',
+    model_namespaces: ['gemini', 'google'],
+    requires_credential: true,
+  },
+  {
     id: 'deepseek.openai-chat',
     label: 'DeepSeek (OpenAI 兼容)',
     format: 'openai.chat',
@@ -234,6 +242,7 @@ const KEY_ENV_BY_ACCESS_PATH: Record<string, string> = {
   'openai.images': 'AG_OPENAI_API_KEY',
   'openai.embeddings': 'AG_OPENAI_API_KEY',
   anthropic: 'AG_ANTHROPIC_API_KEY',
+  'gemini.generateContent': 'GEMINI_API_KEY',
   // DeepSeek 两个 dialect 共用同一个 key（同一账号、同一套计费）
   'deepseek.openai-chat': 'DEEPSEEK_API_KEY',
   'deepseek.anthropic-messages': 'DEEPSEEK_API_KEY',
@@ -293,6 +302,7 @@ export const DEFAULT_BASE_URL_BY_ACCESS_PATH: Record<string, string> = {
   'openai.images': 'https://api.openai.com',
   'openai.embeddings': 'https://api.openai.com',
   anthropic: 'https://api.anthropic.com',
+  'gemini.generateContent': 'https://generativelanguage.googleapis.com',
   'deepseek.openai-chat': 'https://api.deepseek.com',
   'deepseek.anthropic-messages': 'https://api.deepseek.com',
   'mimo.openai-chat': 'https://token-plan-cn.xiaomimimo.com',
@@ -458,7 +468,12 @@ export class EnvCredentialResolver implements CredentialResolver {
     if (accessPath.endsWith('.openai-responses') || accessPath === 'openai.responses') {
       return 'openai.responses';
     }
-    if (accessPath.endsWith('.gemini-generateContent') || accessPath === 'gemini') {
+    if (
+      accessPath === 'gemini.generateContent' ||
+      accessPath.endsWith('.gemini-generateContent') ||
+      accessPath.endsWith('.gemini.generateContent') ||
+      accessPath === 'gemini'
+    ) {
       return 'gemini.generateContent';
     }
     return 'openai.chat';

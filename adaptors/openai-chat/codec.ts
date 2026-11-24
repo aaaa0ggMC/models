@@ -73,6 +73,11 @@ import type {
 import { CTX_STATE_KEYS, IR_VERSION } from '../../ir/index.js';
 import type { Adaptor, AdaptorMeta, EncodedRequest, RequestEnvelopeShallow } from '../types.js';
 import type { ProviderProfile, ProviderProfileRegistry } from '../../di/ports.js';
+import {
+  applyClientProviderOptions,
+  applyNativeVendorOptions,
+  filterUnmappedForPassthrough,
+} from '../provider-options.js';
 
 /** 本 codec 的格式 id、模态与默认端点（20 §S0 路径签名表）。 */
 const FORMAT: FormatId = 'openai.chat';
@@ -740,6 +745,8 @@ export class OpenAIChatCodec implements Adaptor {
       params.thinking = thinking;
     }
 
+    applyClientProviderOptions(obj, params);
+
     return Object.keys(params).length > 0 ? params : undefined;
   }
 
@@ -866,6 +873,19 @@ export class OpenAIChatCodec implements Adaptor {
       }
     }
 
+    applyNativeVendorOptions({
+      native: params?.native,
+      acceptedVendors: ['openai', 'deepseek'],
+      body,
+      protectedKeys: new Set(['model', 'messages']),
+      mergeObjectKeys: new Set(['stream_options']),
+      sourceFormat: req.source_format,
+      targetFormat: FORMAT,
+      dropped,
+      warnings,
+      diagnostics,
+    });
+
     // 10 §7.2 第 3 条：顶层 unmapped 回写（同格式互转时的无损保证）。
     //
     // **只在同格式时成立**（第 1 条「整体还原」的前提是 `source_provider === 目标格式`，
@@ -875,7 +895,7 @@ export class OpenAIChatCodec implements Adaptor {
     // `truncation` / `prompt_cache_key` 之类会顺着 canonical 的 `raw.unmapped` 流到这里，
     // 照抄进 Chat 请求体就是静默注入（上游要么忽略、要么 400，而我们没有任何诊断）。
     if (req.raw.source_provider === PROVIDER_NAME) {
-      for (const [key, value] of Object.entries(req.raw.unmapped ?? {})) {
+      for (const [key, value] of Object.entries(filterUnmappedForPassthrough(req.raw.unmapped))) {
         body[key] = value;
       }
       // 10 §7.2 第 2 条：未建模的 tool / tool_choice 节点级还原。
@@ -1539,7 +1559,13 @@ export class OpenAIChatCodec implements Adaptor {
     tokens: NonNullable<CanonicalUsage['units']['tokens']>,
     rawUsage: Record<string, unknown> | undefined,
   ): Record<string, unknown> {
-    if (rawUsage !== undefined) return { ...rawUsage };
+    if (
+      rawUsage !== undefined &&
+      typeof rawUsage['prompt_tokens'] === 'number' &&
+      typeof rawUsage['completion_tokens'] === 'number'
+    ) {
+      return { ...rawUsage };
+    }
     const usage: Record<string, unknown> = {
       prompt_tokens: tokens.input_tokens,
       completion_tokens: tokens.output_tokens,

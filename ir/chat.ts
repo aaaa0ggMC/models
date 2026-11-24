@@ -232,6 +232,12 @@ export interface ChatParams {
   service_tier?: 'auto' | 'default' | 'flex' | 'priority';
   /** Gemini safetySettings。 */
   safety?: SafetySetting[];
+  /**
+   * 厂商专有参数命名空间（10 §3 决策 D2：`native.<vendor>.*`）。
+   * 按目标厂商隔离（如 `gemini` / `anthropic` / `openai` / `deepseek`），
+   * 仅目标 adaptor 匹配该命名空间时才透传到上游请求体，避免跨厂商污染。
+   */
+  native?: Record<string, Record<string, unknown>>;
   /** 并行工具调用（OpenAI 语义；Anthropic/Gemini 无直接对应，40 §7.1）。 */
   parallel_tool_calls?: boolean;
   /** 结构化输出。 */

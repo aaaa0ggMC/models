@@ -4,7 +4,6 @@ export type RouteId =
   | 'overview'
   | 'chat'
   | 'channels'
-  | 'credentials'
   | 'balances'
   | 'keys'
   | 'aliases'
@@ -58,7 +57,6 @@ export const NAV_TREE: readonly NavNode[] = [
     label: '上游接入',
     items: [
       { id: 'channels', label: '渠道' },
-      { id: 'credentials', label: '凭据' },
       { id: 'balances', label: '余额与配额' },
     ],
   },
@@ -98,7 +96,6 @@ export const VALID_ROUTES = new Set<RouteId>([
   'overview',
   'chat',
   'channels',
-  'credentials',
   'balances',
   'keys',
   'aliases',

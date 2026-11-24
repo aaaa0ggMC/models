@@ -905,14 +905,16 @@ describe('服务端工具默认注入（真实请求链路）', () => {
   });
 });
 
-describe('删除渠道级联凭据', () => {
-  it('默认删除渠道时级联删除仅属于该渠道的凭据', async () => {
+describe('删除渠道级联清理密钥', () => {
+  it('默认删除渠道时级联删除仅属于该渠道的密钥', async () => {
     const h = await build();
-    await makeProvider(h, 'deepseek');
-    await api(h, 'POST', '/admin/api/credentials', {
-      provider: 'deepseek',
-      access_path: 'deepseek.openai-chat',
-      secret: FAKE_KEY, // privacy-scan: ignore —— 顶部假 key 常量
+    await api(h, 'POST', '/admin/api/providers', {
+      id: 'deepseek',
+      label: 'DeepSeek',
+      dialect: 'openai.chat',
+      base_url: 'https://api.deepseek.com',
+      model_source: { kind: 'static', models: ['deepseek-chat'] },
+      api_keys: [FAKE_KEY], // privacy-scan: ignore —— 顶部假 key 常量
     });
 
     const del = await api(h, 'DELETE', '/admin/api/providers/deepseek');
@@ -921,18 +923,20 @@ describe('删除渠道级联凭据', () => {
     expect(Array.isArray(del.body.deleted_credentials)).toBe(true);
     expect((del.body.deleted_credentials as string[]).length).toBe(1);
 
-    const creds = await api(h, 'GET', '/admin/api/credentials');
-    expect((creds.body.items as unknown[]).length).toBe(0);
+    const creds = await h.gateway.admin!.adminService.listCredentials();
+    expect(creds.length).toBe(0);
     await close(h);
   });
 
-  it('传 cascade_credentials=false 时删除渠道但保留凭据', async () => {
+  it('传 cascade_credentials=false 时删除渠道但保留密钥', async () => {
     const h = await build();
-    await makeProvider(h, 'deepseek');
-    await api(h, 'POST', '/admin/api/credentials', {
-      provider: 'deepseek',
-      access_path: 'deepseek.openai-chat',
-      secret: FAKE_KEY, // privacy-scan: ignore —— 顶部假 key 常量
+    await api(h, 'POST', '/admin/api/providers', {
+      id: 'deepseek',
+      label: 'DeepSeek',
+      dialect: 'openai.chat',
+      base_url: 'https://api.deepseek.com',
+      model_source: { kind: 'static', models: ['deepseek-chat'] },
+      api_keys: [FAKE_KEY], // privacy-scan: ignore —— 顶部假 key 常量
     });
 
     const del = await api(h, 'DELETE', '/admin/api/providers/deepseek?cascade_credentials=false');
@@ -940,17 +944,17 @@ describe('删除渠道级联凭据', () => {
     expect(del.body.deleted).toBe(true);
     expect(del.body.deleted_credentials).toEqual([]);
 
-    const creds = await api(h, 'GET', '/admin/api/credentials');
-    expect((creds.body.items as unknown[]).length).toBe(1);
+    const creds = await h.gateway.admin!.adminService.listCredentials();
+    expect(creds.length).toBe(1);
     await close(h);
   });
 
-  it('被其他剩余渠道引用的共享凭据不会被误删', async () => {
+  it('被其他剩余渠道引用的共享密钥不会被误删', async () => {
     const h = await build();
     await makeProvider(h, 'p1');
     await makeProvider(h, 'p2');
     // 这条凭据同时关联 p1（access_path）与 p2（provider），删 p1 时必须保留
-    await api(h, 'POST', '/admin/api/credentials', {
+    await h.gateway.admin!.adminService.createCredential('test', {
       provider: 'p2',
       access_path: 'p1.openai-chat',
       secret: FAKE_KEY, // privacy-scan: ignore —— 顶部假 key 常量
@@ -960,24 +964,28 @@ describe('删除渠道级联凭据', () => {
     expect(del.status).toBe(200);
     expect(del.body.deleted_credentials).toEqual([]);
 
-    const creds = await api(h, 'GET', '/admin/api/credentials');
-    expect((creds.body.items as unknown[]).length).toBe(1);
+    const creds = await h.gateway.admin!.adminService.listCredentials();
+    expect(creds.length).toBe(1);
     await close(h);
   });
 
-  it('批量删除渠道默认级联删除独占凭据，且支持 cascade_credentials=false', async () => {
+  it('批量删除渠道默认级联删除独占密钥，且支持 cascade_credentials=false', async () => {
     const h = await build();
-    await makeProvider(h, 'p1');
-    await makeProvider(h, 'p2');
-    await api(h, 'POST', '/admin/api/credentials', {
-      provider: 'p1',
-      access_path: 'p1.openai-chat',
-      secret: FAKE_KEY, // privacy-scan: ignore —— 顶部假 key 常量
+    await api(h, 'POST', '/admin/api/providers', {
+      id: 'p1',
+      label: 'P1',
+      dialect: 'openai.chat',
+      base_url: 'https://p1.example.com',
+      model_source: { kind: 'static', models: ['m1'] },
+      api_keys: [FAKE_KEY], // privacy-scan: ignore —— 顶部假 key 常量
     });
-    await api(h, 'POST', '/admin/api/credentials', {
-      provider: 'p2',
-      access_path: 'p2.openai-chat',
-      secret: FAKE_KEY, // privacy-scan: ignore —— 顶部假 key 常量
+    await api(h, 'POST', '/admin/api/providers', {
+      id: 'p2',
+      label: 'P2',
+      dialect: 'openai.chat',
+      base_url: 'https://p2.example.com',
+      model_source: { kind: 'static', models: ['m2'] },
+      api_keys: [FAKE_KEY], // privacy-scan: ignore —— 顶部假 key 常量
     });
 
     const keepRes = await api(h, 'POST', '/admin/api/providers/batch', {
@@ -987,7 +995,7 @@ describe('删除渠道级联凭据', () => {
     });
     expect(keepRes.status).toBe(200);
     expect(keepRes.body.deleted_credentials).toEqual([]);
-    expect(((await api(h, 'GET', '/admin/api/credentials')).body.items as unknown[]).length).toBe(2);
+    expect((await h.gateway.admin!.adminService.listCredentials()).length).toBe(2);
 
     const cascadeRes = await api(h, 'POST', '/admin/api/providers/batch', {
       ids: ['p2'],
@@ -995,7 +1003,7 @@ describe('删除渠道级联凭据', () => {
     });
     expect(cascadeRes.status).toBe(200);
     expect((cascadeRes.body.deleted_credentials as string[]).length).toBe(1);
-    expect(((await api(h, 'GET', '/admin/api/credentials')).body.items as unknown[]).length).toBe(1);
+    expect((await h.gateway.admin!.adminService.listCredentials()).length).toBe(1);
     await close(h);
   });
 });
