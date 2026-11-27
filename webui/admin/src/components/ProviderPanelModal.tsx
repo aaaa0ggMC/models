@@ -466,10 +466,11 @@ export function ProviderPanelModal({
     setFetchError(null);
     try {
       const targetId = isEdit ? editingProvider.id : customId.trim() || selectedPresetId;
+      const trimmedKey = apiKey.trim();
       const res = await adminApi.fetchProviderModels({
         base_url: baseUrl.trim(),
         dialect,
-        ...(isEdit ? { provider_id: targetId } : { api_key: apiKey.trim() }), // privacy-scan: ignore —— 预览拉取模型的请求体内存字段
+        ...(trimmedKey !== '' ? { api_key: trimmedKey } : { provider_id: targetId }), // privacy-scan: ignore —— 预览拉取模型的请求体内存字段
       });
 
       if (!res.ok) {

@@ -23,6 +23,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { updateOnlineModelsDevPricing } from '../metering/models-dev-pricing.js';
 import { parseModelMetadataLookupCandidates } from '../catalog/registry.js';
 import { parseOAuthSecret } from '../credentials/oauth.js';
 import { fileURLToPath } from 'node:url';
@@ -154,6 +155,23 @@ export function decodeUpstreamModelsResponse(raw: unknown): DecodedUpstreamModel
       if (rec['model_type'] === '语音合成') dto.category = 'tts';
       else if (rec['model_type'] === '语音识别') dto.category = 'asr';
       else if (rec['model_type'] === '大语言模型') dto.category = 'chat';
+      else if (rec['type'] === 'decision' || rec['recommended_api'] === 'systemone') {
+        dto.category = 'decision';
+      } else if (rec['type'] === 'embedding' || rec['recommended_api'] === 'embeddings') {
+        dto.category = 'embedding';
+      } else if (rec['type'] === 'image') {
+        dto.category = 'image';
+      } else if (rec['type'] === 'video') {
+        dto.category = 'video';
+      }
+      if (Array.isArray(modalitiesObj?.['output'])) {
+        const rawOutputs = modalitiesObj['output'].map((x) => String(x).toLowerCase());
+        if (dto.category === undefined && rawOutputs.includes('decision')) {
+          dto.category = 'decision';
+        } else if (dto.category === undefined && rawOutputs.includes('embedding')) {
+          dto.category = 'embedding';
+        }
+      }
       if (Array.isArray(rec['output_modalities'])) {
         dto.output_modalities = dedupeModalities(rec['output_modalities'], normalizeOutputModality);
       } else if (Array.isArray(modalitiesObj?.['output'])) {
@@ -189,6 +207,41 @@ export function decodeUpstreamModelsResponse(raw: unknown): DecodedUpstreamModel
       }
       const constraints = extractConstraints(rec);
       if (constraints !== undefined) dto.constraints = constraints;
+      // 提取上游自带单价（OpenCode Go `cost.text.input.price` / OpenRouter `pricing.prompt`）
+      const costObj = asObj(rec['cost']);
+      const costText = asObj(costObj?.['text']);
+      const costTextIn = asObj(costText?.['input']);
+      const costTextInCache = asObj(costTextIn?.['cache']);
+      const pricingObj = asObj(rec['pricing']);
+      const ocIn = costTextIn?.['price'];
+      const ocOut = asObj(costText?.['output'])?.['price'];
+      const ocCache = costTextInCache?.['read'] ?? asObj(costText?.['cache_read'])?.['price'];
+      if (typeof ocIn === 'number' || typeof ocOut === 'number') {
+        dto.pricing = {
+          ...(typeof ocIn === 'number' ? { input: ocIn } : {}),
+          ...(typeof ocOut === 'number' ? { output: ocOut } : {}),
+          ...(typeof ocCache === 'number' ? { cache_read: ocCache } : {}),
+          currency: 'USD',
+        };
+      } else if (pricingObj !== undefined) {
+        const pIn = Number(pricingObj['prompt']);
+        const pOut = Number(pricingObj['completion']);
+        const pCache = Number(pricingObj['input_cache_read']);
+        if (Number.isFinite(pIn) || Number.isFinite(pOut)) {
+          // OpenRouter pricing 是每 token 美元（< 0.01），换算为每 1M tokens
+          const scale =
+            (Number.isFinite(pIn) && pIn > 0 && pIn < 0.001) ||
+            (Number.isFinite(pOut) && pOut > 0 && pOut < 0.001)
+              ? 1_000_000
+              : 1;
+          dto.pricing = {
+            ...(Number.isFinite(pIn) ? { input: pIn * scale } : {}),
+            ...(Number.isFinite(pOut) ? { output: pOut * scale } : {}),
+            ...(Number.isFinite(pCache) ? { cache_read: pCache * scale } : {}),
+            currency: 'USD',
+          };
+        }
+      }
       data.push(dto);
     }
     return { data, looksLikeList: true };
@@ -507,7 +560,13 @@ function getOfflineModelsDevIndex(): Map<string, OfflineModelMeta> {
 }
 
 function inferModelCategory(m: UpstreamModelDto): UpstreamModelCategory {
+  if (m.category !== undefined && m.category !== 'chat') {
+    return m.category;
+  }
   const id = m.id.toLowerCase();
+  if (/(^|[-_/.])(decision|decisions)([-_/.]|$)|^jev(?:[-_.\d]|$)/i.test(id)) {
+    return 'decision';
+  }
   if (
     (m.output_modalities?.includes('audio') && !m.output_modalities.includes('text')) ||
     /(^tts-|-tts\b|-tts-|speech)/i.test(id)
@@ -636,7 +695,12 @@ function enrichModelsWithIndex(
       if (category === 'asr') {
         m.input_modalities = ['audio'];
         filledFromInference = true;
-      } else if (category === 'tts' || category === 'image' || category === 'embedding') {
+      } else if (
+        category === 'tts' ||
+        category === 'image' ||
+        category === 'embedding' ||
+        category === 'decision'
+      ) {
         m.input_modalities = ['text'];
         filledFromInference = true;
       }
@@ -692,6 +756,11 @@ function enrichModelsWithIndex(
         m.specs = {
           billing_unit: '按输入 Token',
           capability: '向量嵌入',
+        };
+      } else if (category === 'decision') {
+        m.specs = {
+          billing_unit: '按输入 Token',
+          capability: '结构化决策',
         };
       }
     }
@@ -769,6 +838,7 @@ export async function syncModelsWithOnlineModelsDev(
         };
       }
       const parsed = (await res.json()) as unknown;
+      updateOnlineModelsDevPricing(parsed);
       index = parseOnlineModelsDevIndex(parsed);
       cachedOnlineIndex = { fetchedAt: now, map: index };
     } catch {

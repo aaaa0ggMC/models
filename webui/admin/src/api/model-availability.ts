@@ -31,6 +31,9 @@ export function inferModelModality(modelId: string, capModality?: string): strin
   if (/(^|[-_/.])(embed|embedding|embeddings|bge|text-embedding)([-_/.]|$)/.test(lower)) {
     return 'embedding';
   }
+  if (/(^|[-_/.])(decision|decisions)([-_/.]|$)|(?:^|\/)jev(?:[-_.\d]|$)/.test(lower)) {
+    return 'decision';
+  }
   if (/(^|[-_/.])(rerank|reranker)([-_/.]|$)/.test(lower)) return 'rerank';
   if (
     /(^|[-_/.])(imagen|dall-e|gpt-image|chatgpt-image|grok-imagine|flux|sdxl|wanx|kolors)([-_/.]|$)/.test(

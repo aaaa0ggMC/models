@@ -30,6 +30,7 @@ const MODALITY_OPTIONS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'audio_tts', label: '语音合成' },
   { id: 'audio_stt', label: '语音识别' },
   { id: 'embedding', label: '向量' },
+  { id: 'decision', label: '决策' },
   { id: 'rerank', label: '重排' },
   { id: 'video', label: '视频' },
 ];

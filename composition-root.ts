@@ -139,11 +139,18 @@ import { OpenAIEmbeddingsAdaptor } from './providers/openai-embeddings/index.js'
 import { GeminiImagesAdaptor, GeminiEmbeddingsAdaptor } from './providers/gemini/index.js';
 import {
   MockDecisionAdaptor,
+  SystemOneDecisionAdaptor,
   TransportChatPort,
   ChatSimulatedDecisionAdaptor,
 } from './providers/decision/index.js';
 import { createAudioEndpoints } from './http/audio-endpoint.js';
 import type { AudioEndpoints } from './http/audio-endpoint.js';
+import { createSchemaEndpoints, type SchemaEndpoints } from './http/schema-endpoint.js';
+import { createChatImageBridge, type ChatImageBridge } from './http/chat-image-bridge.js';
+import {
+  createModalityMismatchGuard,
+  type ModalityMismatchGuard,
+} from './http/error-guidance.js';
 import type { AudioEndpointProvider } from './http/audio-faces.js';
 import { createDeepSeekToolHandlers } from './providers/deepseek/tool-handlers.js';
 import { deepseekAudioCapabilities } from './providers/deepseek/audio-models.js';
@@ -408,6 +415,12 @@ export interface Gateway {
    * 整体替换（如换 ScriptedTransport 装配）。
    */
   modalityEndpoints: ModalityEndpoints;
+  /** 下游契约与自发现端点（GET /v1/schema、GET /v1/schema/{id}、GET /v1/openapi.json）。 */
+  schemaEndpoints: SchemaEndpoints;
+  /** OpenAI Chat Completions → 上游 Images API 桥接（仅生图模型命中）。 */
+  chatImageBridge: ChatImageBridge;
+  /** 中心化模态/协议错配守卫。 */
+  modalityMismatchGuard: ModalityMismatchGuard;
   /**
    * 数据面 virtual key 存储（66 §2）。需要 `recordStore`；没配就是 undefined，
    * 此时数据面退到极简模式，或**什么都没配时整个关掉**（deny-first，见
@@ -1533,7 +1546,8 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
         entry.enabled &&
         (entry.id === 'opencode-go' ||
           entry.id.startsWith('opencode-go-') ||
-          entry.base_url.includes('opencode.ai/zen/go')) &&
+          entry.base_url.includes('opencode.ai/zen/go') ||
+          entry.base_url.includes('opencode.ai/inference/go')) &&
         credentialResolver.credentialsFor(entry.access_path).length > 0
       ) {
         opencodeTargets.set(entry.id, entry.access_path);
@@ -2253,11 +2267,19 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
       return resolveEmbeddingAdaptor(opts).embed(req, opts);
     },
   };
-  // decision：native 位是 mock（没有真上游 key），降级位是 chat 模拟（复用
-  // openai.chat codec）。默认策略 on_missing_upstream + 高风险不降级（15 §6.5）。
+  // decision：test 模式用 mock；生产模式支持 SystemOne 原生上游（如 OpenCode Go 的
+  // jev-1.14 / gemini-decision-1 / gpt-6-luna-decision），无原生上游时按策略降级到 chat。
   const decisionDegradation: DecisionDegradationPolicy =
     options.decisionDegradation ?? DEFAULT_DECISION_DEGRADATION_POLICY;
+  const systemOneDecisionAdaptor = new SystemOneDecisionAdaptor({
+    transport,
+    headersProvider: openaiHeadersProvider,
+  });
   const lastModalityCredId = new Map<string, string>();
+  const isOpenCodeGoTarget = (providerPrefix: string, baseUrl: string | undefined): boolean =>
+    providerPrefix === 'opencode-go' ||
+    providerPrefix.startsWith('opencode-go-') ||
+    (baseUrl !== undefined && /opencode\.ai\/(?:zen|inference)\/go\b/i.test(baseUrl));
   const resolveModalityTarget = (accessPath: string) => {
     const providerPrefix = accessPath.split('.')[0] ?? accessPath;
     const candidates = [
@@ -2271,19 +2293,49 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     const effectivePath =
       candidates.find((ap) => credentialResolver.credentialsFor(ap).length > 0) ?? accessPath;
     const dialect = credentialResolver.formatFor(effectivePath);
+    const rawBaseUrl = credentialResolver.baseUrlFor(effectivePath);
+    // OpenCode Go 的旧地址 /zen/go/v1 没有 /embeddings 路由（404），
+    // embeddings 统一在新推理路径 /inference/go/openai/v1 下提供。
+    const baseUrl =
+      rawBaseUrl !== undefined && /https?:\/\/opencode\.ai\/zen\/go(?:\/v1)?\/?$/i.test(rawBaseUrl)
+        ? 'https://opencode.ai/inference/go/openai/v1'
+        : rawBaseUrl;
+    const attachOpenCodeSession = isOpenCodeGoTarget(providerPrefix, rawBaseUrl);
     return {
       accessPath: effectivePath,
       dialect,
-      baseUrl: credentialResolver.baseUrlFor(effectivePath),
+      baseUrl,
       headersProvider: async () => {
         const { headers, credential_id } = await credentialResolver.headersFor(
           effectivePath,
           systemProbeCtx(clock),
         );
         if (credential_id !== undefined) lastModalityCredId.set(accessPath, credential_id);
+        if (attachOpenCodeSession && headers['x-opencode-session'] === undefined) {
+          return { ...headers, 'x-opencode-session': `ag_${ids.requestId()}` };
+        }
         return headers;
       },
     };
+  };
+  const resolveDecisionTarget = (accessPath: string) => {
+    const base = resolveModalityTarget(accessPath);
+    const providerPrefix = accessPath.split('.')[0] ?? accessPath;
+    const rawBaseUrl = credentialResolver.baseUrlFor(base.accessPath);
+    if (isOpenCodeGoTarget(providerPrefix, rawBaseUrl)) {
+      return {
+        ...base,
+        dialect: 'jev.decisions',
+        baseUrl: 'https://opencode.ai/inference/go/systemone/v1',
+      };
+    }
+    if (
+      base.dialect === 'jev.decisions' ||
+      (rawBaseUrl !== undefined && /\/systemone\b/i.test(rawBaseUrl))
+    ) {
+      return base;
+    }
+    return undefined;
   };
   const modalityEndpoints =
     options.modalityEndpoints ??
@@ -2292,7 +2344,9 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
         ...createImagesEndpointHandlers(imagesAdaptor, resolveModalityTarget),
         createEmbeddingsEndpointHandler(embeddingsAdaptor, resolveModalityTarget),
         createDecisionsEndpointHandler({
-          ...(mode === 'test' ? { native: new MockDecisionAdaptor() } : {}),
+          ...(mode === 'test'
+            ? { native: new MockDecisionAdaptor() }
+            : { native: systemOneDecisionAdaptor, resolveTarget: resolveDecisionTarget }),
           degraded: new ChatSimulatedDecisionAdaptor(
             new TransportChatPort({
               transport,
@@ -2314,6 +2368,28 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
         lastModalityCredId.get(accessPath) ?? credentialResolver.credentialsFor(accessPath)[0]?.id,
       ...(mode === 'test' ? {} : { log: (m) => logger.warn(m) }),
     });
+
+  const chatImageBridge = createChatImageBridge({
+    imagesAdaptor,
+    resolveTarget: resolveModalityTarget,
+    ...(admin?.aliasResolver === undefined ? {} : { aliasResolver: admin.aliasResolver }),
+    listCapabilities: () => capabilityRegistry.list(),
+    usageEmitter: emitter,
+    clock,
+    ids,
+    enabled: () => config.crossModalityBridge !== false,
+  });
+
+  const schemaEndpoints = createSchemaEndpoints({
+    listCapabilities: () => capabilityRegistry.list(),
+    ...(admin?.aliasResolver === undefined ? {} : { aliasResolver: admin.aliasResolver }),
+    chatImageBridgeEnabled: () => config.crossModalityBridge !== false,
+  });
+
+  const modalityMismatchGuard = createModalityMismatchGuard({
+    listCapabilities: () => capabilityRegistry.list(),
+    ...(admin?.aliasResolver === undefined ? {} : { aliasResolver: admin.aliasResolver }),
+  });
 
   // ---- PipelineRunner ----
   // 工具结果脱敏 + 工具调用记录：包在插件主机外面给 runner 用。
@@ -2441,6 +2517,9 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     ...(admin === undefined ? {} : { admin }),
     toolEndpoints,
     modalityEndpoints,
+    schemaEndpoints,
+    chatImageBridge,
+    modalityMismatchGuard,
     /**
      * OpenAI 兼容音频端点（`/v1/audio/speech`、`/v1/audio/transcriptions`）。
      *

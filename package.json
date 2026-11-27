@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && npm run build:admin && node scripts/copy-static-assets.mjs",
+    "reload": "sudo systemctl reload agentgateway",
     "build:admin": "tsc --noEmit -p webui/admin/tsconfig.json && vite build --config webui/admin/vite.config.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "typecheck:admin": "tsc --noEmit -p webui/admin/tsconfig.json",

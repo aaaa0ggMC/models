@@ -86,7 +86,7 @@ async function build(
       r.register(createDeepSeekProfile());
       return r;
     })(),
-    ...(options.config === undefined ? {} : { config: options.config }),
+    config: { channelAutoDisable: true, ...(options.config ?? {}) },
   });
   const adminAuth = new DefaultAdminAuth(recordStore, clock, {});
   await adminAuth.setAccount({ id: 'owner', name: 'owner', role: 'owner' }, ADMIN_PASSWORD);

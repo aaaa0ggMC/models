@@ -196,10 +196,15 @@ export class S5Upstream implements Stage {
             // 可试——一把死 key 不该把整条渠道打到 auto_disable（用户被单 key 坑过
             // 的正是这个形态）。于是单凭据路径与之前完全一致，多凭据路径的渠道禁用
             // 判据变成「该路径上所有凭据都失败」。
+            const isChannelLevelFailure =
+              res.status === 401 ||
+              res.status === 403 ||
+              res.status === 429 ||
+              res.status >= 500;
             const willRotate =
               (res.status === 401 || res.status === 403 || res.status === 429) &&
               credentialIndex + 1 < credentials.length;
-            if (!willRotate) {
+            if (isChannelLevelFailure && !willRotate) {
               deps.providerHealth?.recordFailure(attempt.provider, res.status);
             }
             deps.metrics.increment('pipeline.upstream.error', 1, {

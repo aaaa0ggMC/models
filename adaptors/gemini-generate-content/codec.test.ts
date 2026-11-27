@@ -751,4 +751,87 @@ describe('跨格式互转 & 全链路 Pipeline（OpenAI ↔ Gemini、Gemini ↔ 
       function: { name: 'get_weather', arguments: '{"city":"Tokyo"}' },
     });
   });
+
+  it('restores cached thoughtSignature on cross-format tool turn 2 and falls back to skip sentinel when uncached', () => {
+    const gemini = new GeminiGenerateContentCodec({ clock: { now: () => 1_760_000_000_000 } });
+    const ctx = makeCtx('gemini.generateContent');
+
+    // Turn 1: Gemini returns a functionCall with thoughtSignature
+    gemini.decodeResponse(
+      {
+        candidates: [
+          {
+            index: 0,
+            content: {
+              role: 'model',
+              parts: [
+                {
+                  functionCall: {
+                    id: 'call_search_cached',
+                    name: 'search_web',
+                    args: { query: 'hello' },
+                  },
+                  thoughtSignature: 'sig_real_abc123',
+                },
+              ],
+            },
+            finishReason: 'STOP',
+          },
+        ],
+        usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 },
+      },
+      ctx,
+    );
+
+    // Turn 2: Client (openai.responses) sends back tool_use without _raw.thoughtSignature
+    const turn2 = gemini.encode(
+      {
+        ir_version: 'ag-ir/1',
+        kind: 'chat',
+        model: 'gemini-4-carbon',
+        source_format: 'openai.responses',
+        stream: { mode: 'none', enabled: false },
+        payload: {
+          messages: [
+            { role: 'user', parts: [{ type: 'text', text: 'Search hello' }] },
+            {
+              role: 'assistant',
+              parts: [
+                {
+                  type: 'tool_use',
+                  id: 'call_search_cached',
+                  name: 'search_web',
+                  input: { query: 'hello' },
+                },
+                {
+                  type: 'tool_use',
+                  id: 'call_search_uncached',
+                  name: 'search_web',
+                  input: { query: 'world' },
+                },
+              ],
+            },
+            {
+              role: 'tool',
+              parts: [
+                { type: 'tool_result', tool_use_id: 'call_search_cached', content: 'result 1' },
+                { type: 'tool_result', tool_use_id: 'call_search_uncached', content: 'result 2' },
+              ],
+            },
+          ],
+          params: {},
+          raw: {},
+        },
+        raw: {},
+      },
+      ctx,
+    );
+
+    const body = turn2.body as {
+      contents: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+    };
+    const modelTurn = body.contents.find((c) => c.role === 'model');
+    expect(modelTurn?.parts[0]?.['thoughtSignature']).toBe('sig_real_abc123');
+    expect(modelTurn?.parts[1]?.['thoughtSignature']).toBe('skip_thought_signature_validator');
+  });
 });

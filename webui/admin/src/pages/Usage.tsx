@@ -171,15 +171,18 @@ export function UsagePage({
       {/* 1. 核心指标统计卡 */}
       <div className="ag-grid-4">
         <div className="ag-stat-card">
-          <span className="ag-stat-label">区间现金费用</span>
-          <div className="ag-stat-value">{formatUsd(summary?.cash_total)}</div>
-          <span className="ag-secondary ag-tabular">
-            等价 API 价值 {formatUsd(summary?.as_api_total)}
-          </span>
+          <span className="ag-stat-label">区间等价额度</span>
+          <div className="ag-stat-value">
+            {formatUsd(Math.max(summary?.cash_total ?? 0, summary?.as_api_total ?? 0))}
+          </div>
+          <span className="ag-secondary">{USAGE_RANGES[range].label}</span>
           {summary?.by_currency && Object.keys(summary.by_currency).length > 0 && (
             <span className="ag-secondary ag-tabular" style={{ fontSize: 12 }}>
               {Object.entries(summary.by_currency)
-                .map(([cur, v]) => `${cur} ${formatCurrencyAmount(v.cash_total, cur)}`)
+                .map(
+                  ([cur, v]) =>
+                    `${cur} ${formatCurrencyAmount(Math.max(v.cash_total, v.as_api_total), cur)}`,
+                )
                 .join(' · ')}
             </span>
           )}
@@ -222,7 +225,7 @@ export function UsagePage({
           title="费用趋势"
           buckets={buckets}
           available={timeseries?.available ?? true}
-          valueOf={(b) => b.cash_total}
+          valueOf={(b) => Math.max(b.cash_total, b.as_api_total)}
           formatValue={(v) => formatUsd(v)}
           unitLabel="USD"
         />
@@ -240,38 +243,68 @@ export function UsagePage({
       <div className="ag-grid-3">
         <RankedBarChart
           title="按模型花费与请求"
-          items={(summary?.by_model ?? []).map((m) => ({
-            key: m.model,
-            label: m.model,
-            value: m.cash_total,
-            formattedValue: formatUsd(m.cash_total),
-            subLabel: `${formatInt(m.request_count)} 次`,
-            mono: true,
-          }))}
+          items={[...(summary?.by_model ?? [])]
+            .sort(
+              (a, b) =>
+                Math.max(b.cash_total, b.as_api_total ?? 0) -
+                  Math.max(a.cash_total, a.as_api_total ?? 0) ||
+                b.request_count - a.request_count,
+            )
+            .map((m) => {
+              const val = Math.max(m.cash_total, m.as_api_total ?? 0);
+              return {
+                key: m.model,
+                label: m.model,
+                value: val,
+                formattedValue: formatUsd(val),
+                subLabel: `${formatInt(m.request_count)} 次`,
+                mono: true,
+              };
+            })}
         />
 
         <RankedBarChart
           title="按渠道花费与请求"
-          items={(summary?.by_provider ?? []).map((p) => ({
-            key: p.provider,
-            label: p.provider,
-            value: p.cash_total,
-            formattedValue: formatUsd(p.cash_total),
-            subLabel: `${formatInt(p.request_count)} 次`,
-            mono: true,
-          }))}
+          items={[...(summary?.by_provider ?? [])]
+            .sort(
+              (a, b) =>
+                Math.max(b.cash_total, b.as_api_total ?? 0) -
+                  Math.max(a.cash_total, a.as_api_total ?? 0) ||
+                b.request_count - a.request_count,
+            )
+            .map((p) => {
+              const val = Math.max(p.cash_total, p.as_api_total ?? 0);
+              return {
+                key: p.provider,
+                label: p.provider,
+                value: val,
+                formattedValue: formatUsd(val),
+                subLabel: `${formatInt(p.request_count)} 次`,
+                mono: true,
+              };
+            })}
         />
 
         <RankedBarChart
           title="按凭据归因花费"
-          items={(summary?.by_credential ?? []).map((c) => ({
-            key: c.credential,
-            label: c.credential,
-            value: c.cash_total,
-            formattedValue: formatUsd(c.cash_total),
-            subLabel: `${formatInt(c.request_count)} 次`,
-            mono: true,
-          }))}
+          items={[...(summary?.by_credential ?? [])]
+            .sort(
+              (a, b) =>
+                Math.max(b.cash_total, b.as_api_total ?? 0) -
+                  Math.max(a.cash_total, a.as_api_total ?? 0) ||
+                b.request_count - a.request_count,
+            )
+            .map((c) => {
+              const val = Math.max(c.cash_total, c.as_api_total ?? 0);
+              return {
+                key: c.credential,
+                label: c.credential,
+                value: val,
+                formattedValue: formatUsd(val),
+                subLabel: `${formatInt(c.request_count)} 次`,
+                mono: true,
+              };
+            })}
         />
       </div>
 
@@ -397,7 +430,9 @@ export function UsagePage({
                     <td className="ag-tabular">
                       {formatInt(r.input_tokens)} / {formatInt(r.output_tokens)}
                     </td>
-                    <td className="ag-tabular">{formatUsd(r.cash_total)}</td>
+                    <td className="ag-tabular">
+                      {formatUsd(Math.max(r.cash_total, r.as_api_total ?? 0))}
+                    </td>
                     <td>
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                         <StatusBadge tone={r.status === 'ok' ? 'success' : 'warning'}>

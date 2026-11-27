@@ -337,7 +337,14 @@ export type ProviderModelsErrorCode =
   | 'invalid_request';
 
 /** 上游返回的一个模型（**全部字段可选**——非 DeepSeek 上游通常只回 id）。 */
-export type UpstreamModelCategory = 'chat' | 'tts' | 'asr' | 'image' | 'video' | 'embedding';
+export type UpstreamModelCategory =
+  | 'chat'
+  | 'tts'
+  | 'asr'
+  | 'image'
+  | 'video'
+  | 'embedding'
+  | 'decision';
 
 export interface UpstreamModelDto {
   id: string;
@@ -353,6 +360,13 @@ export interface UpstreamModelDto {
   specs?: {
     billing_unit?: string;
     capability?: string;
+  };
+  /** 上游 `/models` 声明的单价（USD per 1M tokens；可选）。 */
+  pricing?: {
+    input?: number;
+    output?: number;
+    cache_read?: number;
+    currency?: string;
   };
   metadata_source?: 'upstream' | 'models.dev' | 'inferred';
   /**
@@ -692,8 +706,18 @@ export interface UsageSummary {
   by_currency?: Record<string, { cash_total: number; as_api_total: number; requests: number }>;
   /** 未定价的请求数（拿不到价格，不是"免费"）。 */
   unpriced_count: number;
-  by_model: Array<{ model: string; request_count: number; cash_total: number }>;
-  by_provider: Array<{ provider: string; request_count: number; cash_total: number }>;
+  by_model: Array<{
+    model: string;
+    request_count: number;
+    cash_total: number;
+    as_api_total?: number;
+  }>;
+  by_provider: Array<{
+    provider: string;
+    request_count: number;
+    cash_total: number;
+    as_api_total?: number;
+  }>;
   /**
    * 按上游凭据（key）拆分（60 §3：UsageRecord.credential_id）。
    *
@@ -703,7 +727,12 @@ export interface UsageSummary {
    * 没有 credential_id 的记录（路径不需要凭据，或上游调用没走到签发鉴权头）归到
    * `未记录`——那是一个真实的第三种情况，不是 0，也不是某一把 key。
    */
-  by_credential: Array<{ credential: string; request_count: number; cash_total: number }>;
+  by_credential: Array<{
+    credential: string;
+    request_count: number;
+    cash_total: number;
+    as_api_total?: number;
+  }>;
 }
 
 export interface UsageDashboardResponse {
@@ -719,6 +748,7 @@ export interface UsageDashboardResponse {
     input_tokens: number;
     output_tokens: number;
     cash_total: number;
+    as_api_total?: number;
     finish_reason: string;
     fast_path: boolean;
   }>;

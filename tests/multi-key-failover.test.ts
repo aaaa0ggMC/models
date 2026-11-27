@@ -122,6 +122,7 @@ async function build(
     recordStore,
     credentialResolver: resolver,
     providerProfiles: profiles,
+    config: { channelAutoDisable: true },
     // 静态装配声明：这个测试网关没有渠道记录，provider 是路由表 + 假凭据解析器
     // 静态拼出来的。不声明的话 S2 准入会以「没配渠道」拒掉全部请求（见
     // composition-root.ts 的 staticProviders 说明）。auto_disable 那几个用例走的是

@@ -128,7 +128,10 @@ function capabilityToModelDto(item: CapabilityMatrixEntry): UpstreamModelDto {
       ? (item.input_modalities as UpstreamModelDto['input_modalities'])
       : category === 'asr'
         ? (['audio'] as UpstreamModelDto['input_modalities'])
-        : category === 'tts' || category === 'image' || category === 'embedding'
+        : category === 'tts' ||
+            category === 'image' ||
+            category === 'embedding' ||
+            category === 'decision'
           ? (['text'] as UpstreamModelDto['input_modalities'])
           : undefined;
 

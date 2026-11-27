@@ -152,7 +152,14 @@ export type ProviderModelsErrorCode =
   | 'credential_missing'
   | 'invalid_request';
 
-export type UpstreamModelCategory = 'chat' | 'tts' | 'asr' | 'image' | 'video' | 'embedding';
+export type UpstreamModelCategory =
+  | 'chat'
+  | 'tts'
+  | 'asr'
+  | 'image'
+  | 'video'
+  | 'embedding'
+  | 'decision';
 
 export interface UpstreamModelDto {
   id: string;
@@ -357,9 +364,24 @@ export interface UsageSummary {
   as_api_total: number;
   by_currency?: Record<string, { cash_total: number; as_api_total: number; requests: number }>;
   unpriced_count: number;
-  by_model: Array<{ model: string; request_count: number; cash_total: number }>;
-  by_provider: Array<{ provider: string; request_count: number; cash_total: number }>;
-  by_credential: Array<{ credential: string; request_count: number; cash_total: number }>;
+  by_model: Array<{
+    model: string;
+    request_count: number;
+    cash_total: number;
+    as_api_total?: number;
+  }>;
+  by_provider: Array<{
+    provider: string;
+    request_count: number;
+    cash_total: number;
+    as_api_total?: number;
+  }>;
+  by_credential: Array<{
+    credential: string;
+    request_count: number;
+    cash_total: number;
+    as_api_total?: number;
+  }>;
 }
 
 export interface UsageDashboardResponse {
@@ -374,6 +396,7 @@ export interface UsageDashboardResponse {
     input_tokens: number;
     output_tokens: number;
     cash_total: number;
+    as_api_total?: number;
     finish_reason: string;
     fast_path: boolean;
   }>;

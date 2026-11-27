@@ -82,6 +82,7 @@ export const RUNTIME_SETTING_KEYS = [
   'model_sync_interval_ms',
   'plugin_timeout_ms',
   'models_extended_metadata',
+  'cross_modality_bridge',
   'save_full_messages',
   'gateway_stealth_enabled',
   'gateway_stealth_header',
@@ -258,6 +259,17 @@ export const RUNTIME_SETTINGS: readonly RuntimeSettingSpec[] = [
     unit: '',
     description:
       '在 /v1/models 中附带上下文窗口、最大输出、模态与兼容字段（dsh 等客户端可按需读取；关闭则只返回标准 OpenAI 字段）。',
+  },
+  {
+    key: 'cross_modality_bridge',
+    field: 'crossModalityBridge',
+    group: 'gateway',
+    default_value: DEFAULT_CONFIG.crossModalityBridge ?? true,
+    label: '跨模态协议自适配',
+    type: 'bool',
+    unit: '',
+    description:
+      '开启后允许跨大协议桥接（如通过 /v1/chat/completions 直接调用生图模型）；关闭后将拒绝跨模态调用并返回推荐端点指引。',
   },
   {
     key: 'save_full_messages',

@@ -13,6 +13,15 @@ export type {
 } from './types.js';
 export { MockDecisionAdaptor } from './mock.js';
 export {
+  SystemOneDecisionAdaptor,
+  SystemOneDecisionApiError,
+  SYSTEMONE_DEFAULT_BASE_URL,
+  SYSTEMONE_PATH,
+  encodeSystemOneRequest,
+  decodeSystemOneResponse,
+  type SystemOneDecisionAdaptorDeps,
+} from './systemone.js';
+export {
   ChatSimulatedDecisionAdaptor,
   TransportChatPort,
   buildDegradedChatRequest,

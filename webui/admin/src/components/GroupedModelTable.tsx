@@ -10,6 +10,7 @@ export const MODEL_CATEGORY_ORDER: readonly UpstreamModelCategory[] = [
   'image',
   'video',
   'embedding',
+  'decision',
 ];
 
 export const MODEL_CATEGORY_LABELS: Record<
@@ -22,6 +23,7 @@ export const MODEL_CATEGORY_LABELS: Record<
   image: { label: '图像生成', short: '图像' },
   video: { label: '视频生成', short: '视频' },
   embedding: { label: '向量嵌入', short: '向量' },
+  decision: { label: '决策模型', short: '决策' },
 };
 
 export function resolveModelCategory(m: UpstreamModelDto): UpstreamModelCategory {
@@ -30,6 +32,9 @@ export function resolveModelCategory(m: UpstreamModelDto): UpstreamModelCategory
   if (m.output_modalities?.includes('image') && !m.output_modalities.includes('text')) return 'image';
   if (m.output_modalities?.includes('audio') && !m.output_modalities.includes('text')) return 'tts';
   const id = m.id.toLowerCase();
+  if (/(^|[-_/.])(decision|decisions)([-_/.]|$)|(?:^|\/)jev(?:[-_.\d]|$)/i.test(id)) {
+    return 'decision';
+  }
   if (/(^tts-|-tts\b|-tts-|speech)/i.test(id)) return 'tts';
   if (/(^whisper-|-asr\b|-asr-|transcribe)/i.test(id)) return 'asr';
   if (/(^sora\b|^veo\b|^kling\b|imagine-video|-video\b)/i.test(id)) return 'video';
@@ -58,6 +63,9 @@ export function categoryFromModality(modality: string): UpstreamModelCategory {
     case 'embeddings':
     case 'embedding':
       return 'embedding';
+    case 'decision':
+    case 'decisions':
+      return 'decision';
     default:
       return 'chat';
   }
@@ -78,6 +86,7 @@ export function getCategoryColumns(category: UpstreamModelCategory): {
     case 'video':
       return { col2: '计费口径', col3: '生成能力', col4: '模态方向' };
     case 'embedding':
+    case 'decision':
       return { col2: '上下文窗口', col3: '计费口径', col4: '模态方向' };
     case 'chat':
     default:
@@ -134,7 +143,8 @@ export function GroupedModelTable<T>({
           group.items.length > 0 &&
           group.items.every((item) => selection.selectedIds.has(toModelDto(item).id));
         const isChat = group.category === 'chat';
-        const isEmbedding = group.category === 'embedding';
+        const isEmbeddingOrDecision =
+          group.category === 'embedding' || group.category === 'decision';
 
         return (
           <div key={group.category}>
@@ -199,14 +209,14 @@ export function GroupedModelTable<T>({
                         {m.id}
                       </td>
                       <td className="ag-tabular">
-                        {isChat || isEmbedding
+                        {isChat || isEmbeddingOrDecision
                           ? formatContextWindow(m.context_window)
                           : m.specs?.billing_unit ?? '按用量'}
                       </td>
                       <td className="ag-tabular">
                         {isChat
                           ? formatContextWindow(m.max_output_tokens)
-                          : isEmbedding
+                          : isEmbeddingOrDecision
                             ? m.specs?.billing_unit ?? '按输入 Token'
                             : m.specs?.capability ?? '标准'}
                       </td>

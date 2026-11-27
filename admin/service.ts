@@ -358,9 +358,68 @@ function defaultBucketMs(fromTs: number, toTs: number): number {
  * 输入 `records` 只用到 `ts` / token / cost / status 四个字段，因此测试可以用
  * 裸对象构造，不必造一整条 UsageRecord。
  */
+function resolveRecordCostUsd(
+  r: {
+    ts: number;
+    provider?: string;
+    model?: string;
+    usage: { units: UsageUnitsView };
+    cost: { cash: { total: number }; as_api: { total: number }; status: string; currency?: string };
+    price_snapshot?: { currency?: string } | null;
+  },
+  pricingService?: PricingService,
+): { cashUsd: number; asApiUsd: number; unpriced: boolean; currency: string } {
+  const currency = (r.cost.currency ?? r.price_snapshot?.currency ?? 'USD').toUpperCase();
+  const cashUsd = toUsdAmount(r.cost.cash.total, currency);
+  let asApiUsd = toUsdAmount(r.cost.as_api.total, currency);
+  let unpriced = r.cost.status === 'unpriced' || r.cost.status === 'pending_price';
+
+  // 智能兜底：历史记录因旧快照缺价落成 pending_price / unpriced（as_api=0）时，
+  // 若有 token 用量且当前定价服务能算出来，实时补出等价 API 估值。
+  if (
+    unpriced &&
+    cashUsd === 0 &&
+    asApiUsd === 0 &&
+    pricingService !== undefined &&
+    r.model !== undefined &&
+    r.usage.units.tokens !== undefined
+  ) {
+    const t = r.usage.units.tokens;
+    const inTok = t.input_tokens ?? 0;
+    const outTok = t.output_tokens ?? 0;
+    const repriced = pricingService.price({
+      ts: r.ts,
+      model: r.model,
+      ...(r.provider === undefined ? {} : { provider: r.provider }),
+      usage: {
+        units: {
+          tokens: {
+            input_tokens: inTok,
+            output_tokens: outTok,
+            total_tokens: inTok + outTok,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            reasoning_tokens: 0,
+          },
+        },
+        source: 'provider',
+      },
+    });
+    if (repriced.cost.status === 'priced' && repriced.cost.as_api.total > 0) {
+      const repricedCur = repriced.cost.currency ?? repriced.price_snapshot?.currency ?? 'USD';
+      asApiUsd = toUsdAmount(repriced.cost.as_api.total, repricedCur);
+      unpriced = false;
+    }
+  }
+
+  return { cashUsd, asApiUsd, unpriced, currency };
+}
+
 export function buildUsageTimeseries(
   records: ReadonlyArray<{
     ts: number;
+    provider?: string;
+    model?: string;
     usage: { units: UsageUnitsView };
     cost: { cash: { total: number }; as_api: { total: number }; status: string; currency?: string };
     price_snapshot?: { currency?: string } | null;
@@ -368,6 +427,7 @@ export function buildUsageTimeseries(
   from: number,
   to: number,
   bucketMs?: number,
+  pricingService?: PricingService,
 ): UsageTimeseriesResponse {
   const span = Math.max(1, to - from);
   // 桶数上限：区间再长也最多 120 个桶（多了在 1200px 宽的卡片里就糊成一片）。
@@ -400,13 +460,13 @@ export function buildUsageTimeseries(
       : bucketCount - 1;
     const b = buckets[idx];
     if (b === undefined) continue;
-    const cur = r.cost.currency ?? r.price_snapshot?.currency;
+    const { cashUsd, asApiUsd, unpriced } = resolveRecordCostUsd(r, pricingService);
     b.request_count += 1;
     b.input_tokens += r.usage.units.tokens?.input_tokens ?? 0;
     b.output_tokens += r.usage.units.tokens?.output_tokens ?? 0;
-    b.cash_total += toUsdAmount(r.cost.cash.total, cur);
-    b.as_api_total += toUsdAmount(r.cost.as_api.total, cur);
-    if (r.cost.status === 'unpriced' || r.cost.status === 'pending_price') b.unpriced_count += 1;
+    b.cash_total += cashUsd;
+    b.as_api_total += asApiUsd;
+    if (unpriced) b.unpriced_count += 1;
   }
 
   return { from_ts: from, to_ts: to, bucket_ms: effectiveMs, buckets, available: true };
@@ -776,7 +836,9 @@ export class AdminService {
           access_path: accessPathIdForDialect(p.id, p.dialect),
           models: p.model_source.kind === 'static' ? [...p.model_source.models] : [],
           enabled: p.enabled,
-          ...(p.auto_disabled === undefined ? {} : { auto_disabled: { ...p.auto_disabled } }),
+          ...(this.deps.config?.channelAutoDisable === true && p.auto_disabled !== undefined
+            ? { auto_disabled: { ...p.auto_disabled } }
+            : {}),
           builtin_tools: p.builtin_tools ?? {},
           ...(p.pricing === undefined ? {} : { pricing: p.pricing }),
         })),
@@ -870,6 +932,32 @@ export class AdminService {
                 access_path: embAccessPath,
                 model,
                 modality: 'embedding',
+              });
+            }
+            continue;
+          }
+          if (isDecisionOnlyModel(model, provider.model_metadata?.[model])) {
+            if (this.deps.capabilityRegistry.find(accessPath, model, 'decision') === undefined) {
+              this.deps.capabilityRegistry.register({
+                access_path: accessPath,
+                model,
+                modality: 'decision',
+                format: 'jev.decisions',
+                usage_source: 'provider',
+                usage_units: ['tokens', 'questions'],
+                quirks: [
+                  `由管理面渠道 ${provider.id} 的静态模型清单登记`,
+                  ...(provider.namespace === undefined || provider.namespace === ''
+                    ? []
+                    : [`可用 <${provider.namespace}>/<模型名> 访问`]),
+                ],
+                contract_tested: false,
+                status: 'implemented',
+              });
+              this.managedChannelCapabilities.push({
+                access_path: accessPath,
+                model,
+                modality: 'decision',
               });
             }
             continue;
@@ -1240,6 +1328,10 @@ export class AdminService {
     const provider = await this.getProvider(providerId);
     if (provider === undefined) return { auto_disabled: false };
     if (this.deps.config?.channelAutoDisable !== true) return { auto_disabled: false };
+    // 客户端参数/模型/协议错误（400/404/422 等非鉴权、非限流 4xx）不代表渠道故障，不计入自动禁用
+    if (httpStatus >= 400 && httpStatus < 500 && httpStatus !== 401 && httpStatus !== 403 && httpStatus !== 429) {
+      return { auto_disabled: false };
+    }
 
     // key 失效：立即禁用（不等计数）
     if (httpStatus === 401 || httpStatus === 403) {
@@ -2017,6 +2109,8 @@ export class AdminService {
         let input_modalities = aggModals((x) => x.input_modalities) ?? ['text'];
         let output_modalities = aggModals((x) => x.output_modalities) ?? ['text'];
         let reasoning = aggBool((x) => x.reasoning);
+        // 继承候选目标中的参考定价（优先取首个已定价目标，避免路由图模型显示「暂无定价」）
+        const inheritedPricing = resolvedItems.find((x) => x.pricing !== undefined)?.pricing;
 
         if (graph.ability_mode === 'custom' && graph.abilities !== undefined) {
           const c = graph.abilities;
@@ -2040,6 +2134,7 @@ export class AdminService {
           input_modalities,
           output_modalities,
           ...(reasoning === undefined ? {} : { reasoning }),
+          ...(inheritedPricing === undefined ? {} : { pricing: inheritedPricing }),
           exposed: !this.hiddenModels.has(graph.id),
           ...(graph.enabled ? {} : { availability: 'unconfigured' as const }),
         };
@@ -2259,9 +2354,18 @@ export class AdminService {
     const to = toTs ?? now;
     const records = this.deps.usageSource?.list(from, to) ?? [];
 
-    const byModel = new Map<string, { request_count: number; cash_total: number }>();
-    const byProvider = new Map<string, { request_count: number; cash_total: number }>();
-    const byCredential = new Map<string, { request_count: number; cash_total: number }>();
+    const byModel = new Map<
+      string,
+      { request_count: number; cash_total: number; as_api_total: number }
+    >();
+    const byProvider = new Map<
+      string,
+      { request_count: number; cash_total: number; as_api_total: number }
+    >();
+    const byCredential = new Map<
+      string,
+      { request_count: number; cash_total: number; as_api_total: number }
+    >();
     const byCurrency = new Map<
       string,
       { cash_total: number; as_api_total: number; requests: number }
@@ -2273,15 +2377,16 @@ export class AdminService {
     let unpriced_count = 0;
 
     for (const r of records) {
-      const currency = (r.cost.currency ?? r.price_snapshot?.currency ?? 'USD').toUpperCase();
-      const cashUsd = toUsdAmount(r.cost.cash.total, currency);
-      const asApiUsd = toUsdAmount(r.cost.as_api.total, currency);
+      const { cashUsd, asApiUsd, unpriced, currency } = resolveRecordCostUsd(
+        r,
+        this.deps.pricingService,
+      );
 
       input_tokens += r.usage.units.tokens?.input_tokens ?? 0;
       output_tokens += r.usage.units.tokens?.output_tokens ?? 0;
       cash_total += cashUsd;
       as_api_total += asApiUsd;
-      if (r.cost.status === 'unpriced' || r.cost.status === 'pending_price') unpriced_count += 1;
+      if (unpriced) unpriced_count += 1;
 
       const curBucket = byCurrency.get(currency) ?? {
         cash_total: 0,
@@ -2289,22 +2394,25 @@ export class AdminService {
         requests: 0,
       };
       curBucket.cash_total += r.cost.cash.total;
-      curBucket.as_api_total += r.cost.as_api.total;
+      curBucket.as_api_total += r.cost.as_api.total > 0 ? r.cost.as_api.total : asApiUsd;
       curBucket.requests += 1;
       byCurrency.set(currency, curBucket);
 
-      const m = byModel.get(r.model) ?? { request_count: 0, cash_total: 0 };
+      const m = byModel.get(r.model) ?? { request_count: 0, cash_total: 0, as_api_total: 0 };
       m.request_count += 1;
       m.cash_total += cashUsd;
+      m.as_api_total += asApiUsd;
       byModel.set(r.model, m);
-      const p = byProvider.get(r.provider) ?? { request_count: 0, cash_total: 0 };
+      const p = byProvider.get(r.provider) ?? { request_count: 0, cash_total: 0, as_api_total: 0 };
       p.request_count += 1;
       p.cash_total += cashUsd;
+      p.as_api_total += asApiUsd;
       byProvider.set(r.provider, p);
       const credKey = r.credential_id ?? UNATTRIBUTED_CREDENTIAL;
-      const c = byCredential.get(credKey) ?? { request_count: 0, cash_total: 0 };
+      const c = byCredential.get(credKey) ?? { request_count: 0, cash_total: 0, as_api_total: 0 };
       c.request_count += 1;
       c.cash_total += cashUsd;
+      c.as_api_total += asApiUsd;
       byCredential.set(credKey, c);
     }
 
@@ -2312,22 +2420,23 @@ export class AdminService {
       .slice()
       .sort((a, b) => b.ts - a.ts)
       .slice(0, 50)
-      .map((r) => ({
-        request_id: r.request_id,
-        ts: r.ts,
-        provider: r.provider,
-        model: r.model,
-        ...(r.model_alias === undefined ? {} : { model_alias: r.model_alias }),
-        status: r.status,
-        input_tokens: r.usage.units.tokens?.input_tokens ?? 0,
-        output_tokens: r.usage.units.tokens?.output_tokens ?? 0,
-        cash_total: toUsdAmount(
-          r.cost.cash.total,
-          r.cost.currency ?? r.price_snapshot?.currency,
-        ),
-        finish_reason: r.finish_reason,
-        fast_path: r.fast_path,
-      }));
+      .map((r) => {
+        const { cashUsd, asApiUsd } = resolveRecordCostUsd(r, this.deps.pricingService);
+        return {
+          request_id: r.request_id,
+          ts: r.ts,
+          provider: r.provider,
+          model: r.model,
+          ...(r.model_alias === undefined ? {} : { model_alias: r.model_alias }),
+          status: r.status,
+          input_tokens: r.usage.units.tokens?.input_tokens ?? 0,
+          output_tokens: r.usage.units.tokens?.output_tokens ?? 0,
+          cash_total: cashUsd,
+          as_api_total: asApiUsd,
+          finish_reason: r.finish_reason,
+          fast_path: r.fast_path,
+        };
+      });
 
     return {
       summary: {
@@ -2340,9 +2449,27 @@ export class AdminService {
         as_api_total,
         by_currency: Object.fromEntries(byCurrency.entries()),
         unpriced_count,
-        by_model: [...byModel].map(([model, v]) => ({ model, ...v })),
-        by_provider: [...byProvider].map(([provider, v]) => ({ provider, ...v })),
-        by_credential: [...byCredential].map(([credential, v]) => ({ credential, ...v })),
+        by_model: [...byModel]
+          .map(([model, v]) => ({ model, ...v }))
+          .sort(
+            (a, b) =>
+              Math.max(b.cash_total, b.as_api_total) - Math.max(a.cash_total, a.as_api_total) ||
+              b.request_count - a.request_count,
+          ),
+        by_provider: [...byProvider]
+          .map(([provider, v]) => ({ provider, ...v }))
+          .sort(
+            (a, b) =>
+              Math.max(b.cash_total, b.as_api_total) - Math.max(a.cash_total, a.as_api_total) ||
+              b.request_count - a.request_count,
+          ),
+        by_credential: [...byCredential]
+          .map(([credential, v]) => ({ credential, ...v }))
+          .sort(
+            (a, b) =>
+              Math.max(b.cash_total, b.as_api_total) - Math.max(a.cash_total, a.as_api_total) ||
+              b.request_count - a.request_count,
+          ),
       },
       recent,
       ...(this.deps.reconciliationSource === undefined
@@ -2387,7 +2514,7 @@ export class AdminService {
       return { from_ts: from, to_ts: to, bucket_ms: 0, buckets: [], available: false };
     }
 
-    return buildUsageTimeseries(source.list(from, to), from, to, bucketMs);
+    return buildUsageTimeseries(source.list(from, to), from, to, bucketMs, this.deps.pricingService);
   }
 
   // ---- 余额探测 ----
@@ -3262,6 +3389,11 @@ function isImageOnlyModel(id: string, meta?: UpstreamModelDto): boolean {
 function isEmbeddingOnlyModel(id: string, meta?: UpstreamModelDto): boolean {
   if (meta?.category === 'embedding') return true;
   return /(^|[-_/.])(embed|embedding|embeddings|bge)([-_/.]|$)/i.test(id);
+}
+
+function isDecisionOnlyModel(id: string, meta?: UpstreamModelDto): boolean {
+  if (meta?.category === 'decision') return true;
+  return /(^|[-_/.])(decision|decisions)([-_/.]|$)|^jev(?:[-_.\d]|$)/i.test(id);
 }
 
 function isVideoOnlyModel(id: string, meta?: UpstreamModelDto): boolean {

@@ -308,9 +308,9 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
     access_paths: [
       {
         id: 'opencode-go.openai-chat',
-        label: 'OpenCode Go（OpenAI Chat 兼容，全模型通用）',
+        label: 'OpenCode Go（OpenAI Chat / Embeddings 兼容）',
         dialect: 'openai.chat',
-        base_url: 'https://opencode.ai/zen/go/v1',
+        base_url: 'https://opencode.ai/inference/go/openai/v1',
         default_models: [
           'deepseek-v4.1-flash',
           'glm-5.3',
@@ -324,7 +324,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
         id: 'opencode-go.openai-responses',
         label: 'OpenCode Go（OpenAI Responses）',
         dialect: 'openai.responses',
-        base_url: 'https://opencode.ai/zen/go/v1',
+        base_url: 'https://opencode.ai/inference/go/openai/v1',
         default_models: ['gpt-6-luna', 'gpt-5.6-luna', 'grok-4.7'],
         transport_hints: { session_header: 'x-opencode-session' },
       },
@@ -332,7 +332,7 @@ export const PROVIDER_PRESETS: readonly ProviderPreset[] = [
         id: 'opencode-go.anthropic-messages',
         label: 'OpenCode Go（Anthropic Messages）',
         dialect: 'anthropic.messages',
-        base_url: 'https://opencode.ai/zen/go/v1',
+        base_url: 'https://opencode.ai/inference/go/anthropic/v1',
         default_models: ['claude-haiku-5-5', 'qwen4-max', 'qwen3.8-flash'],
         transport_hints: { session_header: 'x-opencode-session' },
       },

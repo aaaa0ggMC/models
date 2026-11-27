@@ -81,6 +81,50 @@ import {
 const FORMAT: FormatId = 'gemini.generateContent';
 const MODALITY: ModalityKind = 'chat';
 const ENCODE_STREAM_STATE_KEY = 'gemini_encode_stream_state';
+/** Google 官方文档规定的无签名历史 functionCall 兜底标记（跨格式/跨模型工具调用防 400）。 */
+const GEMINI_SKIP_THOUGHT_SIGNATURE = 'skip_thought_signature_validator';
+const MAX_THOUGHT_SIGNATURE_CACHE = 2048;
+const thoughtSignatureByCallId = new Map<string, string>();
+const thoughtSignatureByCallKey = new Map<string, string>();
+
+function rememberToolThoughtSignature(
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+  sig: string | undefined,
+): void {
+  if (sig === undefined || sig === '') return;
+  if (id !== '') {
+    if (thoughtSignatureByCallId.size >= MAX_THOUGHT_SIGNATURE_CACHE) {
+      const oldest = thoughtSignatureByCallId.keys().next().value;
+      if (oldest !== undefined) thoughtSignatureByCallId.delete(oldest);
+    }
+    thoughtSignatureByCallId.set(id, sig);
+  }
+  if (name !== '') {
+    const key = `${name}:${JSON.stringify(args)}`;
+    if (thoughtSignatureByCallKey.size >= MAX_THOUGHT_SIGNATURE_CACHE) {
+      const oldest = thoughtSignatureByCallKey.keys().next().value;
+      if (oldest !== undefined) thoughtSignatureByCallKey.delete(oldest);
+    }
+    thoughtSignatureByCallKey.set(key, sig);
+  }
+}
+
+function recallToolThoughtSignature(
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+): string | undefined {
+  if (id !== '') {
+    const byId = thoughtSignatureByCallId.get(id);
+    if (byId !== undefined) return byId;
+  }
+  if (name !== '') {
+    return thoughtSignatureByCallKey.get(`${name}:${JSON.stringify(args)}`);
+  }
+  return undefined;
+}
 
 /** 顶层已建模的 Gemini 请求字段（其余一律进 raw.unmapped）。 */
 const KNOWN_REQUEST_KEYS = new Set([
@@ -727,6 +771,12 @@ export class GeminiGenerateContentCodec implements Adaptor {
           const args = asRecord(fc['args']) ?? {};
           const rawArgs = JSON.stringify(args);
           const idx = partIndex;
+          rememberToolThoughtSignature(
+            id,
+            name,
+            args,
+            asString(p['thoughtSignature'] ?? p['thought_signature']),
+          );
 
           yield nextFrame('meta', {
             notes: {
@@ -1272,6 +1322,12 @@ function decodePart(
       input: args,
       _raw: obj,
     };
+    rememberToolThoughtSignature(
+      id,
+      name,
+      args,
+      asString(obj['thoughtSignature'] ?? obj['thought_signature']),
+    );
     return toolUse;
   }
 
@@ -1646,7 +1702,14 @@ function encodePart(
     }
     case 'tool_use': {
       const rawObj = asRecord(part._raw);
-      const thoughtSig = asString(rawObj?.['thoughtSignature'] ?? rawObj?.['thought_signature']);
+      const explicitSig = asString(rawObj?.['thoughtSignature'] ?? rawObj?.['thought_signature']);
+      const cachedSig =
+        explicitSig ?? recallToolThoughtSignature(part.id, part.name, part.input);
+      // 跨格式（OpenAI Chat / OpenAI Responses / Anthropic → Gemini）多轮工具调用时，
+      // 客户端协议不承载 Gemini 的 thoughtSignature：优先从服务端缓存无损恢复原签名，
+      // 未命中（如跨模型切换或进程重启后继续旧会话）则回退到 Google 官方校验跳过标记。
+      const thoughtSig =
+        cachedSig ?? (!sameFormat ? GEMINI_SKIP_THOUGHT_SIGNATURE : undefined);
       return {
         functionCall: {
           ...(part.id !== '' ? { id: part.id } : {}),

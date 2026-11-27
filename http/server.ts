@@ -39,6 +39,9 @@ import type { ModalityEndpoints } from './modality-endpoints.js';
 import { MAX_BODY_BYTES as MAX_MODALITY_BODY_BYTES } from './modality-endpoints.js';
 import type { AudioEndpoints } from './audio-endpoint.js';
 import { AUDIO_PATH_PREFIX, MAX_AUDIO_BODY_BYTES } from './audio-endpoint.js';
+import type { SchemaEndpoints } from './schema-endpoint.js';
+import type { ChatImageBridge } from './chat-image-bridge.js';
+import type { ModalityMismatchGuard } from './error-guidance.js';
 
 /**
  * 脱敏：只保留白名单头，其余丢弃（含鉴权头）。
@@ -189,6 +192,12 @@ export interface HttpServerOptions {
    * （`/v1/tools/tts` ↔ `/v1/audio/speech`），差别只在客户端 dialect。
    */
   audio?: AudioEndpoints;
+  /** 下游契约与自发现端点（GET /v1/schema、GET /v1/schema/{id}、GET /v1/openapi.json）。 */
+  schema?: SchemaEndpoints;
+  /** OpenAI Chat Completions → 上游 Images API 桥接（仅在目标模型为 image 模态时触发）。 */
+  chatImageBridge?: ChatImageBridge;
+  /** 中心化模态/协议错配守卫（误把 decision/embedding/tts/asr 模型发到对话端点时直接指引正确端点）。 */
+  modalityMismatchGuard?: ModalityMismatchGuard;
   /**
    * 启动钩子：`listen` 之前 await 一次。
    *
@@ -328,6 +337,9 @@ export function createHttpServer(options: HttpServerOptions): Server {
   const tools = options.tools;
   const modalities = options.modalities;
   const audio = options.audio;
+  const schema = options.schema;
+  const chatImageBridge = options.chatImageBridge;
+  const modalityMismatchGuard = options.modalityMismatchGuard;
   const stealthGate = options.stealthGate;
   const disconnectPolicy = options.disconnectPolicy;
 
@@ -345,6 +357,9 @@ export function createHttpServer(options: HttpServerOptions): Server {
       authenticator,
       stealthGate,
       disconnectPolicy,
+      schema,
+      chatImageBridge,
+      modalityMismatchGuard,
     ).catch((err) => {
       if (isClientDisconnectError(err)) {
         if (!res.writableEnded) res.destroy();
@@ -415,6 +430,9 @@ async function handleRequest(
   authenticator: Authenticator | undefined,
   stealthGate: (() => StealthGateConfig) | undefined,
   disconnectPolicy: (() => DisconnectPolicyConfig) | undefined,
+  schema: SchemaEndpoints | undefined,
+  chatImageBridge: ChatImageBridge | undefined,
+  modalityMismatchGuard: ModalityMismatchGuard | undefined,
 ): Promise<void> {
   const url = new URL(req.url ?? '/', 'http://localhost');
   const path = url.pathname;
@@ -438,6 +456,7 @@ async function handleRequest(
   // 覆盖 `/v1` 与 `/v1beta`：pipeline 路径（chat/responses/messages/generateContent）
   // 自己在 S0 也鉴权（那是为了拿 key_id 做归因与限额），这里是为**不跑 S0 的注入
   // 端口**（models / tools / audio / modalities）补上同一道门。幂等且廉价（本地查一次）。
+  let authKeyId: string | undefined;
   if (isDataPlanePath(path)) {
     const gate = stealthGate?.();
     if (gate?.enabled && gate.key.trim() !== '') {
@@ -478,6 +497,13 @@ async function handleRequest(
       res.end(JSON.stringify({ error: { message: auth.error.message, type: 'auth_failed' } }));
       return;
     }
+    authKeyId = auth.key_id;
+  }
+
+  // ---- 契约与自发现面：GET /v1/schema、GET /v1/schema/{id}、GET /v1/openapi.json ----
+  if (schema !== undefined) {
+    const handled = await schema.handle(req, res, url);
+    if (handled) return;
   }
 
   // ---- 元数据面：模型目录（GET /v1/models、GET /v1/models/{id}、/ag/models/sync）----
@@ -538,6 +564,19 @@ async function handleRequest(
     throw err;
   }
   const rawBody = Buffer.concat(chunks);
+
+  // ---- OpenAI Chat Completions → 上游 Images API 桥接（仅生图模型命中）----
+  if (chatImageBridge !== undefined && route.format === 'openai.chat') {
+    const bridged = await chatImageBridge.tryHandle(req, res, rawBody, authKeyId);
+    if (bridged) return;
+  }
+
+  // ---- 中心化模态/协议错配守卫（把 decision/embedding/tts/asr 模型误发到对话端点时直接指引正确端点）----
+  if (modalityMismatchGuard !== undefined) {
+    if (modalityMismatchGuard.tryRejectMismatch(res, route.format, path, rawBody)) {
+      return;
+    }
+  }
 
   const sink = new NodeResponseSink(res);
   const policy = disconnectPolicy?.() ?? { mode: 'immediate', graceMs: 5_000 };

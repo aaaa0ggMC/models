@@ -110,7 +110,7 @@ export function OverviewPage({
   }
 
   const buckets = timeseries?.buckets ?? [];
-  const costSpark = buckets.map((b) => b.cash_total);
+  const costSpark = buckets.map((b) => Math.max(b.cash_total, b.as_api_total));
   const reqSpark = buckets.map((b) => b.request_count);
   const tokSpark = buckets.map((b) => b.input_tokens + b.output_tokens);
   const unpricedSpark = buckets.map((b) => b.unpriced_count);
@@ -182,17 +182,19 @@ export function OverviewPage({
               <span className="ag-stat-label">区间费用</span>
               <DeltaBadge
                 deltaRatio={computeDelta(
-                  currSummary?.cash_total ?? 0,
-                  prevSummary?.cash_total ?? 0,
+                  Math.max(currSummary?.cash_total ?? 0, currSummary?.as_api_total ?? 0),
+                  Math.max(prevSummary?.cash_total ?? 0, prevSummary?.as_api_total ?? 0),
                 )}
                 metricKind="cost"
               />
             </div>
-            <div className="ag-stat-value">{formatUsd(currSummary?.cash_total)}</div>
+            <div className="ag-stat-value">
+              {formatUsd(
+                Math.max(currSummary?.cash_total ?? 0, currSummary?.as_api_total ?? 0),
+              )}
+            </div>
             <div className="ag-stat-bottom">
-              <span className="ag-secondary ag-tabular">
-                等价 {formatUsd(currSummary?.as_api_total)}
-              </span>
+              <span className="ag-secondary ag-tabular">等价额度</span>
               <Sparkline values={costSpark} />
             </div>
           </div>
@@ -259,7 +261,7 @@ export function OverviewPage({
           title="费用趋势"
           buckets={buckets}
           available={timeseries?.available ?? true}
-          valueOf={(b) => b.cash_total}
+          valueOf={(b) => Math.max(b.cash_total, b.as_api_total)}
           formatValue={(v) => formatUsd(v)}
           unitLabel="USD"
           onDrillDown={() => navigate('usage', { range })}
@@ -279,25 +281,45 @@ export function OverviewPage({
       <div className="ag-grid-2">
         <RankedBarChart
           title="按渠道花费"
-          items={(currSummary?.by_provider ?? []).map((p) => ({
-            key: p.provider,
-            label: p.provider,
-            value: p.cash_total,
-            formattedValue: formatUsd(p.cash_total),
-            subLabel: `${formatInt(p.request_count)} 次`,
-            mono: true,
-          }))}
+          items={[...(currSummary?.by_provider ?? [])]
+            .sort(
+              (a, b) =>
+                Math.max(b.cash_total, b.as_api_total ?? 0) -
+                  Math.max(a.cash_total, a.as_api_total ?? 0) ||
+                b.request_count - a.request_count,
+            )
+            .map((p) => {
+              const val = Math.max(p.cash_total, p.as_api_total ?? 0);
+              return {
+                key: p.provider,
+                label: p.provider,
+                value: val,
+                formattedValue: formatUsd(val),
+                subLabel: `${formatInt(p.request_count)} 次`,
+                mono: true,
+              };
+            })}
         />
         <RankedBarChart
           title="按模型花费"
-          items={(currSummary?.by_model ?? []).map((m) => ({
-            key: m.model,
-            label: m.model,
-            value: m.cash_total,
-            formattedValue: formatUsd(m.cash_total),
-            subLabel: `${formatInt(m.request_count)} 次`,
-            mono: true,
-          }))}
+          items={[...(currSummary?.by_model ?? [])]
+            .sort(
+              (a, b) =>
+                Math.max(b.cash_total, b.as_api_total ?? 0) -
+                  Math.max(a.cash_total, a.as_api_total ?? 0) ||
+                b.request_count - a.request_count,
+            )
+            .map((m) => {
+              const val = Math.max(m.cash_total, m.as_api_total ?? 0);
+              return {
+                key: m.model,
+                label: m.model,
+                value: val,
+                formattedValue: formatUsd(val),
+                subLabel: `${formatInt(m.request_count)} 次`,
+                mono: true,
+              };
+            })}
         />
       </div>
 

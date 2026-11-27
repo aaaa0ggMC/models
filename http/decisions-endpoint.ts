@@ -31,6 +31,12 @@ import {
 /** adaptor 调用的可选出参。 */
 export interface DecisionAdaptorOptions {
   requestId?: string;
+  /** 动态路由覆盖：目标渠道的上游 base_url 与鉴权头提供器。 */
+  baseUrl?: string;
+  headersProvider?: () => Promise<Record<string, string>>;
+  /** 目标接入路径与方言（多协议决策分发用）。 */
+  accessPath?: string;
+  dialect?: string;
 }
 
 /** decision 模态上游 adaptor 的产物。 */
@@ -69,6 +75,8 @@ export const DEFAULT_DECISION_DEGRADATION_POLICY: DecisionDegradationPolicy = {
 export interface DecisionsEndpointDeps {
   /** native adaptor（mock 或真实上游）。不传 = 没有 native 上游。 */
   native?: DecisionProviderAdaptor;
+  /** 动态目标解析（当请求命中命名空间/别名渠道时，覆盖上游 baseUrl 与鉴权头）。 */
+  resolveTarget?: (accessPath: string) => DecisionAdaptorOptions | undefined;
   /** 降级 adaptor（chat 模拟）。不传 = 不能降级。 */
   degraded?: DecisionProviderAdaptor;
   policy?: DecisionDegradationPolicy;
@@ -99,32 +107,61 @@ function decodeDecisions(input: ModalityEndpointInput): CanonicalRequestEnvelope
   }
   const body = input.body;
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    throw new ModalityRequestError('请求体必须是 canonical 信封（JSON 对象）');
+    throw new ModalityRequestError('请求体必须是 JSON 对象');
   }
   const env = body as Record<string, unknown>;
-  if (env['ir_version'] !== 'ag-ir/1') {
+  if (env['ir_version'] !== undefined && env['ir_version'] !== 'ag-ir/1') {
     throw new ModalityRequestError('字段 ir_version 应为 "ag-ir/1"');
   }
-  if (env['kind'] !== 'decision') {
+  if (env['kind'] !== undefined && env['kind'] !== 'decision') {
     throw new ModalityRequestError('字段 kind 应为 "decision"');
   }
   if (typeof env['model'] !== 'string' || env['model'] === '') {
     throw new ModalityRequestError('缺少字段 model（decision 模型 id）');
   }
-  if (typeof env['source_format'] !== 'string') {
+  if (env['source_format'] !== undefined && typeof env['source_format'] !== 'string') {
     throw new ModalityRequestError('字段 source_format 应为字符串');
   }
   if (env['stream'] !== undefined) {
-    const stream = env['stream'] as { enabled?: unknown };
-    if (stream.enabled === true) {
+    if (
+      env['stream'] === true ||
+      (typeof env['stream'] === 'object' &&
+        env['stream'] !== null &&
+        (env['stream'] as { enabled?: unknown }).enabled === true)
+    ) {
       throw new ModalityRequestError('decision 不支持流式');
     }
   }
-  const payload = env['payload'];
-  if (typeof payload !== 'object' || payload === null) {
-    throw new ModalityRequestError('缺少字段 payload（DecisionPayload）');
+
+  // 支持两种形态：
+  //   1. 标准信封：{ model, payload: { content, questions, ... } }（ir_version/kind/source_format 可省略）
+  //   2. 简洁扁平：{ model, content, questions }（自动包装为标准 DecisionPayload）
+  let rawPayload = env['payload'];
+  if (rawPayload === undefined && Array.isArray(env['questions'])) {
+    const rawContent = env['content'];
+    const normalizedContent =
+      typeof rawContent === 'string'
+        ? [{ text: rawContent }]
+        : Array.isArray(rawContent)
+          ? rawContent
+          : [];
+    rawPayload = {
+      content: normalizedContent,
+      questions: env['questions'],
+      ...(env['include_option_probabilities'] === undefined
+        ? {}
+        : { include_option_probabilities: env['include_option_probabilities'] }),
+      ...(env['include_rationale'] === undefined
+        ? {}
+        : { include_rationale: env['include_rationale'] }),
+      ...(env['params'] === undefined ? {} : { params: env['params'] }),
+      raw: {},
+    };
   }
-  const p = payload as Record<string, unknown>;
+  if (typeof rawPayload !== 'object' || rawPayload === null || Array.isArray(rawPayload)) {
+    throw new ModalityRequestError('缺少字段 payload（或顶层 questions 数组）');
+  }
+  const p = rawPayload as Record<string, unknown>;
   if (!Array.isArray(p['questions']) || (p['questions'] as unknown[]).length === 0) {
     throw new ModalityRequestError('payload.questions 应为非空数组');
   }
@@ -151,7 +188,30 @@ function decodeDecisions(input: ModalityEndpointInput): CanonicalRequestEnvelope
       throw new ModalityRequestError('每个问题都要有非空 prompt');
     }
   }
-  return body as unknown as CanonicalRequestEnvelope;
+
+  const normalizedPayload: Record<string, unknown> = {
+    ...p,
+    content: Array.isArray(p['content'])
+      ? p['content']
+      : typeof p['content'] === 'string'
+        ? [{ text: p['content'] }]
+        : [],
+    raw: typeof p['raw'] === 'object' && p['raw'] !== null ? p['raw'] : {},
+  };
+
+  return {
+    ...env,
+    ir_version: 'ag-ir/1',
+    kind: 'decision',
+    model: env['model'],
+    source_format: (env['source_format'] as string | undefined) ?? 'mock.decisions',
+    stream:
+      typeof env['stream'] === 'object' && env['stream'] !== null
+        ? env['stream']
+        : { mode: 'none', enabled: false },
+    payload: normalizedPayload,
+    raw: typeof env['raw'] === 'object' && env['raw'] !== null ? env['raw'] : {},
+  } as unknown as CanonicalRequestEnvelope;
 }
 
 function encodeDecisionsResponse(res: CanonicalResponseEnvelope): unknown {
@@ -185,15 +245,22 @@ export function createDecisionsEndpointHandler(
     input: 'json',
     decodeRequest: decodeDecisions,
 
-    async run(req: CanonicalRequestEnvelope): Promise<CanonicalResponseEnvelope> {
+    async run(req: CanonicalRequestEnvelope, target): Promise<CanonicalResponseEnvelope> {
       const payload = req.payload as DecisionPayload;
-      const opts: DecisionAdaptorOptions = {};
+      const resolvedOpts =
+        target !== undefined && deps.resolveTarget !== undefined
+          ? deps.resolveTarget(target.access_path)
+          : undefined;
+      const opts: DecisionAdaptorOptions = resolvedOpts ?? {};
       // 降级三态（ir/decision.ts 的 DecisionDegradationPolicy）：
       //   never              → 只用 native；没有 native 明确失败；
       //   on_missing_upstream → 有 native 用 native，没有才降级（默认）；
       //   always             → 有 degraded 就用 degraded（调试/对照用）。
       // 降级还要过高风险关：策略检查与 stop 决策不允许降级（15 §6.5）。
       const preferDegraded = policy.mode === 'always' && degraded !== undefined;
+      const canUseNative =
+        native !== undefined &&
+        (deps.resolveTarget === undefined || resolvedOpts !== undefined);
       const degradeAllowed =
         degraded !== undefined &&
         policy.mode !== 'never' &&
@@ -202,7 +269,7 @@ export function createDecisionsEndpointHandler(
       let outcome: DecisionAdaptorOutcome;
       if (preferDegraded && degraded !== undefined) {
         outcome = await degraded.decide(req, opts);
-      } else if (native !== undefined) {
+      } else if (canUseNative && native !== undefined) {
         outcome = await native.decide(req, opts);
       } else if (degradeAllowed && degraded !== undefined) {
         outcome = await degraded.decide(req, opts);

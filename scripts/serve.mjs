@@ -24,17 +24,20 @@ import crypto from 'node:crypto';
 
 // 仓库根（本脚本在 scripts/ 下）——不写死绝对 home 路径：既泄露用户名，也别处 clone 跑不了
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const DIST = process.env['AG_DIST_DIR'] || path.join(ROOT, 'dist');
 const DATA = path.join(os.homedir(), 'ai-workspace', 'ag-data');
 
-const { createGateway } = await import(`${ROOT}/dist/composition-root.js`);
-const { startHttpServer } = await import(`${ROOT}/dist/http/server.js`);
-const { createModelsEndpoints } = await import(`${ROOT}/dist/http/models-endpoint.js`);
-const storage = await import(`${ROOT}/dist/storage/index.js`);
-const { FetchTransport } = await import(`${ROOT}/dist/gateway-core/transport.js`);
+const { createGateway } = await import(`${DIST}/composition-root.js`);
+const { startHttpServer } = await import(`${DIST}/http/server.js`);
+const { createModelsEndpoints } = await import(`${DIST}/http/models-endpoint.js`);
+const storage = await import(`${DIST}/storage/index.js`);
+const { FetchTransport } = await import(`${DIST}/gateway-core/transport.js`);
 const { DatabaseSync } = await import('node:sqlite');
-const { SqliteUsageStore } = await import(`${ROOT}/dist/metering/index.js`);
+const { SqliteUsageStore } = await import(`${DIST}/metering/index.js`);
 const DB_PATH = path.join(DATA, 'gateway.db');
 const sqliteDb = new DatabaseSync(DB_PATH);
+sqliteDb.exec('PRAGMA journal_mode = WAL;');
+sqliteDb.exec('PRAGMA busy_timeout = 5000;');
 await fs.chmod(DB_PATH, 0o600).catch(() => {});
 const usageSink = new SqliteUsageStore(sqliteDb);
 console.log(`[sqlite] 已连接数据库：${DB_PATH}（历史用量 ${usageSink.count()} 条）`);
@@ -154,7 +157,7 @@ const gateway = createGateway({
       return { rotated: true, active_dek_id: id };
     },
   },
-  adminStaticRoot: path.join(ROOT, 'webui', 'admin', 'dist'),
+  adminStaticRoot: path.join(DIST, 'webui', 'admin'),
   adminAccessToken: ADMIN_TOKEN,
   usageSource: {
     list: (fromTs, toTs) =>
@@ -227,6 +230,9 @@ const server = await startHttpServer({
   tools: gateway.toolEndpoints,
   audio: gateway.audioEndpoints,
   modalities: gateway.modalityEndpoints,
+  schema: gateway.schemaEndpoints,
+  chatImageBridge: gateway.chatImageBridge,
+  modalityMismatchGuard: gateway.modalityMismatchGuard,
   // 数据面统一鉴权网关（默认拒绝）：不注入则除 /health 外全 401
   authenticator: gateway.dataPlaneAuth,
   // 网关伪装模式（默认关闭）：开启后未携带伪装密钥的 API 请求直接返回 404
@@ -258,10 +264,26 @@ console.log(`  健康检查            →  http://${HOST}:${PORT}/health`);
 console.log(`  数据目录            →  ${DATA}`);
 console.log('='.repeat(72));
 
+let shuttingDown = false;
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.on(sig, async () => {
-    console.log(`\n[server] 收到 ${sig}，正在优雅退出…`);
-    server.close();
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const drainTimeoutMs = Number(process.env['AG_DRAIN_TIMEOUT_MS'] ?? 60_000);
+    console.log(`\n[server] 收到 ${sig}，停止接收新连接并等待在途请求完成（最长 ${drainTimeoutMs}ms）…`);
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        console.warn('[server] 排水超时，强制关闭剩余连接');
+        server.closeAllConnections?.();
+        resolve();
+      }, drainTimeoutMs);
+      timer.unref?.();
+      server.close(() => {
+        clearTimeout(timer);
+        resolve();
+      });
+      server.closeIdleConnections?.();
+    });
     await gateway.shutdown();
     sqliteDb.close();
     process.exit(0);

@@ -160,6 +160,8 @@ export interface GatewayConfig {
   clientDisconnectMode?: 'immediate' | 'grace' | 'ignore';
   /** 宽限模式下的等待时间（ms，默认 5000）。 */
   clientDisconnectGraceMs?: number;
+  /** 跨模态协议自适配开关（默认 true；开启时允许 /v1/chat/completions 桥接生图模型，关闭则拒并返回推荐端点）。 */
+  crossModalityBridge?: boolean;
 }
 
 export const DEFAULT_CONFIG: GatewayConfig = {
@@ -177,6 +179,7 @@ export const DEFAULT_CONFIG: GatewayConfig = {
   stealthKey: '',
   clientDisconnectMode: 'immediate',
   clientDisconnectGraceMs: 5_000,
+  crossModalityBridge: true,
   usageSnifferMaxBytes: 256 * 1024,
   lossPolicy: 'allow',
   debug: false,
@@ -185,9 +188,9 @@ export const DEFAULT_CONFIG: GatewayConfig = {
   modelSyncOnStart: true,
   modelSyncIntervalMs: 15 * 60 * 1000,
   modelUpstreamTtlMs: 60 * 60 * 1000,
-  // ---- 渠道健康（NewAPI AutoBan 的对应物；默认值照 NewAPI 的保守档）----
-  /** 自动禁用总开关（false = 只累计失败计数，不关渠道）。 */
-  channelAutoDisable: true,
+  // ---- 渠道健康（自动禁用默认关闭，避免偶发上游错误直接打挂整条渠道）----
+  /** 自动禁用总开关（默认 false；需要时设 AG_CHANNEL_AUTO_DISABLE=true 开启）。 */
+  channelAutoDisable: false,
   /** 连续失败多少次之后自动禁用（401/403 不等计数，立即禁用）。 */
   channelAutoDisableFailures: 3,
   /** 探测成功是否自动恢复（true = 恢复时只清 auto_disabled，不动 enabled）。 */

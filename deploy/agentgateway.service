@@ -7,7 +7,8 @@
 #
 # 常用：
 #   systemctl status agentgateway        # 看状态
-#   systemctl restart agentgateway       # 重新构建 + 重启（ExecStartPre 会跑 npm run build）
+#   systemctl reload agentgateway        # 零停机蓝绿热更新（后台构建 + 双槽无感切流量）
+#   systemctl restart agentgateway       # 冷重启 supervisor
 #   journalctl -u agentgateway -f        # 跟日志
 #
 # 为什么把 unit 放仓库里：历史上装配脚本与部署方式都在仓库外（~/ai-workspace），
@@ -33,19 +34,19 @@ EnvironmentFile=/opt/agentgateway/.env
 Environment=NO_PROXY=localhost,127.0.0.1,::1,[::1]
 Environment=NODE_USE_ENV_PROXY=1
 
-# ---- 启动前先构建 ----
-# **不加 `-` 前缀**：构建失败 = 服务不启动。容忍失败会让服务带着上一份 dist 爬起来，
-# 那就是"静默跑旧代码"——本次部署实测过一次：ProtectSystem=full 让 Vite 的临时文件
-# 写不进去，npm run build 失败，而服务照样起来了，跑的还是旧 bundle。
-ExecStartPre=/usr/local/bin/npm run build --silent
-ExecStart=/usr/local/bin/node scripts/serve.mjs
+# ---- 常驻蓝绿转发层 + 零停机热更新 ----
+# 由 scripts/supervisor.mjs 常驻占住对外端口，内部按蓝绿双槽（18791/18792）切换；
+# 执行 `systemctl reload agentgateway` 会发 SIGHUP，由 supervisor 在后台跑 npm run build
+# 后拉起新槽、探 /health 绿灯再无感切流量并优雅排水退出旧槽，避免停机空档。
+ExecStart=/usr/local/bin/node scripts/supervisor.mjs
+ExecReload=/bin/kill -HUP $MAINPID
 
 # ---- 重启策略 ----
 Restart=on-failure
 RestartSec=5
-# 优雅退出时间（serve.mjs 接了 SIGTERM：关 server + gateway.shutdown）
+# 优雅退出时间（给在途流式 SSE 留足排水窗口）
 KillSignal=SIGTERM
-TimeoutStopSec=20
+TimeoutStopSec=70
 
 # ---- 日志 ----
 # journalctl -u agentgateway -f；不写文件，交给 journald

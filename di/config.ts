@@ -66,6 +66,7 @@ export const RUNTIME_SETTING_ENV_VARS: Record<
   model_sync_interval_ms: 'AG_MODEL_SYNC_INTERVAL_MS',
   plugin_timeout_ms: 'AG_PLUGIN_TIMEOUT_MS',
   models_extended_metadata: 'AG_MODELS_EXTENDED_METADATA',
+  cross_modality_bridge: 'AG_CROSS_MODALITY_BRIDGE',
   save_full_messages: 'AG_SAVE_FULL_MESSAGES',
   gateway_stealth_enabled: 'AG_GATEWAY_STEALTH_ENABLED',
   gateway_stealth_header: 'AG_GATEWAY_STEALTH_HEADER',
@@ -139,6 +140,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): Gateway
       modelsExtendedMetadata: boolFromEnv(
         'AG_MODELS_EXTENDED_METADATA',
         DEFAULT_CONFIG.modelsExtendedMetadata,
+      ),
+      crossModalityBridge: boolFromEnv(
+        'AG_CROSS_MODALITY_BRIDGE',
+        DEFAULT_CONFIG.crossModalityBridge ?? true,
       ),
       saveFullMessages: boolFromEnv(
         'AG_SAVE_FULL_MESSAGES',

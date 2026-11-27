@@ -118,7 +118,7 @@ export async function handleAgentChat(
   let accessPath = typeof req.access_path === 'string' ? req.access_path : config.access_path;
   let model = typeof req.model === 'string' ? req.model : config.model;
   const isNonChatModelName = (m: string): boolean =>
-    /(^|[-_/.])(asr|stt|whisper|transcribe|tts|voiceclone|voicedesign|speech|embed|embedding|embeddings|bge|text-embedding|rerank|reranker|imagen|dall-e|gpt-image|chatgpt-image|grok-imagine|flux|sdxl|wanx|kolors)([-_/.]|$)/i.test(
+    /(^|[-_/.])(asr|stt|whisper|transcribe|tts|voiceclone|voicedesign|speech|embed|embedding|embeddings|bge|text-embedding|decision|decisions|rerank|reranker|imagen|dall-e|gpt-image|chatgpt-image|grok-imagine|flux|sdxl|wanx|kolors)([-_/.]|$)|(?:^|\/)jev(?:[-_.\d]|$)/i.test(
       m,
     );
 
